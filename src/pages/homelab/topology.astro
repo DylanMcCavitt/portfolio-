@@ -1,0 +1,20 @@
+---
+import TopologyMap from '../../components/topology/TopologyMap.astro';
+import '../../styles/global.css';
+import '../../styles/topology.css';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Interactive topology map of Dylan's homelab infrastructure" />
+    <title>Homelab Topology — Dylan McCavitt</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body class="topology-page">
+    <a href="/projects/homelab/" class="topology-back">&larr; Back to Homelab</a>
+    <TopologyMap />
+  </body>
+</html>

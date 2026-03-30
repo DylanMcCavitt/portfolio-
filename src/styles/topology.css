@@ -1,0 +1,329 @@
+/* Topology Map — standalone dark-theme page styles */
+
+/* ─── Page & Layout ─────────────────────────────────────────── */
+
+.topology-page {
+  background: #06121d;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+}
+
+.topology-back {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-5);
+  color: #a9bfd1;
+  text-decoration: none;
+  font-size: var(--text-sm);
+  z-index: 200;
+}
+
+.topology-back:hover {
+  color: #f6fbff;
+}
+
+.topology-screen {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.topology-screen--dragging {
+  cursor: grabbing;
+}
+
+.topology-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.topology-svg .is-clickable {
+  cursor: pointer;
+}
+
+/* ─── HUD Overlays ───────────────────────────────────────────── */
+
+.topology-overlay {
+  position: absolute;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.topology-overlay > * {
+  pointer-events: auto;
+}
+
+.topology-overlay--top-left {
+  top: var(--space-7);
+  left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.topology-overlay--top-right {
+  top: var(--space-7);
+  right: var(--space-5);
+}
+
+.topology-overlay--drawer {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 100vw;
+}
+
+@media (max-width: 640px) {
+  .topology-overlay--drawer {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 50vh;
+  }
+}
+
+/* ─── HUD Panels ─────────────────────────────────────────────── */
+
+.topology-hud {
+  background: rgba(6, 18, 29, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(169, 191, 209, 0.15);
+  padding: var(--space-4) var(--space-5);
+  color: #f6fbff;
+}
+
+.topology-hud h1 {
+  font-size: var(--text-xl);
+  color: #f6fbff;
+  font-weight: 600;
+  margin: 0;
+}
+
+.topology-hud p {
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+  margin: 0;
+}
+
+.topology-hud__eyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #7d95ac;
+}
+
+/* ─── Toolbar & Buttons ──────────────────────────────────────── */
+
+.topology-toolbar {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.topology-button {
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+  background: rgba(6, 18, 29, 0.6);
+  border: 1px solid rgba(169, 191, 209, 0.2);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  border-radius: 0;
+  font-family: var(--font-body);
+}
+
+.topology-button:hover {
+  border-color: rgba(169, 191, 209, 0.4);
+  color: #f6fbff;
+}
+
+.topology-button--active {
+  border-color: #4a6fa5;
+  color: #f6fbff;
+  background: rgba(74, 111, 165, 0.2);
+}
+
+.topology-caption {
+  font-size: 0.75rem;
+  color: #7d95ac;
+  margin-top: var(--space-2);
+}
+
+/* ─── Legend ─────────────────────────────────────────────────── */
+
+.topology-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+}
+
+.topology-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 3px;
+  flex-shrink: 0;
+}
+
+.legend-swatch--physical {
+  background: #7d95ac;
+}
+
+.legend-swatch--runtime {
+  background: #f2c779;
+}
+
+.legend-swatch--policy {
+  background: #79d89c;
+}
+
+/* ─── Detail Drawer ──────────────────────────────────────────── */
+
+.drawer-panel {
+  height: 100%;
+  background: rgba(6, 18, 29, 0.92);
+  backdrop-filter: blur(12px);
+  border-left: 1px solid rgba(169, 191, 209, 0.12);
+  padding: var(--space-6) var(--space-5);
+  overflow-y: auto;
+  color: #f6fbff;
+}
+
+@media (max-width: 640px) {
+  .drawer-panel {
+    border-left: none;
+    border-top: 1px solid rgba(169, 191, 209, 0.12);
+  }
+}
+
+.drawer-panel--empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.drawer-panel--hidden {
+  display: none;
+}
+
+.drawer-heading-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.drawer-eyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #7d95ac;
+  margin-bottom: var(--space-2);
+}
+
+.drawer-panel h2 {
+  font-size: var(--text-xl);
+  color: #f6fbff;
+  margin: 0 0 var(--space-3);
+}
+
+.drawer-summary {
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+  line-height: 1.6;
+  margin: 0 0 var(--space-4);
+}
+
+.drawer-close {
+  font-size: var(--text-sm);
+  color: #7d95ac;
+  background: none;
+  border: 1px solid rgba(169, 191, 209, 0.2);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  border-radius: 0;
+  font-family: var(--font-body);
+  flex-shrink: 0;
+  margin-left: var(--space-3);
+}
+
+.drawer-close:hover {
+  color: #f6fbff;
+  border-color: rgba(169, 191, 209, 0.4);
+}
+
+.drawer-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.drawer-badge {
+  font-size: 0.75rem;
+  color: #a9bfd1;
+  background: rgba(169, 191, 209, 0.1);
+  border: 1px solid rgba(169, 191, 209, 0.15);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 0;
+}
+
+.drawer-section {
+  margin-top: var(--space-5);
+}
+
+.drawer-section h3 {
+  font-size: var(--text-sm);
+  color: #7d95ac;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 var(--space-3);
+}
+
+.drawer-section ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+}
+
+.drawer-section li {
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+}
+
+.drawer-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.drawer-related-button {
+  font-size: var(--text-sm);
+  color: #a9bfd1;
+  background: rgba(74, 111, 165, 0.12);
+  border: 1px solid rgba(74, 111, 165, 0.25);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  border-radius: 0;
+  font-family: var(--font-body);
+}
+
+.drawer-related-button:hover {
+  border-color: var(--accent);
+  color: #f6fbff;
+}
