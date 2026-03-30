@@ -1,10 +1,105 @@
 ---
 import Base from '../layouts/Base.astro';
+import ProjectCard from '../components/ProjectCard.astro';
 ---
 
 <Base title="Dylan McCavitt">
   <main>
-    <h1>Dylan McCavitt</h1>
-    <p>Software engineer building reliable systems.</p>
+    <section class="hero">
+      <h1 class="hero__name">Dylan McCavitt</h1>
+      <p class="hero__tagline">Software engineer building reliable systems.</p>
+      <hr class="hero__rule" />
+      <a href="#projects" class="hero__cta">View Projects</a>
+    </section>
+
+    <section class="projects" id="projects">
+      <h2 class="section-heading">Projects</h2>
+      <div class="projects__grid">
+        <ProjectCard title="Homelab" href="/projects/homelab/" />
+        <ProjectCard title="Bella" href="/projects/bella/" />
+        <ProjectCard title="Nohard" href="/projects/nohard/" />
+        <ProjectCard title="Work Orders" href="/projects/work-orders/" />
+      </div>
+    </section>
+
+    <section class="about" id="about">
+      <p class="about__text">
+        I'm a software engineer based in Portland who builds web applications,
+        manages infrastructure, and cares about making software that's reliable
+        and easy to understand. I'm currently looking for my next role — somewhere
+        I can work on real problems with a team that values clarity and quality.
+      </p>
+    </section>
+
+    <section class="contact" id="contact">
+      <div class="contact__links">
+        <a href="https://github.com/DylanMcCavitt" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://linkedin.com/in/dylanmccavitt" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        <a href="mailto:dylan@example.com">Email</a>
+      </div>
+    </section>
   </main>
 </Base>
+
+<style>
+  .hero {
+    text-align: center;
+    padding: var(--space-8) var(--space-5);
+    min-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .hero__name { letter-spacing: -0.02em; }
+  .hero__tagline {
+    color: var(--text-muted);
+    font-size: var(--text-lg);
+    margin-top: var(--space-3);
+  }
+  .hero__rule { width: 40px; margin: var(--space-6) auto; }
+  .hero__cta {
+    font-size: var(--text-sm);
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .section-heading { margin-bottom: var(--space-6); }
+  .projects {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-5);
+  }
+  .projects__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-5);
+  }
+  @media (max-width: 640px) {
+    .projects__grid { grid-template-columns: 1fr; }
+  }
+  .about {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-5);
+  }
+  .about__text {
+    font-size: var(--text-lg);
+    color: var(--text-muted);
+    line-height: 1.7;
+  }
+  .contact {
+    padding: var(--space-7) var(--space-5);
+    text-align: center;
+  }
+  .contact__links {
+    display: flex;
+    gap: var(--space-6);
+    justify-content: center;
+  }
+  .contact__links a {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .contact__links a:hover { color: var(--text); }
+</style>
