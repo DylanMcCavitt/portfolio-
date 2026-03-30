@@ -1,0 +1,31 @@
+---
+import Base from './Base.astro';
+
+interface Props {
+  title: string;
+  subtitle: string;
+  liveUrl?: string;
+  repoUrl?: string;
+  topologyUrl?: string;
+}
+
+const { title, subtitle, liveUrl, repoUrl, topologyUrl } = Astro.props;
+---
+
+<Base title={`${title} — Dylan McCavitt`} description={subtitle}>
+  <article>
+    <header class="project-header">
+      <h1 class="project-header__title">{title}</h1>
+      <p class="project-header__subtitle">{subtitle}</p>
+      <div class="project-header__links">
+        {liveUrl && <a href={liveUrl} target="_blank" rel="noopener noreferrer">View live site &rarr;</a>}
+        {repoUrl && <a href={repoUrl} target="_blank" rel="noopener noreferrer">GitHub &rarr;</a>}
+        {topologyUrl && <a href={topologyUrl}>View topology map &rarr;</a>}
+      </div>
+      <hr class="project-header__rule" />
+    </header>
+    <div class="project-content">
+      <slot />
+    </div>
+  </article>
+</Base>
