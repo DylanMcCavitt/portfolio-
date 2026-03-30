@@ -1,0 +1,18 @@
+{
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreCommit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /var/home/dylan/projects/portfolio && npx eslint . && npx astro check"
+          }
+        ]
+      }
+    ]
+  }
+}

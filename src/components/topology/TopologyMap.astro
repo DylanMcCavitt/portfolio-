@@ -1,6 +1,6 @@
 ---
 import { overviewLayout } from "../../data/topology/layout";
-import { entities } from "../../data/topology/entities";
+
 import type { NodeTone, ChipTone, FrameTone } from "../../data/topology/layout";
 
 const nodePalette: Record<NodeTone, { fill: string; stroke: string; eyebrow: string }> = {
@@ -49,11 +49,6 @@ function edgeStroke(kind: "physical" | "runtime" | "policy"): string {
   return "#79d89c";
 }
 
-// Lookup entity title by id for related buttons
-function entityTitle(id: string): string {
-  const e = (entities as Record<string, { title: string }>)[id];
-  return e ? e.title : id;
-}
 
 const { viewBox, frames, nodes, edges } = overviewLayout;
 ---
