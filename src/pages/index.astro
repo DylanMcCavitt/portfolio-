@@ -1,6 +1,10 @@
 ---
+import { getCollection } from 'astro:content';
 import Base from '../layouts/Base.astro';
 import ProjectCard from '../components/ProjectCard.astro';
+
+const projects = await getCollection('projects');
+const sorted = projects.sort((a, b) => a.data.order - b.data.order);
 ---
 
 <Base title="Dylan McCavitt">
@@ -15,10 +19,9 @@ import ProjectCard from '../components/ProjectCard.astro';
     <section class="projects" id="projects">
       <h2 class="section-heading">Projects</h2>
       <div class="projects__grid">
-        <ProjectCard title="Homelab" href="/projects/homelab/" />
-        <ProjectCard title="Bella" href="/projects/bella/" />
-        <ProjectCard title="Nohard" href="/projects/nohard/" />
-        <ProjectCard title="Work Orders" href="/projects/work-orders/" />
+        {sorted.map((project) => (
+          <ProjectCard title={project.data.title} href={`/projects/${project.id}/`} />
+        ))}
       </div>
     </section>
 
