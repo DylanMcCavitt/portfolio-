@@ -50,13 +50,14 @@ const navLinks = [
   <div class="palette-nav__wrapper">
     <button
       class="palette-nav__theme-toggle"
+      data-theme-toggle
       id="theme-toggle"
       aria-expanded="false"
       aria-haspopup="true"
     >
       [/theme]
     </button>
-    <div class="palette-nav__dropdown" id="theme-dropdown" hidden>
+    <div class="palette-nav__dropdown" data-theme-dropdown id="theme-dropdown" hidden>
       {themes.map((theme) => (
         <button
           class="palette-nav__dropdown-item"

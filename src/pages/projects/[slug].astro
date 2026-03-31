@@ -17,6 +17,7 @@ const { Content } = await render(project);
 <Project
   title={project.data.title}
   subtitle={project.data.subtitle}
+  slug={project.id}
   liveUrl={project.data.liveUrl}
   repoUrl={project.data.repoUrl}
   topologyUrl={project.data.topologyUrl}

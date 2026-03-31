@@ -1,0 +1,54 @@
+---
+interface Props {
+  slug: string;
+  section?: string;
+}
+
+const { slug, section = 'projects' } = Astro.props;
+
+const themes = [
+  { id: 'nord', name: 'Nord', swatches: ['#8fbcbb', '#88c0d0', '#81a1c1', '#5e81ac'] },
+  { id: 'dracula', name: 'Dracula', swatches: ['#bd93f9', '#8be9fd', '#50fa7b', '#ff79c6'] },
+  { id: 'rose-pine', name: 'Rosé Pine', swatches: ['#ebbcba', '#f6c177', '#c4a7e7', '#9ccfd8'] },
+  { id: 'gruvbox', name: 'Gruvbox', swatches: ['#cc241d', '#d79921', '#689d6a', '#458588'] },
+  { id: 'everforest', name: 'Everforest', swatches: ['#a7c080', '#dbbc7f', '#7fbbb3', '#d699b6'] },
+  { id: 'night-owl', name: 'Night Owl', swatches: ['#c792ea', '#82aaff', '#c3e88d', '#f78c6c'] },
+  { id: 'dark-plus', name: 'Dark+', swatches: ['#569cd6', '#4ec9b0', '#9cdcfe', '#ce9178'] },
+];
+---
+
+<nav class="breadcrumb-bar" aria-label="Breadcrumb">
+  <div class="breadcrumb-bar__path">
+    <a href="/" class="breadcrumb-bar__segment breadcrumb-bar__segment--1">~</a>
+    <span class="breadcrumb-bar__sep">/</span>
+    <a href={`/#${section}`} class="breadcrumb-bar__segment breadcrumb-bar__segment--2">{section}</a>
+    <span class="breadcrumb-bar__sep">/</span>
+    <span class="breadcrumb-bar__segment breadcrumb-bar__segment--3">{slug}</span>
+  </div>
+  <div class="breadcrumb-bar__theme">
+    <button
+      class="breadcrumb-bar__theme-toggle"
+      data-theme-toggle
+      aria-expanded="false"
+      aria-haspopup="true"
+    >
+      [/theme]
+    </button>
+    <div class="breadcrumb-bar__dropdown" data-theme-dropdown hidden>
+      {themes.map((theme) => (
+        <button
+          class="palette-nav__dropdown-item"
+          data-theme-id={theme.id}
+        >
+          <span class="palette-nav__dropdown-swatches">
+            {theme.swatches.map((color) => (
+              <span class="palette-nav__dropdown-swatch" style={`background:${color}`}></span>
+            ))}
+          </span>
+          <span class="palette-nav__dropdown-name">{theme.name}</span>
+          <span class="palette-nav__dropdown-check" aria-hidden="true"></span>
+        </button>
+      ))}
+    </div>
+  </div>
+</nav>

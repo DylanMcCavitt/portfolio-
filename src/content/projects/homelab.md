@@ -11,6 +11,14 @@ I run a small server setup at home that handles things most people use cloud ser
 
 The system is split into separate zones: one for network management, one for applications people actually use, one for monitoring, and one for automation. This separation means a problem in one area doesn't cascade into others.
 
+<div class="screenshot-grid">
+
+![Proxmox dashboard](/screenshots/homelab/proxmox.png)
+
+![Grafana monitoring](/screenshots/homelab/grafana.png)
+
+</div>
+
 ## Why I built it
 
 I wanted hands-on experience with the kind of infrastructure decisions that come up in professional environments — network segmentation, reverse proxies, monitoring, and service isolation — but at a scale where I could understand every piece end to end. Cloud services abstract away the parts I wanted to learn.

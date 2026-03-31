@@ -6,12 +6,12 @@
    ============================================================ */
 
 :root {
-  --bg: #d8dee9;
-  --surface: #c8d0dc;
-  --text: #2e3440;
-  --text-muted: #4c566a;
-  --accent: #5e81ac;
-  --border: #b8c2d0;
+  --bg: #3b4252;
+  --surface: #434c5e;
+  --text: #d8dee9;
+  --text-muted: #a0aec0;
+  --accent: #88c0d0;
+  --border: #4c566a;
   --nav-1: #8fbcbb;
   --nav-2: #88c0d0;
   --nav-3: #81a1c1;
@@ -27,12 +27,12 @@
 }
 
 [data-theme="nord"] {
-  --bg: #d8dee9;
-  --surface: #c8d0dc;
-  --text: #2e3440;
-  --text-muted: #4c566a;
-  --accent: #5e81ac;
-  --border: #b8c2d0;
+  --bg: #3b4252;
+  --surface: #434c5e;
+  --text: #d8dee9;
+  --text-muted: #a0aec0;
+  --accent: #88c0d0;
+  --border: #4c566a;
   --nav-1: #8fbcbb;
   --nav-2: #88c0d0;
   --nav-3: #81a1c1;

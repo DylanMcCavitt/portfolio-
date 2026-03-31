@@ -2,6 +2,7 @@
 title: "Work Orders"
 subtitle: "Maintenance request system for a school district"
 order: 4
+repoUrl: "https://github.com/apolydore/Work-Order-Management-System"
 ---
 
 ## What it is

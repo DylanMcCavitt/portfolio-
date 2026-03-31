@@ -131,7 +131,7 @@
   display: flex;
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 
 .palette-nav__swatch {
@@ -218,4 +218,128 @@
 .project-card__title {
   font-size: var(--text-lg);
   font-weight: 600;
+}
+
+/* ============================================================
+   Breadcrumb Bar
+   ============================================================ */
+
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 6px;
+  max-width: 680px;
+  margin: 0 auto var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.breadcrumb-bar__path {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.breadcrumb-bar__segment {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.breadcrumb-bar__segment--1 {
+  color: var(--nav-1);
+}
+.breadcrumb-bar__segment--2 {
+  color: var(--nav-2);
+}
+.breadcrumb-bar__segment--3 {
+  color: var(--nav-3);
+}
+
+a.breadcrumb-bar__segment:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb-bar__sep {
+  color: var(--nav-5);
+}
+
+.breadcrumb-bar__theme {
+  position: relative;
+}
+
+.breadcrumb-bar__theme-toggle {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 4px;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.breadcrumb-bar__theme-toggle:hover,
+.breadcrumb-bar__theme-toggle[aria-expanded="true"] {
+  background: var(--dropdown-bg);
+  color: var(--dropdown-text);
+}
+
+.breadcrumb-bar__dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 200;
+  background: var(--dropdown-bg);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  min-width: 200px;
+  overflow: hidden;
+  margin-top: var(--space-1);
+}
+
+.breadcrumb-bar__dropdown[hidden] {
+  display: none;
+}
+
+/* ============================================================
+   Screenshot Grid
+   ============================================================ */
+
+.screenshot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin: var(--space-6) 0;
+}
+
+.screenshot-grid img {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 100%;
+  margin: 0;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.screenshot-grid img:hover {
+  opacity: 0.9;
+}
+
+.screenshot-grid p {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin: var(--space-2) 0 0;
+}
+
+@media (max-width: 600px) {
+  .screenshot-grid {
+    grid-template-columns: 1fr;
+  }
 }

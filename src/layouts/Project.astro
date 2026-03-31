@@ -1,20 +1,23 @@
 ---
 import Base from './Base.astro';
+import Breadcrumb from '../components/Breadcrumb.astro';
 
 interface Props {
   title: string;
   subtitle: string;
+  slug: string;
   liveUrl?: string;
   repoUrl?: string;
   topologyUrl?: string;
 }
 
-const { title, subtitle, liveUrl, repoUrl, topologyUrl } = Astro.props;
+const { title, subtitle, slug, liveUrl, repoUrl, topologyUrl } = Astro.props;
 ---
 
 <Base title={`${title} — Dylan McCavitt`} description={subtitle}>
   <article>
     <header class="project-header">
+      <Breadcrumb slug={slug} />
       <h1 class="project-header__title">{title}</h1>
       <p class="project-header__subtitle">{subtitle}</p>
       <div class="project-header__links">
@@ -28,4 +31,5 @@ const { title, subtitle, liveUrl, repoUrl, topologyUrl } = Astro.props;
       <slot />
     </div>
   </article>
+  <script src="../scripts/lightbox.ts"></script>
 </Base>

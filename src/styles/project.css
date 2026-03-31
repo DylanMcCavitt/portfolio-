@@ -43,5 +43,50 @@
 }
 .project-content img {
   border: 1px solid var(--border);
-  margin: var(--space-6) 0;
+  border-radius: 6px;
+  margin: var(--space-6) 0 var(--space-2);
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.project-content img:hover {
+  opacity: 0.9;
+}
+
+/* Lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  cursor: pointer;
+  animation: lightbox-in 0.15s ease;
+}
+
+@keyframes lightbox-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  object-fit: contain;
+  aspect-ratio: auto;
+  margin: 0;
+  cursor: default;
+  width: auto;
 }

@@ -1,28 +1,11 @@
 ---
-import { getCollection } from 'astro:content';
 import Base from '../layouts/Base.astro';
-import ProjectCard from '../components/ProjectCard.astro';
-
-const projects = await getCollection('projects');
-const sorted = projects.sort((a, b) => a.data.order - b.data.order);
 ---
 
 <Base title="Dylan McCavitt" showPaletteNav={true}>
   <main>
-    <section class="hero">
-      <p class="hero__tagline">Software engineer building reliable systems.</p>
-    </section>
-
-    <section class="projects" id="projects">
-      <h2 class="section-heading">Projects</h2>
-      <div class="projects__grid">
-        {sorted.map((project) => (
-          <ProjectCard title={project.data.title} href={`/projects/${project.id}/`} />
-        ))}
-      </div>
-    </section>
-
     <section class="about" id="about">
+      <h2 class="section-heading section-heading--about">[[about]]</h2>
       <p class="about__text">
         I'm a software engineer based in Portland who builds web applications,
         manages infrastructure, and cares about making software that's reliable
@@ -31,7 +14,34 @@ const sorted = projects.sort((a, b) => a.data.order - b.data.order);
       </p>
     </section>
 
+    <section class="projects" id="projects">
+      <h2 class="section-heading section-heading--projects">[[projects]]</h2>
+      <div class="projects__listing">
+        <div class="projects__row">
+          <span class="projects__chevron">{'>'}</span>
+          <a href="/projects/homelab/" class="projects__link projects__link--1">homelab/</a>
+          <span class="projects__desc">— proxmox, opnsense, ansible</span>
+        </div>
+        <div class="projects__row">
+          <span class="projects__chevron">{'>'}</span>
+          <a href="/projects/bella/" class="projects__link projects__link--2">bella/</a>
+          <span class="projects__desc">— next.js saas, supabase, stripe</span>
+        </div>
+        <div class="projects__row">
+          <span class="projects__chevron">{'>'}</span>
+          <a href="/projects/nohard/" class="projects__link projects__link--3">nohard/</a>
+          <span class="projects__desc">— developer cli tool</span>
+        </div>
+        <div class="projects__row">
+          <span class="projects__chevron">{'>'}</span>
+          <a href="/projects/work-orders/" class="projects__link projects__link--4">work-orders/</a>
+          <span class="projects__desc">— school district maintenance</span>
+        </div>
+      </div>
+    </section>
+
     <section class="contact" id="contact">
+      <h2 class="section-heading section-heading--contact">[[contact]]</h2>
       <div class="contact__links">
         <a href="https://github.com/DylanMcCavitt" target="_blank" rel="noopener noreferrer">GitHub</a>
         <a href="https://linkedin.com/in/dylanmccavitt" target="_blank" rel="noopener noreferrer">LinkedIn</a>
@@ -42,46 +52,74 @@ const sorted = projects.sort((a, b) => a.data.order - b.data.order);
 </Base>
 
 <style>
-  .hero {
-    text-align: center;
-    padding: 0 var(--space-5) var(--space-7);
+  /* Section headings */
+  .section-heading {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    opacity: 0.7;
+    text-transform: lowercase;
+    margin-bottom: var(--space-5);
   }
-  .hero__tagline {
-    color: var(--text-muted);
-    font-size: var(--text-lg);
-  }
-  .section-heading { margin-bottom: var(--space-6); }
-  .projects {
-    max-width: 1080px;
-    margin: 0 auto;
-    padding: var(--space-8) var(--space-5);
-  }
-  .projects__grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-5);
-  }
-  @media (max-width: 640px) {
-    .projects__grid { grid-template-columns: 1fr; }
-  }
+  .section-heading--projects { color: var(--nav-1); }
+  .section-heading--about { color: var(--nav-2); }
+  .section-heading--contact { color: var(--nav-3); }
+
+  /* About */
   .about {
-    max-width: 680px;
+    max-width: 600px;
     margin: 0 auto;
-    padding: var(--space-8) var(--space-5);
+    padding: var(--space-7) var(--space-5) var(--space-6);
   }
   .about__text {
-    font-size: var(--text-lg);
     color: var(--text-muted);
-    line-height: 1.7;
+    line-height: 1.8;
   }
+
+  /* Projects — terminal listing */
+  .projects {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: var(--space-5) var(--space-5) var(--space-6);
+  }
+  .projects__listing {
+    line-height: 2.4;
+  }
+  .projects__row {
+    white-space: nowrap;
+  }
+  .projects__chevron {
+    color: var(--accent);
+    margin-right: var(--space-2);
+  }
+  .projects__link {
+    text-decoration: none;
+    font-weight: 600;
+    border-bottom: 1px dashed currentColor;
+    border-bottom-color: rgba(255, 255, 255, 0.2);
+  }
+  .projects__link:hover {
+    text-decoration: none;
+    border-bottom-style: solid;
+    border-bottom-color: currentColor;
+  }
+  .projects__link--1 { color: var(--nav-1); }
+  .projects__link--2 { color: var(--nav-2); }
+  .projects__link--3 { color: var(--nav-3); }
+  .projects__link--4 { color: var(--nav-4); }
+  .projects__desc {
+    color: var(--text-muted);
+    margin-left: var(--space-3);
+  }
+
+  /* Contact */
   .contact {
-    padding: var(--space-7) var(--space-5);
-    text-align: center;
+    max-width: 600px;
+    margin: 0 auto;
+    padding: var(--space-5) var(--space-5) var(--space-7);
   }
   .contact__links {
     display: flex;
     gap: var(--space-6);
-    justify-content: center;
   }
   .contact__links a {
     font-size: var(--text-sm);
