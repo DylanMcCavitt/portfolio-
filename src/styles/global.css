@@ -20,26 +20,6 @@
 
 /* Design tokens */
 :root {
-  /* Fallback palette (Nord) — overridden by [data-theme] */
-  --bg: #d8dee9;
-  --surface: #c8d0dc;
-  --text: #2e3440;
-  --text-muted: #4c566a;
-  --accent: #5e81ac;
-  --border: #b8c2d0;
-  --nav-1: #8fbcbb;
-  --nav-2: #88c0d0;
-  --nav-3: #81a1c1;
-  --nav-4: #5e81ac;
-  --nav-5: #4c566a;
-  --nav-text-1: #2e3440;
-  --nav-text-2: #2e3440;
-  --nav-text-3: #2e3440;
-  --nav-text-4: #eceff4;
-  --nav-text-5: #eceff4;
-  --dropdown-bg: #2e3440;
-  --dropdown-text: #d8dee9;
-
   /* Typography */
   --font-body: "Google Sans Code", "SF Mono", "Fira Code", monospace;
   --text-sm: 0.875rem;
