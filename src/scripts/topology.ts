@@ -5,45 +5,45 @@ import {
 } from "../data/topology/entities";
 import { layout } from "../data/topology/layout";
 
+// ── Entity lookup helper ────────────────────────────────────────────────────
+
+function getEntity(id: string): Entity | undefined {
+  return (entities as Record<string, Entity>)[id];
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Camera = { tx: number; ty: number; scale: number };
+/** Camera = the visible region of SVG world space (what the viewBox shows) */
+type Camera = { x: number; y: number; w: number; h: number };
 type Bounds = { x: number; y: number; w: number; h: number };
 type DragState = {
   pointerId: number;
   startClientX: number;
   startClientY: number;
-  startTx: number;
-  startTy: number;
+  startCamX: number;
+  startCamY: number;
   moved: boolean;
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const VB_W = 2400;
-const VB_H = 2800;
 const SCENE_PAD = 200;
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 3;
+const MIN_W = 800; // max zoom in — viewBox width
+const MAX_W = 5000; // max zoom out — viewBox width
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 
 const svg = document.getElementById("topology-svg") as SVGSVGElement | null;
-const cameraEl = document.getElementById(
-  "topology-camera",
-) as SVGGElement | null;
 const bgEl = document.getElementById("topology-bg") as SVGRectElement | null;
 const popcardContainer = document.getElementById(
   "popcard-container",
 ) as HTMLElement | null;
 
-if (!svg || !cameraEl || !bgEl || !popcardContainer) {
+if (!svg || !bgEl || !popcardContainer) {
   throw new Error("Topology: required DOM elements not found");
 }
 
-// Narrow types after null check
 const svgEl = svg;
-const camGroupEl = cameraEl;
 const backgroundEl = bgEl;
 const popcardEl = popcardContainer;
 
@@ -53,6 +53,23 @@ let camera: Camera;
 let activeId: EntityId | null = null;
 let dragState: DragState | null = null;
 let lastDragEndedAt = 0;
+
+// ── Multi-touch state ────────────────────────────────────────────────────────
+
+type TouchPoint = { id: number; x: number; y: number };
+let activeTouches: TouchPoint[] = [];
+let pinchStartDist = 0;
+let pinchStartW = 0;
+
+function touchDistance(a: TouchPoint, b: TouchPoint): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function touchCenter(a: TouchPoint, b: TouchPoint): { x: number; y: number } {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
 
 // ── Camera math ──────────────────────────────────────────────────────────────
 
@@ -82,75 +99,118 @@ function computeSceneBounds(): Bounds {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-function getSvgRect(): DOMRect {
-  return svgEl.getBoundingClientRect();
-}
-
-function pxPerUnit(): number {
-  const rect = getSvgRect();
-  return Math.min(rect.width / VB_W, rect.height / VB_H);
+function getAspect(): number {
+  const rect = svgEl.getBoundingClientRect();
+  const w = rect.width || window.innerWidth;
+  const h = rect.height || window.innerHeight;
+  return w / h;
 }
 
 function constrainCamera(c: Camera): Camera {
-  const scale = clamp(c.scale, MIN_SCALE, MAX_SCALE);
-  const rect = getSvgRect();
-  const vpW = rect.width || window.innerWidth;
-  const vpH = rect.height || window.innerHeight;
-  const ppu = pxPerUnit();
-  const padPx = SCENE_PAD * ppu;
+  const aspect = getAspect();
+  const w = clamp(c.w, MIN_W, MAX_W);
+  const h = w / aspect;
 
-  const sw = sb.w * scale * ppu;
-  const sh = sb.h * scale * ppu;
-  const ox = sb.x * scale * ppu;
-  const oy = sb.y * scale * ppu;
+  // Scene edges with padding
+  const sceneLeft = sb.x - SCENE_PAD;
+  const sceneRight = sb.x + sb.w + SCENE_PAD;
+  const sceneTop = sb.y - SCENE_PAD;
+  const sceneBottom = sb.y + sb.h + SCENE_PAD;
 
-  const minTx = -(ox + sw) + vpW - padPx;
-  const maxTx = -ox + padPx;
-  const minTy = -(oy + sh) + vpH - padPx;
-  const maxTy = -oy + padPx;
+  let x = c.x;
+  let y = c.y;
 
-  return {
-    scale,
-    tx: clamp(c.tx, Math.min(minTx, maxTx), Math.max(minTx, maxTx)),
-    ty: clamp(c.ty, Math.min(minTy, maxTy), Math.max(minTy, maxTy)),
-  };
+  if (w >= sceneRight - sceneLeft) {
+    // Viewport is wider than scene — center horizontally
+    x = sceneLeft + (sceneRight - sceneLeft - w) / 2;
+  } else {
+    // Clamp so scene edges stay visible
+    x = clamp(x, sceneLeft, sceneRight - w);
+  }
+
+  if (h >= sceneBottom - sceneTop) {
+    // Viewport is taller than scene — center vertically
+    y = sceneTop + (sceneBottom - sceneTop - h) / 2;
+  } else {
+    // Clamp so scene edges stay visible
+    y = clamp(y, sceneTop, sceneBottom - h);
+  }
+
+  return { w, h, x, y };
 }
 
-function centerOn(bounds: Bounds, scale: number): Camera {
-  const rect = getSvgRect();
-  const vpW = rect.width || window.innerWidth;
-  const vpH = rect.height || window.innerHeight;
-  const ppu = pxPerUnit();
+function centerOn(bounds: Bounds, viewW: number): Camera {
+  const aspect = getAspect();
+  const w = clamp(viewW, MIN_W, MAX_W);
+  const h = w / aspect;
 
   const cx = bounds.x + bounds.w / 2;
   const cy = bounds.y + bounds.h / 2;
 
-  const tx = vpW / 2 - cx * scale * ppu;
-  const ty = vpH / 2 - cy * scale * ppu;
-
-  return constrainCamera({ tx, ty, scale });
+  return constrainCamera({
+    x: cx - w / 2,
+    y: cy - h / 2,
+    w,
+    h,
+  });
 }
 
-function zoomAt(
-  cam: Camera,
-  anchorX: number,
-  anchorY: number,
-  newScale: number,
-): Camera {
-  const s = clamp(newScale, MIN_SCALE, MAX_SCALE);
-  const ratio = s / cam.scale;
+function computeFitW(): number {
+  const rect = svgEl.getBoundingClientRect();
+  const svgW = rect.width || window.innerWidth;
+  const svgH = rect.height || window.innerHeight;
+  const aspect = svgW / svgH;
+
+  // Fit the ENTIRE scene — account for actual SVG element size (not full viewport)
+  const sceneW = sb.w + SCENE_PAD * 2;
+  const sceneH = sb.h + SCENE_PAD * 2;
+
+  // The viewBox width that makes the scene fit each dimension
+  const fitByW = sceneW;
+  const fitByH = sceneH * aspect;
+
+  // Pick the larger so both dimensions are visible
+  return clamp(Math.max(fitByW, fitByH), MIN_W, MAX_W);
+}
+
+/** Convert client (screen) coordinates to SVG world coordinates */
+function clientToWorld(
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } {
+  const rect = svgEl.getBoundingClientRect();
+  const fracX = (clientX - rect.left) / rect.width;
+  const fracY = (clientY - rect.top) / rect.height;
+  return {
+    x: camera.x + fracX * camera.w,
+    y: camera.y + fracY * camera.h,
+  };
+}
+
+function zoomAt(clientX: number, clientY: number, newW: number): Camera {
+  const w = clamp(newW, MIN_W, MAX_W);
+  const aspect = getAspect();
+  const h = w / aspect;
+
+  // Keep the world point under the cursor stable
+  const world = clientToWorld(clientX, clientY);
+  const rect = svgEl.getBoundingClientRect();
+  const fracX = (clientX - rect.left) / rect.width;
+  const fracY = (clientY - rect.top) / rect.height;
+
   return constrainCamera({
-    scale: s,
-    tx: anchorX - ratio * (anchorX - cam.tx),
-    ty: anchorY - ratio * (anchorY - cam.ty),
+    x: world.x - fracX * w,
+    y: world.y - fracY * h,
+    w,
+    h,
   });
 }
 
 // ── Scene bounds (computed once) ─────────────────────────────────────────────
 
 const sb = computeSceneBounds();
-camera = centerOn(sb, 1);
-const DEFAULT_CAMERA: Camera = { ...camera };
+const initW = computeFitW();
+camera = centerOn(sb, initW);
 
 // ── Entity bounds lookup ─────────────────────────────────────────────────────
 
@@ -175,12 +235,11 @@ function buildHighlightSet(focusId: string | null): Set<string> {
   const set = new Set<string>();
   set.add(focusId);
 
-  const entity = (entities as Record<string, Entity>)[focusId];
+  const entity = getEntity(focusId);
   if (entity?.related) {
     for (const r of entity.related) set.add(r);
   }
 
-  // Chips: highlight parent and siblings
   for (const node of layout.nodes) {
     if (node.chips) {
       const isChip = node.chips.some((c) => c.id === focusId);
@@ -191,19 +250,16 @@ function buildHighlightSet(focusId: string | null): Set<string> {
     }
   }
 
-  // Frame members
   for (const frame of layout.frames) {
     if (frame.entityId === focusId && frame.members) {
       for (const m of frame.members) set.add(m);
     }
   }
 
-  // Edges where either endpoint is in set
   for (const edge of layout.edges) {
     if (set.has(edge.from) || set.has(edge.to)) set.add(edge.id);
   }
 
-  // Frame IDs for highlighted entity IDs
   for (const frame of layout.frames) {
     if (frame.entityId && set.has(frame.entityId)) set.add(frame.id);
   }
@@ -214,15 +270,35 @@ function buildHighlightSet(focusId: string | null): Set<string> {
 // ── Rendering ────────────────────────────────────────────────────────────────
 
 function applyCamera(): void {
-  const ppu = pxPerUnit();
-  // Transform the camera group in SVG-unit space
-  const svgTx = camera.tx / (camera.scale * ppu);
-  const svgTy = camera.ty / (camera.scale * ppu);
-
-  camGroupEl.setAttribute(
-    "transform",
-    `scale(${camera.scale}) translate(${svgTx} ${svgTy})`,
+  svgEl.setAttribute(
+    "viewBox",
+    `${camera.x} ${camera.y} ${camera.w} ${camera.h}`,
   );
+}
+
+function animateCamera(target: Camera, durationMs: number = 400): void {
+  const start = { ...camera };
+  const startTime = performance.now();
+
+  function tick(now: number): void {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / durationMs, 1);
+    const ease = 1 - Math.pow(1 - t, 3);
+
+    camera = {
+      x: start.x + (target.x - start.x) * ease,
+      y: start.y + (target.y - start.y) * ease,
+      w: start.w + (target.w - start.w) * ease,
+      h: start.h + (target.h - start.h) * ease,
+    };
+    applyCamera();
+
+    if (t < 1) {
+      requestAnimationFrame(tick);
+    }
+  }
+
+  requestAnimationFrame(tick);
 }
 
 function applyHighlights(): void {
@@ -231,21 +307,18 @@ function applyHighlights(): void {
 
   svgEl.classList.toggle("has-focus", hasHighlight);
 
-  // Nodes
   document.querySelectorAll<SVGGElement>("[data-node-id]").forEach((el) => {
     const id = el.dataset.nodeId!;
     el.classList.toggle("is-highlighted", highlights.has(id));
     el.classList.toggle("is-active", id === activeId);
   });
 
-  // Chips
   document.querySelectorAll<SVGGElement>("[data-chip-id]").forEach((el) => {
     const id = el.dataset.chipId!;
     el.classList.toggle("is-highlighted", highlights.has(id));
     el.classList.toggle("is-active", id === activeId);
   });
 
-  // Frames
   document.querySelectorAll<SVGGElement>("[data-frame-id]").forEach((el) => {
     const id = el.dataset.frameId!;
     const entityId = el.dataset.entityId ?? "";
@@ -255,7 +328,6 @@ function applyHighlights(): void {
     );
   });
 
-  // Edges
   document.querySelectorAll<SVGGElement>("[data-edge-id]").forEach((el) => {
     const id = el.dataset.edgeId!;
     const edgePath = el.querySelector(".topo-edge");
@@ -276,7 +348,7 @@ function escHtml(str: string): string {
 }
 
 function showPopCard(entityId: string, anchorX: number, anchorY: number): void {
-  const entity = (entities as Record<string, Entity>)[entityId];
+  const entity = getEntity(entityId);
   if (!entity) return;
 
   const badgesHtml = entity.badges
@@ -290,7 +362,7 @@ function showPopCard(entityId: string, anchorX: number, anchorY: number): void {
           <div class="topo-popcard__related-list">
             ${entity.related
               .map((id) => {
-                const rel = (entities as Record<string, Entity>)[id];
+                const rel = getEntity(id);
                 const title = rel ? rel.title : id;
                 return `<button class="topo-popcard__related-btn" data-navigate="${escHtml(id)}">${escHtml(title)}</button>`;
               })
@@ -309,7 +381,6 @@ function showPopCard(entityId: string, anchorX: number, anchorY: number): void {
     </div>
   `;
 
-  // Adjust position to stay in viewport
   const card = popcardEl.querySelector<HTMLElement>(".topo-popcard");
   if (card) {
     const cr = card.getBoundingClientRect();
@@ -321,7 +392,6 @@ function showPopCard(entityId: string, anchorX: number, anchorY: number): void {
     if (cr.top < 16) card.style.top = "16px";
   }
 
-  // Wire up related buttons
   popcardEl
     .querySelectorAll<HTMLButtonElement>("[data-navigate]")
     .forEach((btn) => {
@@ -336,6 +406,20 @@ function hidePopCard(): void {
   popcardEl.innerHTML = "";
 }
 
+/** Convert world bounds to screen pixel position for pop card anchoring */
+function worldToScreen(
+  worldX: number,
+  worldY: number,
+): { x: number; y: number } {
+  const rect = svgEl.getBoundingClientRect();
+  const fracX = (worldX - camera.x) / camera.w;
+  const fracY = (worldY - camera.y) / camera.h;
+  return {
+    x: rect.left + fracX * rect.width,
+    y: rect.top + fracY * rect.height,
+  };
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 function focusEntity(entityId: EntityId): void {
@@ -343,32 +427,27 @@ function focusEntity(entityId: EntityId): void {
 
   const bounds = getEntityBounds(entityId);
   if (bounds) {
-    const focusScale = clamp(
-      Math.min((VB_W * 0.3) / bounds.w, (VB_H * 0.3) / bounds.h),
-      MIN_SCALE,
-      MAX_SCALE,
-    );
-    camera = centerOn(bounds, focusScale);
+    // Zoom to show the entity with context around it
+    const focusW = clamp(bounds.w * 4, MIN_W, MAX_W);
+    const target = centerOn(bounds, focusW);
+    animateCamera(target);
   }
 
-  applyCamera();
   applyHighlights();
 
-  // Position pop card near the clicked element's screen position
-  if (bounds) {
-    const rect = getSvgRect();
-    const ppu = pxPerUnit();
-    const screenX =
-      rect.left + (bounds.x + bounds.w) * camera.scale * ppu + camera.tx + 16;
-    const screenY = rect.top + bounds.y * camera.scale * ppu + camera.ty;
-    showPopCard(entityId, screenX, screenY);
-  }
+  // Show pop card after animation settles
+  setTimeout(() => {
+    if (activeId === entityId && bounds) {
+      const screenPt = worldToScreen(bounds.x + bounds.w, bounds.y);
+      showPopCard(entityId, screenPt.x + 16, screenPt.y);
+    }
+  }, 420);
 }
 
 function resetView(): void {
   activeId = null;
-  camera = { ...DEFAULT_CAMERA };
-  applyCamera();
+  const resetW = computeFitW();
+  animateCamera(centerOn(sb, resetW));
   applyHighlights();
   hidePopCard();
 }
@@ -382,8 +461,8 @@ svgEl.addEventListener("pointerdown", (e: PointerEvent) => {
     pointerId: e.pointerId,
     startClientX: e.clientX,
     startClientY: e.clientY,
-    startTx: camera.tx,
-    startTy: camera.ty,
+    startCamX: camera.x,
+    startCamY: camera.y,
     moved: false,
   };
   svgEl.closest(".topology-screen")?.classList.add("topology-screen--dragging");
@@ -394,10 +473,16 @@ svgEl.addEventListener("pointermove", (e: PointerEvent) => {
   const dx = e.clientX - dragState.startClientX;
   const dy = e.clientY - dragState.startClientY;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragState.moved = true;
+
+  // Convert pixel delta to SVG world delta
+  const rect = svgEl.getBoundingClientRect();
+  const worldDx = -(dx / rect.width) * camera.w;
+  const worldDy = -(dy / rect.height) * camera.h;
+
   camera = constrainCamera({
-    scale: camera.scale,
-    tx: dragState.startTx + dx,
-    ty: dragState.startTy + dy,
+    ...camera,
+    x: dragState.startCamX + worldDx,
+    y: dragState.startCamY + worldDy,
   });
   applyCamera();
 });
@@ -414,18 +499,18 @@ function endDrag(e: PointerEvent): void {
 svgEl.addEventListener("pointerup", endDrag);
 svgEl.addEventListener("pointercancel", endDrag);
 
-// ── Events: Zoom ─────────────────────────────────────────────────────────────
+// ── Events: Ctrl+Scroll to zoom (normal scroll passes through to browser) ───
 
 svgEl.addEventListener(
   "wheel",
   (e: WheelEvent) => {
-    e.preventDefault();
-    const rect = getSvgRect();
-    const ax = e.clientX - rect.left;
-    const ay = e.clientY - rect.top;
-    const mult = Math.exp(-e.deltaY * 0.0012);
-    camera = zoomAt(camera, ax, ay, camera.scale * mult);
-    applyCamera();
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const mult = Math.exp(e.deltaY * 0.0012);
+      camera = zoomAt(e.clientX, e.clientY, camera.w * mult);
+      applyCamera();
+    }
+    // Normal scroll — don't prevent default, let browser handle it
   },
   { passive: false },
 );
@@ -437,7 +522,6 @@ document.addEventListener("click", (e: MouseEvent) => {
 
   const target = e.target as Element;
 
-  // Click inside pop card — handled by its own listeners
   if (target.closest(".topo-popcard")) return;
 
   const entityEl = target.closest<HTMLElement>("[data-entity-click]");
@@ -446,7 +530,6 @@ document.addEventListener("click", (e: MouseEvent) => {
     return;
   }
 
-  // Click on SVG background or empty area → reset
   if (
     target === backgroundEl ||
     (target.closest("#topology-svg") && !target.closest("[data-entity-click]"))
@@ -455,7 +538,6 @@ document.addEventListener("click", (e: MouseEvent) => {
   }
 });
 
-// Close on Escape
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (e.key === "Escape" && activeId) resetView();
 });
@@ -463,18 +545,90 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
 // ── Events: Zoom buttons ─────────────────────────────────────────────────────
 
 document.getElementById("zoom-in")?.addEventListener("click", () => {
-  const rect = getSvgRect();
-  camera = zoomAt(camera, rect.width / 2, rect.height / 2, camera.scale * 1.2);
+  const rect = svgEl.getBoundingClientRect();
+  camera = zoomAt(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2,
+    camera.w / 1.3,
+  );
   applyCamera();
 });
 
 document.getElementById("zoom-out")?.addEventListener("click", () => {
-  const rect = getSvgRect();
-  camera = zoomAt(camera, rect.width / 2, rect.height / 2, camera.scale / 1.2);
+  const rect = svgEl.getBoundingClientRect();
+  camera = zoomAt(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2,
+    camera.w * 1.3,
+  );
   applyCamera();
 });
 
 document.getElementById("reset-view")?.addEventListener("click", resetView);
+
+// ── Events: Pinch-to-zoom ────────────────────────────────────────────────────
+
+svgEl.addEventListener(
+  "touchstart",
+  (e: TouchEvent) => {
+    activeTouches = Array.from(e.touches).map((t) => ({
+      id: t.identifier,
+      x: t.clientX,
+      y: t.clientY,
+    }));
+
+    if (activeTouches.length === 2) {
+      e.preventDefault();
+      pinchStartDist = touchDistance(activeTouches[0], activeTouches[1]);
+      pinchStartW = camera.w;
+    }
+  },
+  { passive: false },
+);
+
+svgEl.addEventListener(
+  "touchmove",
+  (e: TouchEvent) => {
+    activeTouches = Array.from(e.touches).map((t) => ({
+      id: t.identifier,
+      x: t.clientX,
+      y: t.clientY,
+    }));
+
+    if (activeTouches.length === 2) {
+      e.preventDefault();
+      const dist = touchDistance(activeTouches[0], activeTouches[1]);
+      const center = touchCenter(activeTouches[0], activeTouches[1]);
+      // Pinch in = smaller dist = larger viewBox width (zoom out)
+      const newW = pinchStartW * (pinchStartDist / dist);
+      camera = zoomAt(center.x, center.y, newW);
+      applyCamera();
+    }
+  },
+  { passive: false },
+);
+
+svgEl.addEventListener(
+  "touchend",
+  (e: TouchEvent) => {
+    activeTouches = Array.from(e.touches).map((t) => ({
+      id: t.identifier,
+      x: t.clientX,
+      y: t.clientY,
+    }));
+    if (activeTouches.length < 2) {
+      pinchStartDist = 0;
+    }
+  },
+  { passive: false },
+);
+
+// ── Events: Resize ───────────────────────────────────────────────────────────
+
+window.addEventListener("resize", () => {
+  camera = constrainCamera(camera);
+  applyCamera();
+});
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 

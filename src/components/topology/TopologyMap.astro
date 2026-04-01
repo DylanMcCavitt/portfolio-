@@ -46,15 +46,16 @@ const edgeKindVar: Record<string, string> = {
 <section class="topology-screen" id="topology-screen">
   <svg
     viewBox={viewBox}
+    preserveAspectRatio="xMidYMid meet"
     role="img"
     aria-label="Interactive homelab topology map"
     class="topology-svg"
     id="topology-svg"
   >
-    <rect x="0" y="0" width="2400" height="2800" class="topo-bg" fill="var(--bg)" />
+    <rect x="-5000" y="-5000" width="15000" height="15000" fill="var(--bg)" />
 
     <g id="topology-camera">
-      <rect x="0" y="0" width="2400" height="2800" fill="transparent" id="topology-bg" />
+      <rect x="-5000" y="-5000" width="15000" height="15000" fill="transparent" id="topology-bg" />
 
       {frames.map((frame) => {
         const colorVar = frameToneVar[frame.tone];
