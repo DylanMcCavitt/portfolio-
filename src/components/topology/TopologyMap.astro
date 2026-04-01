@@ -1,238 +1,121 @@
 ---
-import { layout } from "../../data/topology/layout";
-import type { NodeTone, FrameTone } from "../../data/topology/layout";
-
-const { viewBox, frames, nodes, edges } = layout;
-
-const CARD_PAD = 16;
-const EYEBROW_SIZE = 14;
-const LABEL_SIZE = 22;
-const CAPTION_SIZE = 13;
-const CHIP_H = 36;
-const CHIP_GAP = 6;
-const CHIP_PAD = 10;
-
-const nodeToneVar: Record<NodeTone, string> = {
-  edge: "--nav-4",
-  network: "--nav-1",
-  platform: "--nav-2",
-  runtime: "--nav-3",
-  device: "--text-muted",
-  client: "--text-muted",
-};
-
-const frameToneVar: Record<FrameTone, string> = {
-  management: "--nav-3",
-  service: "--nav-1",
-  signal: "--nav-2",
-  automation: "--nav-4",
-};
-
-const edgeKindVar: Record<string, string> = {
-  physical: "--nav-1",
-  runtime: "--nav-2",
-  policy: "--nav-3",
-};
+/**
+ * TopologyMap — HTML/CSS topology map with natural flow layout.
+ * No SVG, no absolute positioning. Uses flexbox/grid for tier layout.
+ * Entity data drives pop cards on click.
+ */
 ---
 
-<section class="topology-screen" id="topology-screen">
-  <svg
-    viewBox={viewBox}
-    preserveAspectRatio="xMidYMid meet"
-    role="img"
-    aria-label="Interactive homelab topology map"
-    class="topology-svg"
-    id="topology-svg"
-  >
-    <rect x="-5000" y="-5000" width="15000" height="15000" fill="var(--bg)" />
+<div class="topo" id="topology-map">
+  <!-- Edge tier -->
+  <div class="topo__tier">
+    <div class="topo__node" data-entity="isp">
+      <span class="topo__eyebrow">WAN</span>
+      <span class="topo__label">ISP</span>
+      <span class="topo__caption">Upstream handoff</span>
+    </div>
+  </div>
 
-    <g id="topology-camera">
-      <rect x="-5000" y="-5000" width="15000" height="15000" fill="transparent" id="topology-bg" />
+  <div class="topo__connector">
+    <div class="topo__line"></div>
+  </div>
 
-      {frames.map((frame) => {
-        const colorVar = frameToneVar[frame.tone];
-        return (
-          <g
-            class="topo-frame"
-            data-frame-id={frame.id}
-            data-entity-id={frame.entityId ?? ""}
-          >
-            <rect
-              class="topo-frame-bg"
-              x={frame.x}
-              y={frame.y}
-              width={frame.w}
-              height={frame.h}
-              rx={8}
-              fill="transparent"
-              stroke="none"
-            />
-            <text
-              class="topo-frame-label"
-              x={frame.x + 16}
-              y={frame.y - 8}
-              fill={`var(${colorVar})`}
-              fill-opacity="0.4"
-              text-anchor="start"
-              dominant-baseline="auto"
-            >
-              {frame.label}
-            </text>
-          </g>
-        );
-      })}
+  <!-- Infrastructure tier -->
+  <div class="topo__tier topo__tier--infra">
+    <div class="topo__node" data-entity="opnsense">
+      <span class="topo__eyebrow">Firewall</span>
+      <span class="topo__label">OPNsense</span>
+      <span class="topo__caption">Routing, DNS, policy</span>
+    </div>
+    <div class="topo__node" data-entity="switch">
+      <span class="topo__eyebrow">Core Fabric</span>
+      <span class="topo__label">Switch</span>
+      <span class="topo__caption">Port map hub</span>
+    </div>
+    <div class="topo__node" data-entity="proxmox">
+      <span class="topo__eyebrow">Hypervisor</span>
+      <span class="topo__label">Proxmox</span>
+      <span class="topo__caption">VM & LXC host</span>
+    </div>
+  </div>
 
-      {edges.map((edge) => {
-        const colorVar = edgeKindVar[edge.kind] ?? "--nav-1";
-        const pathParts = edge.path.split(/[ML]\s*/);
-        const coords = pathParts.filter(Boolean).map((p) => {
-          const [x, y] = p.split(",").map(Number);
-          return { x, y };
-        });
-        const midIdx = Math.floor(coords.length / 2);
-        const mid = coords[midIdx] ?? coords[0];
+  <div class="topo__connector">
+    <div class="topo__line"></div>
+  </div>
 
-        return (
-          <g
-            class="topo-edge-group"
-            data-edge-id={edge.id}
-            data-edge-from={edge.from}
-            data-edge-to={edge.to}
-            data-edge-kind={edge.kind}
-          >
-            <path
-              class="topo-edge"
-              d={edge.path}
-              fill="none"
-              stroke={`var(${colorVar})`}
-              stroke-width="1.5"
-              stroke-opacity="0.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-dasharray={edge.dashed ? "12 8" : undefined}
-            />
-            {edge.label && mid && (
-              <text
-                class="topo-edge-label"
-                x={mid.x}
-                y={mid.y - 8}
-                fill={`var(${colorVar})`}
-                fill-opacity="0.6"
-                text-anchor="middle"
-                dominant-baseline="auto"
-              >
-                {edge.label}
-              </text>
-            )}
-          </g>
-        );
-      })}
+  <!-- Service zones tier -->
+  <div class="topo__tier topo__tier--zones">
+    <!-- Management -->
+    <div class="topo__zone" data-entity="management-lane">
+      <span class="topo__zone-label">Management</span>
+      <div class="topo__node topo__node--vm" data-entity="unifi-vm">
+        <span class="topo__eyebrow">VM1</span>
+        <span class="topo__label">UniFi VM</span>
+        <span class="topo__caption">Controller lane</span>
+        <div class="topo__chips">
+          <div class="topo__chip" data-entity="unifi-controller">UniFi Controller</div>
+        </div>
+      </div>
+    </div>
 
-      {nodes.map((node) => {
-        const colorVar = nodeToneVar[node.tone];
-        const px = node.x;
-        const py = node.y;
-        const chipStartY = py + CARD_PAD
-          + (node.eyebrow ? EYEBROW_SIZE + 6 : 0)
-          + (node.label ? LABEL_SIZE + 4 : 0)
-          + (node.caption ? CAPTION_SIZE + 8 : 0)
-          + 8;
+    <!-- Services -->
+    <div class="topo__zone topo__zone--wide" data-entity="service-lane">
+      <span class="topo__zone-label">Services</span>
+      <div class="topo__node topo__node--vm" data-entity="shared-vm">
+        <span class="topo__eyebrow">VM2</span>
+        <span class="topo__label">Shared VM</span>
+        <span class="topo__caption">Ubuntu + Docker Compose</span>
+        <div class="topo__chips">
+          <div class="topo__chip" data-entity="caddy">Caddy</div>
+          <div class="topo__chip" data-entity="ingress">Ingress</div>
+          <div class="topo__chip" data-entity="homepage">Homepage</div>
+          <div class="topo__chip" data-entity="vaultwarden">Vaultwarden</div>
+        </div>
+      </div>
+    </div>
 
-        return (
-          <g
-            class="topo-node is-clickable"
-            data-entity-click={node.id}
-            data-node-id={node.id}
-          >
-            <rect
-              class="topo-node-bg"
-              x={px}
-              y={py}
-              width={node.w}
-              height={node.h}
-              rx={6}
-              fill="var(--surface)"
-              stroke="none"
-            />
+    <!-- Monitoring -->
+    <div class="topo__zone" data-entity="signal-lane">
+      <span class="topo__zone-label">Monitoring</span>
+      <div class="topo__node topo__node--vm" data-entity="kuma-lxc">
+        <span class="topo__eyebrow">LXC</span>
+        <span class="topo__label">Kuma</span>
+        <span class="topo__caption">Independent checks</span>
+        <div class="topo__chips">
+          <div class="topo__chip" data-entity="uptime-kuma">Uptime Kuma</div>
+        </div>
+      </div>
+    </div>
 
-            {node.eyebrow && (
-              <text
-                class="topo-eyebrow"
-                x={px + CARD_PAD}
-                y={py + CARD_PAD}
-                fill={`var(${colorVar})`}
-                text-anchor="start"
-                dominant-baseline="hanging"
-              >
-                {node.eyebrow.toUpperCase()}
-              </text>
-            )}
+  </div>
 
-            {node.label && (
-              <text
-                class="topo-label"
-                x={px + CARD_PAD}
-                y={py + CARD_PAD + (node.eyebrow ? EYEBROW_SIZE + 6 : 0)}
-                fill="var(--text)"
-                text-anchor="start"
-                dominant-baseline="hanging"
-              >
-                {node.label}
-              </text>
-            )}
+  <div class="topo__connector">
+    <div class="topo__line"></div>
+  </div>
 
-            {node.caption && (
-              <text
-                class="topo-caption"
-                x={px + CARD_PAD}
-                y={py + CARD_PAD + (node.eyebrow ? EYEBROW_SIZE + 6 : 0) + (node.label ? LABEL_SIZE + 4 : 0)}
-                fill="var(--text-muted)"
-                text-anchor="start"
-                dominant-baseline="hanging"
-              >
-                {node.caption}
-              </text>
-            )}
+  <!-- Client tier -->
+  <div class="topo__tier topo__tier--clients">
+    <div class="topo__node topo__node--small" data-entity="unifi-ap">
+      <span class="topo__eyebrow">Wireless</span>
+      <span class="topo__label">AP</span>
+    </div>
+    <div class="topo__node topo__node--small" data-entity="bazzite-pc">
+      <span class="topo__eyebrow">Client</span>
+      <span class="topo__label">PC</span>
+    </div>
+    <div class="topo__node topo__node--small" data-entity="jetkvm">
+      <span class="topo__eyebrow">Recovery</span>
+      <span class="topo__label">KVM</span>
+    </div>
+    <div class="topo__node topo__node--small" data-entity="nas">
+      <span class="topo__eyebrow">Storage</span>
+      <span class="topo__label">NAS</span>
+    </div>
+  </div>
 
-            {node.chips?.map((chip, i) => {
-              const chipY = chipStartY + i * (CHIP_H + CHIP_GAP);
-              const chipW = node.w - CARD_PAD * 2;
-
-              return (
-                <g
-                  class="topo-chip is-clickable"
-                  data-entity-click={chip.id}
-                  data-chip-id={chip.id}
-                >
-                  <rect
-                    class="topo-chip-bg"
-                    x={px + CARD_PAD}
-                    y={chipY}
-                    width={chipW}
-                    height={CHIP_H}
-                    rx={4}
-                    fill="var(--bg)"
-                    stroke="none"
-                  />
-                  <text
-                    class="topo-chip-label"
-                    x={px + CARD_PAD + CHIP_PAD}
-                    y={chipY + CHIP_H / 2}
-                    fill="var(--text)"
-                    text-anchor="start"
-                    dominant-baseline="central"
-                  >
-                    {chip.label}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        );
-      })}
-    </g>
-  </svg>
-</section>
+  <!-- Pop card container -->
+  <div id="popcard-container"></div>
+</div>
 
 <script>
   import '../../scripts/topology.ts';

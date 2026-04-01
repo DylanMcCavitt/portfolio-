@@ -5,43 +5,69 @@ import Base from '../layouts/Base.astro';
 <Base title="Dylan McCavitt" showPaletteNav={true}>
   <main>
     <section class="about" id="about">
-      <h2 class="section-heading section-heading--about">[[about]]</h2>
+      <h2 class="section-heading section-heading--about">about</h2>
       <p class="about__text">
-        I'm a software engineer based in Portland who builds web applications,
-        manages infrastructure, and cares about making software that's reliable
-        and easy to understand. I'm currently looking for my next role — somewhere
-        I can work on real problems with a team that values clarity and quality.
+        Software engineer who likes to move around. I've built SaaS products,
+        written CLI tools, automated deployments, and run my own infrastructure
+        from scratch. I'd rather learn the whole system than own one slice of
+        it — always picking up new tools along the way. Brooklyn, looking for
+        my next role.
       </p>
     </section>
 
+    <section class="skills" id="skills">
+      <details class="skills__reveal">
+        <summary class="skills__toggle">
+          <h2 class="section-heading section-heading--skills">.skills</h2>
+        </summary>
+        <div class="skills__content">
+          <div class="skills__prompt">$ ls -a</div>
+          <div class="skills__listing">
+            <div class="skills__row">
+              <span class="skills__name skills__name--1">languages</span>
+              <span class="skills__items">typescript  python  go  c++  bash</span>
+            </div>
+            <div class="skills__row">
+              <span class="skills__name skills__name--2">infrastructure</span>
+              <span class="skills__items">linux  docker  terraform</span>
+            </div>
+            <div class="skills__row">
+              <span class="skills__name skills__name--3">web</span>
+              <span class="skills__items">next.js  astro  express  postgresql  stripe</span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
     <section class="projects" id="projects">
-      <h2 class="section-heading section-heading--projects">[[projects]]</h2>
+      <h2 class="section-heading section-heading--projects">projects</h2>
       <div class="projects__listing">
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
-          <a href="/projects/homelab/" class="projects__link projects__link--1">homelab/</a>
-          <span class="projects__desc">— proxmox, opnsense, ansible</span>
+          <a href="/projects/homeserver/" class="projects__link projects__link--1">homeserver/</a>
+          <span class="projects__desc">— self-hosted infrastructure and automation</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
-          <a href="/projects/bella/" class="projects__link projects__link--2">bella/</a>
-          <span class="projects__desc">— next.js saas, supabase, stripe</span>
+          <a href="/projects/bellas-beads/" class="projects__link projects__link--2">bellas-beads/</a>
+          <span class="projects__desc">— ecommerce site for a jewelry maker</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
-          <a href="/projects/nohard/" class="projects__link projects__link--3">nohard/</a>
-          <span class="projects__desc">— developer cli tool</span>
+          <a href="/projects/nhf/" class="projects__link projects__link--3">nhf/</a>
+          <span class="projects__desc">— website for a band</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/work-orders/" class="projects__link projects__link--4">work-orders/</a>
-          <span class="projects__desc">— school district maintenance</span>
+          <span class="projects__desc">— work order management system, school collab</span>
         </div>
       </div>
     </section>
 
     <section class="contact" id="contact">
-      <h2 class="section-heading section-heading--contact">[[contact]]</h2>
+      <h2 class="section-heading section-heading--contact">contact</h2>
       <div class="contact__links">
         <a href="https://github.com/DylanMcCavitt" target="_blank" rel="noopener noreferrer">GitHub</a>
         <a href="https://linkedin.com/in/dylanmccavitt" target="_blank" rel="noopener noreferrer">LinkedIn</a>
@@ -60,9 +86,15 @@ import Base from '../layouts/Base.astro';
     text-transform: lowercase;
     margin-bottom: var(--space-5);
   }
+  .section-heading::before {
+    content: "/";
+    color: var(--border);
+    margin-right: var(--space-1);
+  }
   .section-heading--projects { color: var(--nav-1); }
   .section-heading--about { color: var(--nav-2); }
   .section-heading--contact { color: var(--nav-3); }
+  .section-heading--skills { color: var(--nav-4); }
 
   /* About */
   .about {
@@ -73,6 +105,46 @@ import Base from '../layouts/Base.astro';
   .about__text {
     color: var(--text-muted);
     line-height: 1.8;
+  }
+
+  /* Skills — dotfile listing */
+  .skills {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: var(--space-5) var(--space-5) var(--space-6);
+  }
+  .skills__reveal {
+    border: none;
+  }
+  .skills__toggle {
+    list-style: none;
+    cursor: pointer;
+  }
+  .skills__toggle::-webkit-details-marker {
+    display: none;
+  }
+  .skills__toggle:hover .section-heading {
+    opacity: 1;
+  }
+  .skills__prompt {
+    color: var(--border);
+    margin-bottom: var(--space-2);
+  }
+  .skills__listing {
+    line-height: 2.4;
+  }
+  .skills__row {
+    white-space: nowrap;
+  }
+  .skills__name {
+    font-weight: 600;
+    margin-right: var(--space-4);
+  }
+  .skills__name--1 { color: var(--nav-1); }
+  .skills__name--2 { color: var(--nav-2); }
+  .skills__name--3 { color: var(--nav-3); }
+  .skills__items {
+    color: var(--text-muted);
   }
 
   /* Projects — terminal listing */

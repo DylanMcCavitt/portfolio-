@@ -1,5 +1,5 @@
 ---
-title: "Nohard"
+title: "No Hard Feelings"
 subtitle: "Community platform and informational site"
 order: 3
 liveUrl: "https://nohardfeelings.app"

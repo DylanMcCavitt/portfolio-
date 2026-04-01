@@ -1,5 +1,5 @@
 ---
-title: "Bella"
+title: "Bella's Beads"
 subtitle: "Full-stack web application for small businesses"
 order: 2
 liveUrl: "https://bellasbeads.shop"

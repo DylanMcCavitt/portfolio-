@@ -1,5 +1,5 @@
 ---
-title: "Homelab"
+title: "Homeserver"
 subtitle: "Home server infrastructure with monitoring and automation"
 order: 1
 topologyUrl: "/homelab/topology/"

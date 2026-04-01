@@ -25,3 +25,5 @@ pnpm-debug.log*
 
 # superpowers brainstorm sessions
 .superpowers/
+.claude/
+docs/
