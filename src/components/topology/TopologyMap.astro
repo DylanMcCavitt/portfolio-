@@ -7,19 +7,10 @@
 ---
 
 <div class="topo" id="topology-map">
-  <!-- Legend -->
-  <details class="topo__legend">
-    <summary class="topo__legend-toggle">key</summary>
-    <div class="topo__legend-items">
-      <span class="topo__legend-item topo__legend-item--infra">infrastructure</span>
-      <span class="topo__legend-item topo__legend-item--management">management</span>
-      <span class="topo__legend-item topo__legend-item--service">services</span>
-      <span class="topo__legend-item topo__legend-item--monitoring">monitoring</span>
-      <span class="topo__legend-item topo__legend-item--client">clients</span>
-    </div>
-  </details>
+  <p class="topo__intro">How my home server is set up. Click any node for details.</p>
 
-  <!-- Edge tier -->
+  <!-- Internet -->
+  <div class="topo__tier-label">Internet</div>
   <div class="topo__tier">
     <div class="topo__node topo__node--edge" data-entity="isp" data-category="infra">
       <span class="topo__eyebrow">WAN</span>
@@ -32,7 +23,8 @@
     <div class="topo__line"></div>
   </div>
 
-  <!-- Infrastructure tier -->
+  <!-- Core Infrastructure -->
+  <div class="topo__tier-label">Core Infrastructure</div>
   <div class="topo__tier topo__tier--infra">
     <div class="topo__node topo__node--edge" data-entity="opnsense" data-category="infra">
       <span class="topo__eyebrow">Firewall</span>
@@ -55,7 +47,8 @@
     <div class="topo__line"></div>
   </div>
 
-  <!-- VLAN segmentation -->
+  <!-- Network Segments -->
+  <div class="topo__tier-label">Network Segments</div>
   <div class="topo__tier">
     <div class="topo__node topo__node--vlan" data-entity="vlans" data-category="infra">
       <span class="topo__eyebrow">Network Segmentation</span>
@@ -74,7 +67,8 @@
     <div class="topo__line"></div>
   </div>
 
-  <!-- Service zones tier -->
+  <!-- Services -->
+  <div class="topo__tier-label">Services</div>
   <div class="topo__tier topo__tier--zones">
     <!-- Management -->
     <div class="topo__zone topo__zone--management" data-entity="management-lane" data-category="management">
@@ -91,7 +85,7 @@
 
     <!-- Services -->
     <div class="topo__zone topo__zone--wide topo__zone--service" data-entity="service-lane" data-category="service">
-      <span class="topo__zone-label">Services</span>
+      <span class="topo__zone-label">Apps</span>
       <div class="topo__node topo__node--vm" data-entity="shared-vm" data-category="service">
         <span class="topo__eyebrow">VM</span>
         <span class="topo__label">Shared VM</span>
@@ -124,7 +118,8 @@
     <div class="topo__line"></div>
   </div>
 
-  <!-- Client tier -->
+  <!-- Devices -->
+  <div class="topo__tier-label">Devices</div>
   <div class="topo__tier topo__tier--clients">
     <div class="topo__node topo__node--small topo__node--client" data-entity="unifi-ap" data-category="client">
       <span class="topo__eyebrow">Wireless</span>

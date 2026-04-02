@@ -163,7 +163,6 @@ export const entities = {
       "management-lane",
       "service-lane",
       "signal-lane",
-      "automation-lane",
     ],
     sections: [
       {
@@ -205,11 +204,9 @@ export const entities = {
       "management-lane",
       "service-lane",
       "signal-lane",
-      "automation-lane",
       "unifi-vm",
       "shared-vm",
       "kuma-lxc",
-      "hermes-vm",
     ],
     sections: [
       {

@@ -36,27 +36,27 @@ import Base from '../layouts/Base.astro';
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/homeserver/" class="projects__link projects__link--1">homeserver/</a>
-          <span class="projects__desc">-self-hosted infrastructure and automation</span>
+          <span class="projects__desc">-infrastructure</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/bellas-beads/" class="projects__link projects__link--2">bellas-beads/</a>
-          <span class="projects__desc">-ecommerce site for jewelry</span>
+          <span class="projects__desc">-ecommerce</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/nhf/" class="projects__link projects__link--3">nhf/</a>
-          <span class="projects__desc">-website for a band</span>
+          <span class="projects__desc">-band site</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/work-orders/" class="projects__link projects__link--4">work-orders/</a>
-          <span class="projects__desc">-work order management system, school project</span>
+          <span class="projects__desc">-web app</span>
         </div>
         <div class="projects__row">
           <span class="projects__chevron">{'>'}</span>
           <a href="/projects/epl-ml-model/" class="projects__link projects__link--5">epl-ml-model/</a>
-          <span class="projects__desc">-predicting soccer match outcomes with ML</span>
+          <span class="projects__desc">-ML model</span>
         </div>
       </div>
     </section>
@@ -213,9 +213,30 @@ import Base from '../layouts/Base.astro';
   }
 
   @media (max-width: 600px) {
-    .skills__row,
+    .skills__row {
+      white-space: normal;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-bottom: var(--space-3);
+    }
+    .skills__name {
+      margin-right: 0;
+      margin-bottom: var(--space-1);
+    }
+    .skills__items {
+      font-size: var(--text-sm);
+      padding-left: var(--space-3);
+    }
+    .skills__listing {
+      line-height: 1.8;
+    }
+
     .projects__row {
       white-space: normal;
+    }
+    .projects__desc {
+      font-size: var(--text-sm);
     }
   }
 </style>

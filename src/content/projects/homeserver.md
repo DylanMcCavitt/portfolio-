@@ -13,7 +13,7 @@ I run a small server setup at home that handles most things a cloud service usua
 
 The system is split into separate zones: one for network management, one for applications people actually use, one for monitoring, and one for automation. This separation means a problem in one area doesn't cascade into others.
 
-This is a continuous project. The core infrastructure is live and running, but I'm still building it out. Some things in scope: a NAS for dedicated storage, Grafana for visibility, Jellyfin for media and a Tailscale subnet router for remote management acess.
+This is a continuous project. The core infrastructure is live and running, but I'm still building it out. Some things in scope: a NAS for dedicated storage, Grafana for visibility, Jellyfin for media and a Tailscale subnet router for remote management access.
 
 [Interactive map →](/homelab/topology/)
 
@@ -23,7 +23,7 @@ I wanted to understand what cloud services were abstracting away, but I also jus
 
 ## What I learned (and still learning)
 
-To design for failure. It was tempting to rush into adding multiple services, but setting the core infrastructure has set me up for easier scaling in the future. Separation, monitoring, and proper network boundaries means I can add new services later without backtracking and reconfiguring everything that was already working. The boring decisions have definitely been the most valuable. It has also made me appreciate the amount complexity being handled day to day across massive tech and cloud companies.
+To design for failure. It was tempting to rush into adding multiple services, but setting the core infrastructure has set me up for easier scaling in the future. Separation, monitoring, and proper network boundaries means I can add new services later without backtracking and reconfiguring everything that was already working. The boring decisions have definitely been the most valuable. It has also made me appreciate the amount of complexity being handled day to day across massive tech and cloud companies.
 
 <div class="screenshot-strip">
 

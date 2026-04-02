@@ -11,6 +11,7 @@ const projects = defineCollection({
     liveUrl: z.string().optional(),
     repoUrl: z.string().optional(),
     topologyUrl: z.string().optional(),
+    notebookUrl: z.string().optional(),
   }),
 });
 

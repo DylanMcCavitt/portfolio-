@@ -5,9 +5,8 @@
 .header {
   padding: var(--space-5) var(--space-6);
   display: flex;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
-  position: relative;
 }
 
 .header__name {
@@ -25,9 +24,18 @@
   text-decoration: none;
 }
 
+@media (max-width: 600px) {
+  .header {
+    padding: var(--space-4) var(--space-4);
+  }
+  .header__name {
+    font-size: var(--text-sm);
+    padding: var(--space-1) var(--space-3);
+  }
+}
+
 .header__mode-toggle {
-  position: absolute;
-  right: var(--space-6);
+  position: relative;
   background: var(--surface);
   border: none;
   border-radius: 50%;
@@ -73,13 +81,15 @@
 .header__mode-tooltip {
   display: none;
   position: absolute;
-  right: calc(100% + var(--space-2));
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 0.65rem;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--dropdown-text);
   background: var(--dropdown-bg);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-radius: 4px;
   white-space: nowrap;
   pointer-events: none;
