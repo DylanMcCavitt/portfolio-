@@ -1,6 +1,6 @@
 ---
 title: "EPL ML Model"
-subtitle: "Predicting football match outcomes with machine learning"
+subtitle: "Predicting soccer (or football) match outcomes with machine learning"
 order: 5
 notebookUrl: "https://colab.research.google.com/drive/1H1BQdfM5U6SsSEviFrj3zUG60k2ZLCgX"
 ---

@@ -23,6 +23,47 @@
   margin: 0;
 }
 
+.topology-nav {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-5) 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+}
+
+.topology-nav__link {
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.topology-nav__link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.topology-bottom {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-5) var(--space-8);
+  display: flex;
+  gap: var(--space-5);
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-5);
+}
+
+.topology-bottom__link {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.topology-bottom__link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
 /* ─── Map container ─────────────────────────────────────────── */
 
 .topo {

@@ -95,6 +95,32 @@
   }
 }
 
+/* Prev / Next */
+.project-prevnext {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-5);
+}
+
+.project-prevnext__link {
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.project-prevnext__link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.project-prevnext__link--label {
+  font-size: var(--text-sm);
+}
+
 /* Project siblings nav */
 .project-siblings {
   max-width: 680px;

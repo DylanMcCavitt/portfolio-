@@ -31,7 +31,7 @@ import Breadcrumb from '../components/Breadcrumb.astro';
         <div class="resume__entry-header">
           <div>
             <h3 class="resume__company">Manhattan Board of Elections</h3>
-            <p class="resume__role">Technical Support Intern</p>
+            <p class="resume__role">IT Support</p>
           </div>
           <span class="resume__date">2025</span>
         </div>
@@ -81,6 +81,12 @@ import Breadcrumb from '../components/Breadcrumb.astro';
         </div>
       </div>
     </section>
+
+    <nav class="resume__nav">
+      <a href="/" class="resume__nav-link">home</a>
+      <a href="/#projects" class="resume__nav-link">projects</a>
+      <a href="/#contact" class="resume__nav-link">contact</a>
+    </nav>
   </main>
 </Base>
 
@@ -161,6 +167,22 @@ import Breadcrumb from '../components/Breadcrumb.astro';
     font-size: var(--text-sm);
     line-height: 1.7;
     margin-top: var(--space-2);
+  }
+
+  .resume__nav {
+    display: flex;
+    gap: var(--space-5);
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--border);
+  }
+  .resume__nav-link {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .resume__nav-link:hover {
+    color: var(--text);
+    text-decoration: none;
   }
 
   @media (max-width: 600px) {
