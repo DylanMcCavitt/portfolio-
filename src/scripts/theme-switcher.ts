@@ -63,7 +63,7 @@ function toggleMode(): void {
 }
 
 function getToggleLabel(themeId: string): string {
-  if (!hasUserChosenTheme()) return "[/theme]";
+  if (!hasUserChosenTheme()) return "theme ▾";
   return `${THEME_NAMES[themeId] || themeId} ▾`;
 }
 
