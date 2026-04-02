@@ -9,7 +9,7 @@ liveUrl: "https://bellasbeads.shop"
 
 ## What it is
 
-A full-featured ecommerce platform for selling handmade beaded jewelry. Customers can browse products, create accounts, and check out with both guest and authenticated flows. Logged-in users get order history, shipment tracking, and saved addresses. An admin dashboard handles product management and inventory.
+A full-featured ecommerce platform for selling handmade jewelry. Customers can browse products, create accounts, and check out with both guest and authenticated flows. Logged-in users get order history, shipment tracking, and saved addresses. An admin dashboard handles product management and inventory.
 
 Built as a monorepo with a React + TypeScript frontend and a Node/Express backend. PostgreSQL via Supabase handles data and auth, Stripe processes payments, and Shippo automates shipping label generation.
 
