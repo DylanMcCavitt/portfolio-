@@ -11,7 +11,7 @@ repoUrl: "https://github.com/apolydore/Work-Order-Management-System"
 
 A web app for managing construction and maintenance work orders across NYC. External users submit job requests, admins review and convert them into work orders, assign contractors, track progress through a status lifecycle, and generate invoices on completion. Built as a group project for CS 546.
 
-The stack is Express 5 with MongoDB (raw driver, no ORM), Handlebars for templating, and session-based auth with bcrypt. Company seed data comes from a real NYC open-data CSV of awarded construction contracts.
+The stack is Express 5 with MongoDB (raw driver, no ORM), Handlebars for templating, and session-based auth with bcrypt. Company seed data comes from a real [NYC open-data dataset](https://data.cityofnewyork.us/Housing-Development/Handyman-Work-Order-HWO-Charges/sbnd-xujn/about_data) of awarded construction contracts.
 
 ## How it works
 

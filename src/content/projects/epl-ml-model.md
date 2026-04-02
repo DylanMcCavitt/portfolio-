@@ -9,7 +9,7 @@ gistUrl: "https://gist.github.com/DylanMcCavitt/c3ead5e9ee4867308e326eb1799478e7
 
 ## What it is
 
-A group project that predicts English Premier League match outcomes using 20+ years of match data. We trained and compared eight different models (Random Forest, MLP neural network, Decision Tree, KNN, Naive Bayes, Logistic Regression, XGBoost, and SVM) to see which best predicts whether the home team wins.
+A group project that predicts English Premier League match outcomes using 20+ years of match data, using [this Kaggle dataset](https://www.kaggle.com/code/saife245/football-match-prediction/notebook). We trained and compared eight different models (Random Forest, MLP neural network, Decision Tree, KNN, Naive Bayes, Logistic Regression, XGBoost, and SVM) to see which best predicts whether the home team wins.
 
 The dataset has 39 features including goals scored, win/loss streaks, goal differentials, and form points. We handled missing data, capped outliers, engineered features, and ran each model through the same train-test split for a fair comparison.
 
@@ -31,4 +31,4 @@ The most useful part of this project wasn't the modeling, it was the data work. 
 
 </div>
 
-[View the full notebook →](https://gist.github.com/DylanMcCavitt/c3ead5e9ee4867308e326eb1799478e7)
+[View the full notebook →](https://colab.research.google.com/drive/1H1BQdfM5U6SsSEviFrj3zUG60k2ZLCgX)

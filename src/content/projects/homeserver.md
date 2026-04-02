@@ -21,9 +21,9 @@ This is a continuous project. The core infrastructure is live and running, but I
 
 I wanted to understand what cloud services were abstracting away, but I also just wanted more control. Open source tools allow me to build what I want. It's also just a continuous learning environment. With how fast things move today, there's always something new to try or improve.
 
-## What I learned
+## What I learned (and still learning)
 
-To design for failure. It's tempting to rush into adding the flashy services, but getting the core infrastructure right first matters more. Solid separation, good monitoring, and clean network boundaries mean I can add new services later without backtracking and reconfiguring everything that was already working. The most valuable decisions were the boring ones: keeping monitoring independent from the things it watches, isolating admin access from user-facing apps, and giving each workload room to break without taking everything else down.
+To design for failure. It was tempting to rush into adding multiple services, but setting the core infrastructure has set me up for easier scaling in the future. Separation, monitoring, and proper network boundaries means I can add new services later without backtracking and reconfiguring everything that was already working. The boring decisions have definitely been the most valuable. It has also made me appreciate the amount complexity being handled day to day across massive tech and cloud companies.
 
 <div class="screenshot-strip">
 
