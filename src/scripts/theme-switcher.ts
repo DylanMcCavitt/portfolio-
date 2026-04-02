@@ -118,9 +118,10 @@ function initThemeSwitcher(): void {
   const currentTheme = getTheme();
   const currentMode = getMode();
 
-  // Apply saved state
-  setTheme(currentTheme);
-  setMode(currentMode);
+  // Apply saved state visually without writing to localStorage
+  document.documentElement.setAttribute("data-theme", currentTheme);
+  document.documentElement.setAttribute("data-mode", currentMode);
+  updateAllInstances(currentTheme);
 
   // Theme dropdowns
   const toggles = document.querySelectorAll<HTMLElement>("[data-theme-toggle]");
