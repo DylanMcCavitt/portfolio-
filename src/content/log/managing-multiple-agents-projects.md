@@ -2,7 +2,7 @@
 title: managing multiple agents & projects
 date: 2026-04-16
 subtitle: codex, claude, linear & a little bit of context management and prompting
-draft: true
+draft: false
 ---
 
 This is the simplest and most effective way that **I** have been handling multiple agents and projects in parallel. I have codex and claude code connected to the [Linear MCP](https://linear.app/docs/mcp). Each of my projects are broken down into phases/tracks, with each track broken down into issues. 
