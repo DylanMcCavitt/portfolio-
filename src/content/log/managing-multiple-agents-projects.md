@@ -9,7 +9,7 @@ This is the simplest way that **I** have been handling multiple agents and proje
 
 #### i.  
 
-I connect Codex and Claude Code to Linear MCP. Each project gets broken into phases/tracks, and every track gets broken into issues. 
+I connect Codex and Claude Code to [Linear MCP](https://linear.app/docs/mcp). Each project gets broken into phases/tracks, and every track gets broken into issues. 
 
 ![](/log/uploads/pasted-image-1776447185394.png)
 
