@@ -5,7 +5,7 @@ interface AuthQuery {
   error?: string;
 }
 
-const ALLOWED_ORIGIN = 'https://dylanmccavitt.xyz';
+const ALLOWED_ORIGIN = 'https://www.dylanmccavitt.xyz';
 
 export default async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url, ALLOWED_ORIGIN);

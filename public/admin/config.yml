@@ -2,7 +2,7 @@ backend:
   name: github
   repo: DylanMcCavitt/portfolio-
   branch: main
-  base_url: https://dylanmccavitt.xyz
+  base_url: https://www.dylanmccavitt.xyz
   auth_endpoint: api/auth
 
 media_folder: "public/log/uploads"
