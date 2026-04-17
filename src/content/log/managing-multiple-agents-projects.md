@@ -2,7 +2,7 @@
 title: managing multiple agents & projects
 date: 2026-04-17
 subtitle: codex, claude, linear & a little bit of context management and prompting
-draft: true
+draft: false
 ---
 
 This is the simplest way that **I** have been handling multiple agents and projects in parallel. 
