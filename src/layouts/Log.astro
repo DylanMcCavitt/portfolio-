@@ -1,6 +1,5 @@
 ---
 import Base from './Base.astro';
-import Breadcrumb from '../components/Breadcrumb.astro';
 import { getCollection } from 'astro:content';
 
 interface Props {
@@ -31,7 +30,6 @@ const formattedDate = date.toISOString().slice(0, 10);
 <Base title={`${title} — Dylan McCavitt`} description={subtitle ?? title}>
   <article>
     <header class="log-header">
-      <Breadcrumb slug={slug} section="log" sectionHref="/log/" />
       <h1 class="log-header__title">{title}</h1>
       <p class="log-header__date">{formattedDate}</p>
       {subtitle && <p class="log-header__subtitle">{subtitle}</p>}
@@ -88,7 +86,7 @@ const formattedDate = date.toISOString().slice(0, 10);
   .log-header__title {
     font-size: var(--text-2xl);
     font-weight: 600;
-    margin: var(--space-4) 0 var(--space-2);
+    margin: 0 0 var(--space-2);
   }
   .log-header__date {
     color: var(--text-muted);
