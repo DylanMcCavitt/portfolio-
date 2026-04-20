@@ -48,7 +48,7 @@ const NAV = [
       <div class="landing__actions">
         <IconButton
           ariaLabel="GitHub"
-          href="https://github.com/DylanMcCavitt"
+          href="https://github.com/DylanMcCavitt/"
           external
         >
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -112,6 +112,14 @@ const NAV = [
           <span>Download resume</span>
           <span aria-hidden="true" class="landing__resume-arrow">↗</span>
         </a>
+
+        <div class="landing__footer" aria-label="Availability">
+          <span class="landing__year">&copy; 2026</span>
+          <span class="landing__availability">
+            <span class="landing__availability-dot" aria-hidden="true"></span>
+            <span>Open to opportunities</span>
+          </span>
+        </div>
       </div>
     </main>
 
@@ -214,7 +222,7 @@ const NAV = [
         transition: color 0.25s var(--ease);
       }
       .landing__resume:hover {
-        color: var(--ink);
+        color: var(--accent);
         text-decoration: none;
       }
       .landing__resume-arrow {
@@ -223,6 +231,36 @@ const NAV = [
       }
       .landing__resume:hover .landing__resume-arrow {
         transform: translate(2px, -2px);
+      }
+      .landing__footer {
+        margin-top: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .landing__year,
+      .landing__availability {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .landing__year {
+        color: var(--muted);
+      }
+      .landing__availability {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--accent);
+      }
+      .landing__availability-dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 7px;
+        background: var(--accent);
       }
       .landing-theme-icon {
         width: 14px;
@@ -236,6 +274,17 @@ const NAV = [
       }
       html.dark .landing-theme-icon--moon {
         display: none;
+      }
+      @media (max-width: 560px) {
+        .landing__footer {
+          margin-top: 28px;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .landing__availability {
+          width: 100%;
+          justify-content: flex-end;
+        }
       }
     </style>
   </body>

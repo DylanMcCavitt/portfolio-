@@ -10,12 +10,12 @@
   --muted: oklch(0.52 0.012 60);
   --line: oklch(0.88 0.01 70);
   --card: oklch(1 0.003 75);
-  --accent: oklch(0.55 0.14 42);
+  --accent-olive: oklch(0.52 0.09 125);
+  --accent: var(--accent-olive);
   --ease: cubic-bezier(0.7, 0.1, 0.2, 1);
 
   /* Alternate accents — not shipped, left for reference.
   --accent-ink:    oklch(0.25 0.01 60);
-  --accent-olive:  oklch(0.52 0.09 125);
   --accent-plum:   oklch(0.48 0.12 340);
   --accent-cobalt: oklch(0.52 0.16 255);
   */
@@ -46,4 +46,5 @@ html.dark {
   --muted: oklch(0.66 0.012 70);
   --line: oklch(0.28 0.008 60);
   --card: oklch(0.195 0.008 60);
+  --accent: var(--accent-olive);
 }

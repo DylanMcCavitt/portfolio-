@@ -31,6 +31,7 @@ const idx = String(index).padStart(2, '0');
     transition:
       border-color 0.25s var(--ease),
       color 0.25s var(--ease);
+    -webkit-tap-highlight-color: transparent;
   }
   .navlink::before {
     content: '';
@@ -84,5 +85,33 @@ const idx = String(index).padStart(2, '0');
   .navlink:hover .navlink__idx,
   .navlink:hover .navlink__arrow {
     color: color-mix(in oklch, var(--bg) 75%, transparent);
+  }
+
+  @media (hover: none), (pointer: coarse) {
+    .navlink::before {
+      display: none;
+    }
+    .navlink:hover {
+      color: var(--ink);
+    }
+    .navlink:hover .navlink__idx,
+    .navlink:hover .navlink__arrow {
+      color: var(--muted);
+    }
+    .navlink:hover .navlink__arrow {
+      transform: none;
+    }
+    .navlink:active {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: var(--bg);
+    }
+    .navlink:active .navlink__idx,
+    .navlink:active .navlink__arrow {
+      color: color-mix(in oklch, var(--bg) 78%, transparent);
+    }
+    .navlink:active .navlink__arrow {
+      transform: none;
+    }
   }
 </style>

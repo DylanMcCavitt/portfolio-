@@ -27,7 +27,7 @@ export interface ProjectData {
 export const PROJECTS: ProjectData[] = [
   {
     slug: 'homeserver',
-    name: 'homeserver/',
+    name: 'Homeserver',
     kind: 'infrastructure',
     year: '2025',
     blurb:
@@ -78,7 +78,7 @@ export const PROJECTS: ProjectData[] = [
   },
   {
     slug: 'bellas-beads',
-    name: 'bellas-beads/',
+    name: "Bella's Beads",
     kind: 'web app',
     year: '2025',
     blurb:
@@ -137,7 +137,7 @@ export const PROJECTS: ProjectData[] = [
   },
   {
     slug: 'nhf',
-    name: 'nhf/',
+    name: 'No Hard Feelings',
     kind: 'band site',
     year: '2024',
     blurb:
@@ -179,7 +179,7 @@ export const PROJECTS: ProjectData[] = [
   },
   {
     slug: 'work-orders',
-    name: 'work-orders/',
+    name: 'Work Orders',
     kind: 'web app',
     year: '2023',
     blurb:
@@ -222,7 +222,7 @@ export const PROJECTS: ProjectData[] = [
   },
   {
     slug: 'epl-ml-model',
-    name: 'epl-ml-model/',
+    name: 'EPL ML Model',
     kind: 'ML model',
     year: '2024',
     blurb:

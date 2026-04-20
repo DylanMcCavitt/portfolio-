@@ -100,7 +100,13 @@ a {
   text-decoration: none;
 }
 
+a:visited,
+a:active {
+  color: var(--accent);
+}
+
 a:hover {
+  color: var(--accent);
   text-decoration: underline;
 }
 
