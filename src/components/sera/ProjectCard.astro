@@ -1,0 +1,88 @@
+---
+interface Props {
+  slug: string;
+  name: string;
+  kind: string;
+  blurb: string;
+  href?: string;
+}
+const { slug, name, kind, blurb, href } = Astro.props;
+const target = href ?? `/projects/${slug}`;
+---
+
+<a href={target} class="proj-card">
+  <div class="ph proj-cover">
+    <span class="proj-cover__label">[ cover · {slug} ]</span>
+  </div>
+  <div class="proj-card__meta">
+    <div class="proj-card__text">
+      <h3 class="proj-title">&gt; {name}</h3>
+      <p class="proj-card__blurb">{blurb}</p>
+    </div>
+    <span class="proj-card__kind">&mdash; {kind}</span>
+  </div>
+</a>
+
+<style>
+  .proj-card {
+    display: block;
+    color: var(--ink);
+    text-decoration: none;
+    transition: transform 0.3s var(--ease);
+  }
+  .proj-card:hover {
+    text-decoration: none;
+  }
+  .proj-cover {
+    aspect-ratio: 4 / 3;
+    display: grid;
+    place-items: center;
+    transition: border-color 0.3s var(--ease);
+  }
+  .proj-card:hover .proj-cover {
+    border-color: var(--ink);
+  }
+  .proj-cover__label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .proj-card__meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .proj-card__text {
+    min-width: 0;
+  }
+  .proj-title {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.3;
+    transition: color 0.2s var(--ease);
+  }
+  .proj-card:hover .proj-title {
+    color: var(--accent);
+  }
+  .proj-card__blurb {
+    margin-top: 4px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .proj-card__kind {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+</style>
