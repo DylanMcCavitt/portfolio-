@@ -27,7 +27,7 @@ const currentIndex = siblings.findIndex((p) => p.slug === slug);
 const isFirst = currentIndex === 0;
 const isLast = currentIndex === siblings.length - 1;
 const prevHref = isFirst ? '/' : `/projects/${siblings[currentIndex - 1].slug}/`;
-const nextHref = isLast ? '/resume/' : `/projects/${siblings[currentIndex + 1].slug}/`;
+const nextHref = isLast ? '/experience/' : `/projects/${siblings[currentIndex + 1].slug}/`;
 ---
 
 <Base title={`${title} — Dylan McCavitt`} description={subtitle}>
@@ -64,8 +64,8 @@ const nextHref = isLast ? '/resume/' : `/projects/${siblings[currentIndex + 1].s
       </div>
       <div class="project-siblings__pages">
         <a href="/" class="project-siblings__page-link">home</a>
-        <a href="/resume/" class="project-siblings__page-link">experience</a>
-        <a href="/#contact" class="project-siblings__page-link">contact</a>
+        <a href="/experience/" class="project-siblings__page-link">experience</a>
+        <a href="/contact/" class="project-siblings__page-link">contact</a>
       </div>
     </nav>
   </article>
