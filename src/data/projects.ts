@@ -37,16 +37,8 @@ export const PROJECTS: ProjectData[] = [
     stack: ['NixOS', 'Docker', 'Tailscale', 'Caddy', 'Restic', 'Grafana'],
     links: [
       {
-        label: 'map',
-        url: '/homelab/topology/',
-      },
-      {
-        label: 'nixos-dotfiles',
-        url: 'https://github.com/DylanMcCavitt/nixos-dotfiles',
-      },
-      {
-        label: 'homelab',
-        url: 'https://github.com/DylanMcCavitt/homelab',
+        label: 'diagram',
+        url: '/diagrams/homelab-topology.svg',
       },
     ],
     summary:

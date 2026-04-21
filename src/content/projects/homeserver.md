@@ -2,7 +2,7 @@
 title: "Homeserver"
 subtitle: "Self-hosted infrastructure and automation"
 order: 1
-topologyUrl: "/homelab/topology/"
+diagramUrl: "/diagrams/homelab-topology.svg"
 ---
 
 ![Homepage dashboard](/screenshots/homelab/homepage.webp)
@@ -15,7 +15,7 @@ The system is split into separate zones: one for network management, one for app
 
 This is a continuous project. The core infrastructure is live and running, but I'm still building it out. Some things in scope: a NAS for dedicated storage, Grafana for visibility, Jellyfin for media and a Tailscale subnet router for remote management access.
 
-[Interactive map →](/homelab/topology/)
+[Topology diagram →](/diagrams/homelab-topology.svg)
 
 ## Why I built it
 

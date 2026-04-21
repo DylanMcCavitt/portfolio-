@@ -86,9 +86,6 @@ const NAV = [
 
       <div class="landing__column">
         <header class="landing__header">
-          <div class="landing__monogram" aria-hidden="true">
-            <span>D</span>
-          </div>
           <h1 class="landing__name">Dylan McCavitt</h1>
           <p class="sera-label landing__tagline">
             Software engineer · NYC
@@ -167,25 +164,6 @@ const NAV = [
       .landing__header {
         text-align: center;
         margin-bottom: 40px;
-      }
-      .landing__monogram {
-        display: grid;
-        place-items: center;
-        width: 48px;
-        height: 48px;
-        margin: 0 auto 24px;
-        border: 1px solid var(--line);
-        background: var(--card);
-        color: var(--ink);
-        transition: transform 0.4s var(--ease);
-      }
-      .landing__monogram:hover {
-        transform: rotate(-4deg) scale(1.06);
-      }
-      .landing__monogram > span {
-        font-size: 17px;
-        font-weight: 700;
-        line-height: 1;
       }
       .landing__name {
         font-size: 20px;

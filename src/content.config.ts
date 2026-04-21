@@ -10,7 +10,7 @@ const projects = defineCollection({
     order: z.number(),
     liveUrl: z.string().optional(),
     repoUrl: z.string().optional(),
-    topologyUrl: z.string().optional(),
+    diagramUrl: z.string().optional(),
     notebookUrl: z.string().optional(),
   }),
 });
