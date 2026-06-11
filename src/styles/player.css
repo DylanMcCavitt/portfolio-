@@ -195,7 +195,12 @@
 .ctl.next { border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid var(--pl-text); }
 .ctl.play { width: 34px; height: 34px; border-radius: 50%; background: var(--pl-text); display: grid; place-items: center; opacity: 1; }
 .ctl.play:hover { transform: scale(1.06); }
+/* paused (or no-JS default): show the play triangle */
 .ctl.play::after { content: ''; display: block; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 10px solid var(--pl-bg); margin-left: 3px; }
+/* playing: swap the triangle for the two pause bars (#24 toggles body.paused) */
+body:not(.paused) .ctl.play::after { border: none; width: 10px; height: 12px; border-left: 3.5px solid var(--pl-bg); border-right: 3.5px solid var(--pl-bg); margin: 0; }
+/* the eq freezes while paused (prototype parity) */
+body.paused .eq i { animation-play-state: paused; }
 .seek { display: flex; align-items: center; gap: 10px; width: 100%; }
 .seek .time { font-family: var(--pl-mono); font-size: 10.5px; color: var(--pl-faint); white-space: nowrap; }
 .seek .rail { flex: 1; height: 4px; background: #2c2e38; border-radius: 99px; position: relative; }
