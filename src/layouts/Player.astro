@@ -13,11 +13,18 @@
 import Sidebar from '../components/player/Sidebar.astro';
 import PlayerBar from '../components/player/PlayerBar.astro';
 import type { PlaylistId, Project } from '../data/catalog';
+import { OG_FALLBACK, type PageMeta } from '../lib/seo';
 import '../styles/player.css';
 
 export interface Props {
   title: string;
   description?: string;
+  /**
+   * Per-page SEO bundle (#29) — drives OG/Twitter tags, `og:type`, the OG
+   * image, and optional JSON-LD. Pages pass data-derived meta from `lib/seo`;
+   * when omitted, the layout falls back to the site-wide defaults below.
+   */
+  meta?: PageMeta;
   /** Active sidebar filter (or `'resume'` for the album view). */
   active?: PlaylistId | 'resume';
   /** Override the now-playing project in the bottom bar. */
@@ -26,12 +33,21 @@ export interface Props {
 const {
   title,
   description = 'Dylan McCavitt — Portfolio',
+  meta,
   active = 'all',
   now,
 } = Astro.props;
 
 // Canonical URL for this page (#25) — absolute, origin from `Astro.site`.
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
+
+// Site-wide meta defaults; `meta` (when passed) overrides each field (#29).
+const metaDescription = meta?.description ?? description;
+const ogTitle = title;
+const ogDescription = meta?.description ?? description;
+const ogType = meta?.ogType ?? 'website';
+const ogImage = new URL(meta?.ogImage ?? OG_FALLBACK, Astro.site).href;
+const jsonLd = meta?.jsonLd;
 ---
 
 <!doctype html>
@@ -39,17 +55,29 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content={description} />
-    <meta property="og:title" content="Dylan McCavitt | Portfolio" />
-    <meta property="og:description" content={description} />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://dylanmccavitt.xyz/screenshots/image-preview.webp" />
+    <meta name="description" content={metaDescription} />
+    <meta property="og:title" content={ogTitle} />
+    <meta property="og:description" content={ogDescription} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Dylan McCavitt" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://dylanmccavitt.xyz/screenshots/image-preview.webp" />
-    <meta name="twitter:title" content={title} />
-    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:title" content={ogTitle} />
+    <meta name="twitter:description" content={ogDescription} />
     <title>{title}</title>
     <link rel="canonical" href={canonical} />
+    {
+      jsonLd && (
+        <script
+          type="application/ld+json"
+          set:html={JSON.stringify(jsonLd)}
+        />
+      )
+    }
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

@@ -9,10 +9,18 @@
 import PlayerLayout from '../layouts/Player.astro';
 import LibraryView from '../components/player/LibraryView.astro';
 import { CATALOG } from '../data/catalog';
+import { libraryMeta, personJsonLd } from '../lib/seo';
 
 const now = CATALOG[0];
+const meta = {
+  ...libraryMeta(
+    'Dylan McCavitt',
+    'Software engineer building agentic systems, trading infrastructure, and iOS apps in NYC — a player-style portfolio of the work.',
+  ),
+  jsonLd: personJsonLd(),
+};
 ---
 
-<PlayerLayout title="Dylan McCavitt — now playing" active="all" now={now}>
+<PlayerLayout title="Dylan McCavitt — now playing" meta={meta} active="all" now={now}>
   <LibraryView filter="all" now={now} />
 </PlayerLayout>

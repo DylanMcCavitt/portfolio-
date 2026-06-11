@@ -17,6 +17,7 @@ import CreditsList from '../../components/player/CreditsList.astro';
 import AlbumCard from '../../components/player/AlbumCard.astro';
 import { RESUME, getResumeTrackById, type ResumeTrack } from '../../data/resume';
 import { getProjectById, type Project } from '../../data/catalog';
+import { journeyTrackMeta } from '../../lib/seo';
 
 export function getStaticPaths() {
   return RESUME.tracks.map((track) => ({
@@ -43,13 +44,11 @@ const LINKS = {
   email: 'mailto:dylanmccavitt@outlook.com',
   linkedin: 'https://www.linkedin.com/in/dylan-mccavitt',
 };
+
+const meta = journeyTrackMeta(t);
 ---
 
-<PlayerLayout
-  title={`${t.title} — The Journey — Dylan McCavitt`}
-  description={t.role}
-  active="resume"
->
+<PlayerLayout title={meta.title} meta={meta} active="resume">
   <div class="view">
     <div class="head">
       <a class="back" href="/journey">The Journey</a>
