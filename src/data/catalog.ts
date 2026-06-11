@@ -145,9 +145,9 @@ export const CATALOG: Project[] = [
       ['Status', 'dry-run → live 06·23'],
     ],
     shots: [
-      { kind: 'code', cap: 'dry-run journal — intended vs simulated fills' },
-      { kind: 'dash', cap: 'risk-gate decision log for one session' },
-      { kind: 'chart', cap: 'signal backtest, walk-forward windows' },
+      { img: `${SHOTS}/agentic-trader/journal.webp`, cap: 'dry-run journal — intended vs simulated fills' },
+      { img: `${SHOTS}/agentic-trader/risk-gate.webp`, cap: 'risk-gate decision log for one session' },
+      { img: `${SHOTS}/agentic-trader/backtest.webp`, cap: 'signal backtest, walk-forward windows' },
     ],
   },
   {
@@ -185,9 +185,9 @@ export const CATALOG: Project[] = [
       ['Repo', 'public'],
     ],
     shots: [
-      { kind: 'dash', cap: 'position monitor with ratchet levels' },
-      { kind: 'code', cap: 'exit ladder config for an iron condor' },
-      { kind: 'list', cap: 'order audit trail, one expiry' },
+      { img: `${SHOTS}/exit-manager/position-monitor.webp`, cap: 'position monitor with ratchet levels' },
+      { img: `${SHOTS}/exit-manager/exit-ladder.webp`, cap: 'exit ladder config for an iron condor' },
+      { img: `${SHOTS}/exit-manager/audit-trail.webp`, cap: 'order audit trail, one expiry' },
     ],
   },
   {
@@ -265,9 +265,9 @@ export const CATALOG: Project[] = [
       ['Status', 'v1 in progress'],
     ],
     shots: [
-      { kind: 'dash', cap: 'agent-driven chartbook capture' },
-      { kind: 'code', cap: 'pine compile round-trip' },
-      { kind: 'chart', cap: 'universe sweep, 4-up layout' },
+      { img: `${SHOTS}/tradingview-mcp/chartbook.webp`, cap: 'agent-driven chartbook capture' },
+      { img: `${SHOTS}/tradingview-mcp/pine-compile.webp`, cap: 'pine compile round-trip' },
+      { img: `${SHOTS}/tradingview-mcp/universe-sweep.webp`, cap: 'universe sweep, 4-up layout' },
     ],
   },
   {
