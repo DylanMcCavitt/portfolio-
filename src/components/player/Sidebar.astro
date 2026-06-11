@@ -8,7 +8,7 @@
  * derived from the current URL, not a click handler — zero client JS.
  *
  * URL scheme (coordinate with the view issues): `/` is the All-work library,
- * `/library/[filter]` for every other filter, `/resume` for the album.
+ * `/library/[filter]` for every other filter, `/journey` for the album.
  *
  * Responsive (#27): the root is a native `<details>` so the same markup serves
  * desktop and mobile with zero JS. ≥820px CSS forces it open and hides the
@@ -82,7 +82,7 @@ const activeLabel = ALL_LABELS.get(active) ?? 'Library';
   }
 
   <div class="g-label">Albums</div>
-  <a class:list={['pl album-row', { on: active === 'resume' }]} href="/resume">
+  <a class:list={['pl album-row', { on: active === 'resume' }]} href="/journey">
     <span class="alb">TJ</span>
     <span class="tt"><b>The Journey</b><small>resume · 2019 — now</small></span>
   </a>
