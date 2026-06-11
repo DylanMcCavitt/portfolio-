@@ -18,6 +18,7 @@ import ShotsRail from '../../components/player/ShotsRail.astro';
 import CreditsList from '../../components/player/CreditsList.astro';
 import AlbumCard from '../../components/player/AlbumCard.astro';
 import { CATALOG, getProjectById, type Project } from '../../data/catalog';
+import { projectMeta } from '../../lib/seo';
 
 export function getStaticPaths() {
   return CATALOG.map((project) => ({
@@ -35,14 +36,10 @@ const { project } = Astro.props as Props;
 const p = project ?? getProjectById(Astro.params.id as string)!;
 
 const related = CATALOG.filter((o) => o.area === p.area && o.id !== p.id).slice(0, 5);
+const meta = projectMeta(p);
 ---
 
-<PlayerLayout
-  title={`${p.title} — Dylan McCavitt`}
-  description={p.line}
-  active={p.area}
-  now={p}
->
+<PlayerLayout title={meta.title} meta={meta} active={p.area} now={p}>
   <div class="view">
     <div class="head">
       <a class="back" href="/">Library</a>

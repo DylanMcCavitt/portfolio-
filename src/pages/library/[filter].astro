@@ -18,9 +18,11 @@ import LibraryView from '../../components/player/LibraryView.astro';
 import {
   CATALOG,
   PLAYLIST_SLUGS,
+  filterCatalog,
   playlistFromSlug,
   type PlaylistId,
 } from '../../data/catalog';
+import { libraryMeta } from '../../lib/seo';
 
 /** Page titles per filter; areas fall back to their own label. */
 const PAGE_TITLE: Partial<Record<PlaylistId, string>> = {
@@ -39,9 +41,21 @@ const { filter: slug } = Astro.params as { filter: string };
 const filter = playlistFromSlug(slug)!;
 
 const now = CATALOG[0];
-const title = `Dylan McCavitt — ${PAGE_TITLE[filter] ?? filter}`;
+const label = PAGE_TITLE[filter] ?? filter;
+const title = `Dylan McCavitt — ${label}`;
+const projects = filterCatalog(filter);
+const meta = {
+  ...libraryMeta(
+    label,
+    `${label} — ${projects.length} ${
+      projects.length === 1 ? 'project' : 'projects'
+    }: ${projects.map((p) => p.title).join(', ')}.`,
+  ),
+  // Keep the page <title> as the now-playing phrasing, not the OG title.
+  title,
+};
 ---
 
-<PlayerLayout title={title} active={filter} now={now}>
+<PlayerLayout title={title} meta={meta} active={filter} now={now}>
   <LibraryView filter={filter} now={now} />
 </PlayerLayout>

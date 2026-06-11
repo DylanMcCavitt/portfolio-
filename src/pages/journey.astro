@@ -13,6 +13,7 @@
  */
 import PlayerLayout from '../layouts/Player.astro';
 import { RESUME } from '../data/resume';
+import { journeyMeta } from '../lib/seo';
 
 /** Album disc hue — carried from the prototype hero (`--a:#8b7cf6`). */
 const DISC_HUE = '#8b7cf6';
@@ -23,13 +24,10 @@ const LINKS = {
 };
 
 const tracks = RESUME.tracks;
+const meta = journeyMeta();
 ---
 
-<PlayerLayout
-  title={`${RESUME.title} — Dylan McCavitt`}
-  description={RESUME.about}
-  active="resume"
->
+<PlayerLayout title={meta.title} meta={meta} active="resume">
   <div class="view">
     <div class="head">
       <div class="hero">
