@@ -1,0 +1,234 @@
+---
+/**
+ * Resume track detail view — one static page per career track, ported from the
+ * prototype `renderResumeTrack()` (`15-player-v4.html` lines 909-952). Static,
+ * zero client JS. `getStaticPaths()` enumerates the 7 resume tracks.
+ *
+ * Reuses the #22 player components: `ProjectArt` (lg hero tile), `StatusBadge`
+ * (era badge), `CreditsList` (label/value rows — `ResumeCredit` shares the
+ * `ProjectStackEntry` shape), and `AlbumCard` for the "Shipped during this era"
+ * cross-links into project detail pages. The current track ("Open to
+ * opportunities") gets Email + LinkedIn actions; the others get none.
+ */
+import PlayerLayout from '../../layouts/Player.astro';
+import ProjectArt from '../../components/player/ProjectArt.astro';
+import StatusBadge from '../../components/player/StatusBadge.astro';
+import CreditsList from '../../components/player/CreditsList.astro';
+import AlbumCard from '../../components/player/AlbumCard.astro';
+import { RESUME, getResumeTrackById, type ResumeTrack } from '../../data/resume';
+import { getProjectById, type Project } from '../../data/catalog';
+
+export function getStaticPaths() {
+  return RESUME.tracks.map((track) => ({
+    params: { track: track.id },
+    props: { track },
+  }));
+}
+
+interface Props {
+  track: ResumeTrack;
+}
+const { track } = Astro.props as Props;
+
+// Fallback for direct prop typing; getStaticPaths always supplies `track`.
+const t = track ?? getResumeTrackById(Astro.params.track as string)!;
+
+const index = RESUME.tracks.findIndex((x) => x.id === t.id);
+// Resolve era cross-links against the catalog; drop any that don't resolve.
+const era = t.era
+  .map((id) => getProjectById(id))
+  .filter((p): p is Project => p !== null);
+
+const LINKS = {
+  email: 'mailto:dylanmccavitt@outlook.com',
+  linkedin: 'https://www.linkedin.com/in/dylan-mccavitt',
+};
+---
+
+<PlayerLayout
+  title={`${t.title} — The Journey — Dylan McCavitt`}
+  description={t.role}
+  active="resume"
+>
+  <div class="view">
+    <div class="head">
+      <a class="back" href="/journey">The Journey</a>
+      <div class="hero">
+        <ProjectArt sym={t.sym} hue={t.hue} size="lg" />
+        <div class="info">
+          <span class="kind">Track {index + 1} of {RESUME.tracks.length} · {t.when}</span>
+          <h1>{t.title}</h1>
+          <p>{t.role}</p>
+          <div class="meta">
+            {
+              t.current ? (
+                <span class="badge live">Current</span>
+              ) : (
+                <StatusBadge status={['done', t.when]} />
+              )
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <span class="bigplay" title="play" aria-hidden="true"></span>
+      {
+        t.current && (
+          <>
+            <a class="act-link" href={LINKS.email}>
+              Email ↗
+            </a>
+            <a class="act-link" href={LINKS.linkedin} target="_blank" rel="noopener">
+              LinkedIn ↗
+            </a>
+          </>
+        )
+      }
+    </div>
+
+    <div class="pbody">
+      <div>
+        <h3>About this track</h3>
+        {t.about.map((para) => <p>{para}</p>)}
+        <h3>Liner notes</h3>
+        <ul class="notes">
+          {t.notes.map((note) => <li>{note}</li>)}
+        </ul>
+      </div>
+      <div>
+        <h3>Credits</h3>
+        <CreditsList rows={t.credits} />
+      </div>
+    </div>
+
+    {
+      era.length > 0 && (
+        <div class="more">
+          <h3>Shipped during this era</h3>
+          <div class="albums">
+            {era.map((r) => (
+              <AlbumCard project={r} />
+            ))}
+          </div>
+        </div>
+      )
+    }
+  </div>
+</PlayerLayout>
+
+<style>
+  /* ---- hero / back link (mirrors the project detail view, #22; `.art`,
+     `.badge`, `.hero`, `.kind` primitives come from player.css) ---- */
+  .hero {
+    display: flex;
+    gap: 24px;
+    align-items: flex-end;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--pl-dim);
+    font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .back:hover {
+    color: var(--pl-text);
+  }
+  .back::before {
+    content: '←';
+    font-size: 15px;
+  }
+
+  /* ---- action row ---- */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 18px 30px 6px;
+  }
+  .bigplay {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--pl-green);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  .bigplay::after {
+    content: '';
+    width: 0;
+    height: 0;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-left: 13px solid #0e1410;
+    margin-left: 4px;
+  }
+  .act-link {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--pl-dim);
+    border: 1px solid var(--pl-line);
+    padding: 8px 16px;
+    border-radius: 99px;
+    white-space: nowrap;
+  }
+  .act-link:hover {
+    color: var(--pl-text);
+    border-color: var(--pl-faint);
+  }
+
+  /* ---- about / liner notes / credits columns ---- */
+  .pbody {
+    padding: 8px 30px 36px;
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 36px;
+  }
+  @media (max-width: 820px) {
+    .pbody {
+      grid-template-columns: 1fr;
+    }
+  }
+  .pbody h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 18px 0 8px;
+  }
+  .pbody p {
+    color: var(--pl-dim);
+    font-size: 13.5px;
+  }
+  .pbody p + p {
+    margin-top: 9px;
+  }
+  .notes {
+    list-style: disc;
+  }
+  .notes li {
+    color: var(--pl-dim);
+    font-size: 13px;
+    margin: 7px 0 0 16px;
+  }
+  .notes li::marker {
+    color: var(--pl-green);
+  }
+
+  /* ---- "Shipped during this era" cross-link rail ---- */
+  .more {
+    padding: 0 30px 40px;
+  }
+  .more h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .albums {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+  }
+</style>
