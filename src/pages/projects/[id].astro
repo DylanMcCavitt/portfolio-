@@ -208,6 +208,16 @@ const related = CATALOG.filter((o) => o.area === p.area && o.id !== p.id).slice(
     border-left: 13px solid #0e1410;
     margin-left: 4px;
   }
+  /* playing (#24 toggles `.paused` when this project is now playing) — swap the
+     triangle for the two pause bars, matching the prototype hero. */
+  .bigplay.paused::after {
+    border: none;
+    width: 12px;
+    height: 15px;
+    margin: 0;
+    border-left: 4px solid #0e1410;
+    border-right: 4px solid #0e1410;
+  }
   .act-link {
     font-size: 13px;
     font-weight: 500;
