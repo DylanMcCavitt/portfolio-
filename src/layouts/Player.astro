@@ -12,6 +12,7 @@
  */
 import Sidebar from '../components/player/Sidebar.astro';
 import PlayerBar from '../components/player/PlayerBar.astro';
+import TabBar from '../components/player/TabBar.astro';
 import type { PlaylistId, Project } from '../data/catalog';
 import { OG_FALLBACK, type PageMeta } from '../lib/seo';
 import '../styles/player.css';
@@ -98,6 +99,7 @@ const jsonLd = meta?.jsonLd;
       </main>
     </div>
     <PlayerBar now={now} />
+    <TabBar />
     <script src="../scripts/player.ts"></script>
   </body>
 </html>

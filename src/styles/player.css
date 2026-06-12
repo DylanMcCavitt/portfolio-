@@ -41,6 +41,10 @@
   font-family: var(--pl-sans); font-size: 13.5px; line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   height: 100vh; display: grid; grid-template-rows: 1fr 84px; overflow: hidden;
+  /* mobile browser chrome (URL bar) shrinks the visible area; 100vh overshoots
+     and pushes the player bar off-screen. dvh tracks the real visible height;
+     the vh line above is the fallback for browsers without dvh. */
+  height: 100dvh;
 }
 .player-body *, .player-body *::before, .player-body *::after { margin: 0; padding: 0; box-sizing: border-box; }
 .player-body a { color: inherit; text-decoration: none; }
@@ -261,62 +265,81 @@ body.paused .eq i { animation-play-state: paused; }
 .pb-right a:hover { color: var(--pl-text); }
 
 /* ============================================================
-   Responsive (#27): mobile navigation + layout below 820px.
-   The desktop sidebar (a <details>) collapses into a tappable
-   "Browse" disclosure sheet; the contact links live in the
-   sheet footer, so every destination stays reachable with zero
-   JS. Player bar trims its right links + subline and respects
-   the iOS home-indicator safe area.
+   Responsive (#27, reworked 2026-06-12): mobile layout below
+   820px is a tab-bar shell — the sidebar is hidden, a persistent
+   bottom tab bar (Home · Building · Projects · Resume, rendered
+   by TabBar.astro on every page) owns navigation, and the player
+   bar becomes a floating mini player above it. Zero JS; active
+   tab comes from the URL. Replaces the old "Browse" disclosure
+   sheet (prototype mobile variant B verdict).
    ============================================================ */
+/* desktop: tab bar + playlist menu exist in the DOM but only mobile shows
+   them — the sidebar covers both jobs ≥820px */
+.tabbar, .playlist-menu { display: none; }
+
 @media (max-width: 820px) {
-  /* one-column shell: the sidebar collapses to a top bar, main scrolls below */
-  .body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  /* one-column shell: no sidebar, main scrolls, mini player + tabs below */
+  .body { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .sidebar { display: none; }
+  .player-body { grid-template-rows: 1fr auto auto; }
 
-  /* sidebar <details> becomes a collapsible disclosure; closed = just the bar */
-  .sidebar {
-    border-right: 0; border-bottom: 1px solid var(--pl-line);
-    padding: 0; gap: 0;
-    overflow-y: auto; max-height: min(72vh, 540px);
+  /* bottom tab bar */
+  .tabbar {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    background: var(--pl-side); border-top: 1px solid var(--pl-line);
+    padding: 2px 0 calc(4px + env(safe-area-inset-bottom, 0px));
   }
-  .sidebar:not([open]) { overflow: visible; }
+  .tabbar a {
+    display: grid; justify-items: center; gap: 3px;
+    padding: 8px 0 6px; min-height: 44px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.4px;
+    color: var(--pl-faint);
+  }
+  .tabbar a .ti { font-size: 17px; line-height: 1; font-family: var(--pl-mono); }
+  .tabbar a.on { color: var(--pl-text); }
+  .tabbar a.on .ti { color: var(--pl-accent); }
 
-  /* the "Browse · <active>" toggle bar (≥44px tap target) */
-  .sidebar > .side-toggle {
-    display: flex; align-items: center; gap: 10px;
-    min-height: 48px; padding: 0 16px; cursor: pointer; user-select: none;
+  /* playlist dropdown: the playlists without a tab (All + areas) behind a
+     native <details> menu at the top of every library view. Selecting an
+     entry navigates, which closes the menu on the next page load. */
+  .playlist-menu { display: block; position: relative; padding: 12px 18px 0; }
+  .playlist-menu > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    min-height: 40px; padding: 6px 14px;
+    border: 1px solid var(--pl-line); border-radius: 10px;
+    background: var(--pl-panel);
   }
-  .sidebar[open] > .side-toggle {
-    position: sticky; top: 0; z-index: 1;
-    background: var(--pl-side); border-bottom: 1px solid var(--pl-line);
-  }
-  .st-label {
-    font-size: 10.5px; font-weight: 600; letter-spacing: 1.3px;
+  .playlist-menu > summary::-webkit-details-marker { display: none; }
+  .pm-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 1.2px;
     text-transform: uppercase; color: var(--pl-faint);
   }
-  .st-active {
+  .pm-current {
     font-size: 13px; font-weight: 600; color: var(--pl-text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .st-caret {
+  .pm-caret {
     margin-left: auto; width: 0; height: 0;
     border-left: 5px solid transparent; border-right: 5px solid transparent;
     border-top: 6px solid var(--pl-dim); transition: transform 0.18s ease;
   }
-  .sidebar[open] .st-caret { transform: rotate(180deg); }
-  .side-toggle:hover .st-active { color: var(--pl-accent); }
-
-  /* profile row is desktop-only; the rest of the nav shows only when open */
-  .sidebar > .me { display: none; }
-  .sidebar > .g-label,
-  .sidebar > .pl,
-  .sidebar > .side-foot { display: none; }
-  .sidebar[open] > .g-label { display: block; padding-left: 16px; padding-right: 16px; }
-  .sidebar[open] > .pl { display: flex; margin: 0 8px; min-height: 44px; align-items: center; }
-  .sidebar[open] > .pl.album-row { min-height: 52px; }
-  .sidebar[open] > .side-foot {
-    display: grid; grid-template-columns: 1fr 1fr;
-    margin: 8px 8px 0; padding: 12px 8px 8px; gap: 10px;
+  .playlist-menu[open] .pm-caret { transform: rotate(180deg); }
+  .pm-list {
+    position: absolute; left: 18px; right: 18px; top: calc(100% + 6px);
+    z-index: 30;
+    background: var(--pl-panel); border: 1px solid var(--pl-line);
+    border-radius: 12px; padding: 6px;
+    box-shadow: 0 16px 40px rgb(0 0 0 / 0.5);
+    display: grid;
   }
+  .pm-list a {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    min-height: 44px; padding: 0 12px; border-radius: 8px;
+    font-size: 13px; color: var(--pl-dim);
+  }
+  .pm-list a span { font-family: var(--pl-mono); font-size: 11px; color: var(--pl-faint); }
+  .pm-list a.on { background: var(--pl-panel-hi); color: var(--pl-text); }
 
   /* tracklist: drop area + status columns, keep ≥44px rows */
   .list-head, .track { grid-template-columns: 34px 1fr 90px; }
@@ -326,26 +349,37 @@ body.paused .eq i { animation-play-state: paused; }
   /* tighter content paddings + smaller hero art at phone width */
   .head { padding: 20px 18px 18px; }
   .actions, .listwrap { padding-left: 18px; padding-right: 18px; }
-  .hero { gap: 16px; }
+  /* the action pills must wrap, not push the view wider than the screen */
+  .actions { flex-wrap: wrap; row-gap: 10px; }
+
+  /* hide scrollbars on the phone: the main view still scrolls, it just
+     doesn't draw a bar over the content */
+  .main { scrollbar-width: none; }
+  .main::-webkit-scrollbar { display: none; }
+
+  /* hero stacks on phones: art above the text block, long copy clamped, so
+     the tile never floats awkwardly beside a tall paragraph */
+  .hero { flex-direction: column; align-items: flex-start; gap: 14px; }
+  .hero p {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
   .art.lg { width: 120px; height: 120px; font-size: 30px; }
 
-  /* player bar: trim right links + subline, keep transport reachable, and
-     lift it above the iOS home indicator via the bottom safe-area inset */
-  .pb-right, .pb-now small { display: none; }
-  .player-body { grid-template-rows: 1fr calc(72px + env(safe-area-inset-bottom, 0px)); }
-  .playerbar { padding: 0 14px env(safe-area-inset-bottom, 0px); gap: 12px; }
-  .pb-center { width: auto; flex: 1; }
-  .ctl.play { min-width: 44px; min-height: 44px; }
-  .ctl.prev, .ctl.next {
-    width: 44px; height: 44px; border: 0;
-    display: grid; place-items: center;
+  /* player bar → floating mini player: art + title left, ONE play/pause
+     button right; seek + prev/next + right links are desktop-only */
+  .pb-right, .seek, .ctl.prev, .ctl.next { display: none; }
+  .playerbar {
+    grid-template-columns: 1fr auto; gap: 10px;
+    margin: 0 8px 6px; padding: 6px 10px;
+    border: 1px solid var(--pl-line); border-radius: 12px;
+    background: var(--pl-panel-hi);
   }
-  .ctl.prev::after, .ctl.next::after {
-    content: ''; width: 0; height: 0;
-    border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  .pb-center { width: auto; padding: 0; }
+  .ctl.play {
+    min-width: 38px; min-height: 38px;
+    width: 38px; height: 38px;
   }
-  .ctl.prev::after { border-right: 9px solid var(--pl-text); }
-  .ctl.next::after { border-left: 9px solid var(--pl-text); }
 }
 
 /* ============================================================
