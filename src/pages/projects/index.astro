@@ -1,0 +1,26 @@
+---
+/**
+ * Projects index — the all-work library at `/projects`, the "Projects" tab's
+ * destination on mobile. Same view as `/` today; they diverge when the home
+ * page becomes the artist-profile landing (player-UI prototype verdict,
+ * 2026-06-12).
+ */
+import PlayerLayout from '../../layouts/Player.astro';
+import LibraryView from '../../components/player/LibraryView.astro';
+import { CATALOG } from '../../data/catalog';
+import { libraryMeta } from '../../lib/seo';
+
+const now = CATALOG[0];
+const title = 'Dylan McCavitt — projects';
+const meta = {
+  ...libraryMeta(
+    'Projects',
+    `All work — ${CATALOG.length} projects: ${CATALOG.map((p) => p.title).join(', ')}.`,
+  ),
+  title,
+};
+---
+
+<PlayerLayout title={title} meta={meta} active="all" now={now}>
+  <LibraryView filter="all" now={now} />
+</PlayerLayout>

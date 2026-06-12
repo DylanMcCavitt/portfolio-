@@ -20,6 +20,7 @@
  * the island's hero hydration no-ops (`applyViewState` guards on
  * `[data-now-art]`) and stored now-playing never overwrites the page title.
  */
+import PlaylistMenu from './PlaylistMenu.astro';
 import {
   CATALOG,
   filterCatalog,
@@ -46,7 +47,6 @@ const CONTACT = {
 const SECTION_TITLE: Partial<Record<PlaylistId, string>> = {
   all: 'All work',
   wip: 'Now building',
-  money: 'Live with real money',
   School: 'School · Stevens',
   Research: 'Research & retired',
 };
@@ -69,6 +69,7 @@ const playHref = `/projects/${(isPlaylist ? (list[0] ?? now) : now).id}`;
 ---
 
 <div class="view">
+  <PlaylistMenu active={filter} />
   <div class="head">
     {
       isPlaylist ? (
@@ -116,7 +117,7 @@ const playHref = `/projects/${(isPlaylist ? (list[0] ?? now) : now).id}`;
       data-now-open={isPlaylist ? undefined : true}
     ></a>
     <a class="act-link" href={CONTACT.github} target="_blank" rel="noopener">GitHub ↗</a>
-    <a class="act-link" href={CONTACT.resume} target="_blank" rel="noopener">Resume ↗</a>
+    <a class="act-link" href={CONTACT.resume} target="_blank" rel="noopener">Resume.pdf ↗</a>
   </div>
 
   <div class="listwrap">

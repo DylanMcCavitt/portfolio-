@@ -10,7 +10,8 @@
  *
  * Canonical set (31 URLs):
  *   /                        — library, all work
- *   /library/<slug>          — 9 filtered playlists (wip, money, 7 areas)
+ *   /library/<slug>          — 8 filtered playlists (wip, 7 areas)
+ *   /projects                — projects index (the mobile "Projects" tab)
  *   /projects/<id>           — 13 project detail pages
  *   /journey                 — the resume album
  *   /journey/<track>         — 7 resume track pages
@@ -29,6 +30,7 @@ function canonicalPaths(): string[] {
   return [
     '/',
     ...Object.values(PLAYLIST_SLUGS).map((slug) => `/library/${slug}/`),
+    '/projects/',
     ...CATALOG.map((p) => `/projects/${p.id}/`),
     '/journey/',
     ...RESUME.tracks.map((t) => `/journey/${t.id}/`),
