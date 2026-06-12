@@ -634,10 +634,11 @@ export const CATALOG: Project[] = [
 ];
 
 /**
- * Playlist identifiers used by the sidebar: the three cross-cutting playlists
- * (`all`, `wip`, `money`) plus one per area.
+ * Playlist identifiers used by the sidebar: the two cross-cutting playlists
+ * (`all`, `wip`) plus one per area. `money` was retired as a playlist/tab
+ * (2026-06-12) — the `Project.money` flag stays as data, not a category.
  */
-export type PlaylistId = 'all' | 'wip' | 'money' | ProjectArea;
+export type PlaylistId = 'all' | 'wip' | ProjectArea;
 
 /** Ordered list of area playlists, mirroring the prototype sidebar order. */
 export const AREA_PLAYLISTS: ProjectArea[] = [
@@ -652,11 +653,11 @@ export const AREA_PLAYLISTS: ProjectArea[] = [
 
 /**
  * Filter the catalog by playlist. Mirrors the prototype's filter predicate:
- * `all` → everything, `wip`/`money` → the matching flag, area → `area === id`.
+ * `all` → everything, `wip` → the flag, area → `area === id`.
  */
 export function filterCatalog(id: PlaylistId): Project[] {
   return CATALOG.filter((p) =>
-    id === 'all' ? true : id === 'wip' ? p.wip : id === 'money' ? p.money : p.area === id,
+    id === 'all' ? true : id === 'wip' ? p.wip : p.area === id,
   );
 }
 
@@ -682,7 +683,6 @@ export function getProjectById(id: string): Project | null {
  */
 export const PLAYLIST_SLUGS: Record<Exclude<PlaylistId, 'all'>, string> = {
   wip: 'wip',
-  money: 'money',
   'Trading systems': 'trading-systems',
   'Agents & MCP': 'agents-mcp',
   iOS: 'ios',
