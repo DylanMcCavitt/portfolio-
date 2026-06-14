@@ -1,26 +1,154 @@
 ---
 /**
- * Home — the library "now playing" view with the `all` filter. Hero defaults
- * to the first catalog project; the numbered tracklist links each row to its
- * project detail page (#22). Built on the player shell (#20).
+ * Home — the concierge router (#60). A standalone, centered "What brings you
+ * here?" page that sends each kind of visitor to the right place: hiring
+ * managers to the guided tour, browsers to the full library, engineers to
+ * GitHub. It is NOT the player shell — that all-work library now lives at
+ * `/library`. Built on the lightweight `Concierge` layout; zero client JS.
  *
- * Ported from the prototype `15-player-v4.html` (`renderLibrary()`).
+ * Ported from the landing prototype `17-landing-v2.html` (variant E, `#vE`),
+ * with the metaphor copy and prototype scaffolding dropped.
  */
-import PlayerLayout from '../layouts/Player.astro';
-import LibraryView from '../components/player/LibraryView.astro';
-import { CATALOG } from '../data/catalog';
+import Concierge from '../layouts/Concierge.astro';
 import { libraryMeta, personJsonLd } from '../lib/seo';
 
-const now = CATALOG[0];
 const meta = {
   ...libraryMeta(
     'Dylan McCavitt',
-    'Software engineer building agentic systems, trading infrastructure, and iOS apps in NYC — a player-style portfolio of the work.',
+    'Software engineer building agentic systems, trading infrastructure, and iOS apps in NYC.',
   ),
   jsonLd: personJsonLd(),
 };
 ---
 
-<PlayerLayout title="Dylan McCavitt — now playing" meta={meta} active="all" now={now}>
-  <LibraryView filter="all" now={now} />
-</PlayerLayout>
+<Concierge title="Dylan McCavitt — Software engineer" meta={meta}>
+  <main class="concierge">
+    <div class="cc-card">
+      <div class="cc-avatar" aria-hidden="true">DM</div>
+      <h1>Dylan McCavitt</h1>
+      <p class="cc-lede">Software engineer · Backend · AI.</p>
+      <div class="upper cc-q">What brings you here?</div>
+      <div class="cc-routes">
+        <a class="cc-route" href="/hiring">
+          <span class="cc-ico" aria-hidden="true">★</span>
+          <b>I'm hiring</b>
+          <span>A 2-minute tour: best work, then the resume.</span>
+          <span class="cc-go">Start the tour →</span>
+        </a>
+        <a class="cc-route" href="/library">
+          <span class="cc-ico" aria-hidden="true">≣</span>
+          <b>Just exploring</b>
+          <span>Browse the full library of work.</span>
+          <span class="cc-go">Open the library →</span>
+        </a>
+        <a
+          class="cc-route"
+          href="https://github.com/DylanMcCavitt"
+          target="_blank"
+          rel="noopener"
+        >
+          <span class="cc-ico" aria-hidden="true">⌘</span>
+          <b>Show me the code</b>
+          <span>Straight to GitHub and the live builds.</span>
+          <span class="cc-go">Go to GitHub ↗</span>
+        </a>
+      </div>
+    </div>
+  </main>
+</Concierge>
+
+<style>
+  .concierge {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 40px 18px;
+  }
+  .cc-card {
+    width: 100%;
+    max-width: 760px;
+    text-align: center;
+  }
+  .cc-avatar {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--pl-accent);
+    font-family: var(--pl-mono);
+    font-size: 22px;
+    color: #fff;
+  }
+  .cc-card h1 {
+    font-size: 34px;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .cc-lede {
+    color: var(--pl-dim);
+    max-width: 48ch;
+    margin: 0 auto 8px;
+  }
+  .upper {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 11px;
+    color: var(--pl-faint);
+    font-family: var(--pl-mono);
+  }
+  .cc-q {
+    margin: 26px 0 16px;
+  }
+  .cc-routes {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    text-align: left;
+  }
+  .cc-route {
+    background: var(--pl-tile);
+    border: 1px solid var(--pl-tile-line);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 150px;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .cc-route:hover {
+    border-color: var(--pl-focus);
+    transform: translateY(-2px);
+  }
+  .cc-ico {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: var(--pl-panel-hi);
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+    color: var(--pl-accent);
+  }
+  .cc-route b {
+    font-size: 16px;
+  }
+  .cc-route span {
+    font-size: 13px;
+    color: var(--pl-dim);
+  }
+  .cc-go {
+    margin-top: auto;
+    color: var(--pl-focus);
+    font-size: 13px;
+    font-family: var(--pl-mono);
+  }
+  /* Stack the cards below the site-standard 820px breakpoint. */
+  @media (max-width: 820px) {
+    .cc-routes {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

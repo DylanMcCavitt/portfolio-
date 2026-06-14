@@ -1,7 +1,7 @@
 /**
- * Resume album — "The Journey". Ported verbatim from the player redesign
+ * Resume — the career timeline. Ported verbatim from the player redesign
  * prototype (`15-player-v4.html`, the `RESUME` object). This is the single
- * source of truth for the resume album views (a separate issue).
+ * source of truth for the resume views (a separate issue).
  *
  * Field names mirror the prototype so porting the renderers stays mechanical.
  * Copy (about, notes, credits, hues, lengths) is carried over as-is.
@@ -45,7 +45,7 @@ export type ProjectId = (typeof PROJECT_IDS)[number];
 /** `[label, value]` credit tuple, e.g. `['Degree', 'b.s. economics']`. */
 export type ResumeCredit = [label: string, value: string];
 
-/** A single chronological career track on the resume album. */
+/** A single chronological career track on the resume timeline. */
 export interface ResumeTrack {
   id: string;
   /** Two-letter symbol shown on the album tile. */
@@ -70,7 +70,7 @@ export interface ResumeTrack {
   era: ProjectId[];
 }
 
-/** The resume album: metadata plus the chronological tracks. */
+/** The resume: metadata plus the chronological career tracks. */
 export interface ResumeAlbum {
   title: string;
   /** One-line tagline. */

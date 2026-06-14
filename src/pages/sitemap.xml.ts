@@ -8,12 +8,14 @@
  * Sera-era URLs are handled by `vercel.json` 301s and never appear here.
  *
  * Canonical set (31 URLs):
- *   /                        — library, all work
+ *   /                        — the concierge landing (#60)
+ *   /library                 — all-work library (relocated from `/` in #60)
  *   /library/<slug>          — 8 filtered playlists (wip, 7 areas)
- *   /projects                — projects index (the mobile "Projects" tab)
  *   /projects/<id>           — 13 project detail pages
- *   /journey                 — the resume album
+ *   /journey                 — the resume timeline
  *   /journey/<track>         — 7 resume track pages
+ *
+ * `/projects` (the index) is intentionally absent — it now 301s to `/library`.
  */
 import type { APIRoute } from 'astro';
 import { CATALOG, PLAYLIST_SLUGS } from '../data/catalog';
@@ -28,8 +30,8 @@ import { RESUME } from '../data/resume';
 function canonicalPaths(): string[] {
   return [
     '/',
+    '/library/',
     ...Object.values(PLAYLIST_SLUGS).map((slug) => `/library/${slug}/`),
-    '/projects/',
     ...CATALOG.map((p) => `/projects/${p.id}/`),
     '/journey/',
     ...RESUME.tracks.map((t) => `/journey/${t.id}/`),

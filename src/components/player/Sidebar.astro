@@ -1,14 +1,15 @@
 ---
 /**
  * Player shell sidebar — profile, Library filters with live counts, the
- * "The Journey" album row, area playlists with counts, and footer links.
+ * Resume row, area playlists with counts, and footer links.
  *
  * Ported from the prototype `15-player-v4.html` (sidebar markup lines
  * 267-299). Counts read from the catalog data module (#18); active state is
  * derived from the current URL, not a click handler — zero client JS.
  *
- * URL scheme (coordinate with the view issues): `/` is the All-work library,
- * `/library/[filter]` for every other filter, `/journey` for the album.
+ * URL scheme (coordinate with the view issues): `/library` is the All-work
+ * library; `/` is the concierge landing (#60); `/library/[filter]` for every
+ * other filter; `/journey` for the resume.
  *
  * Responsive (#27): the root is a native `<details>` so the same markup serves
  * desktop and mobile with zero JS. ≥820px CSS forces it open and hides the
@@ -38,12 +39,12 @@ const CONTACT = {
 };
 
 /**
- * Route for a playlist filter. `all` → `/`, everything else → its canonical
- * lowercase-kebab `/library/<slug>` (#25 — slugs come from `PLAYLIST_SLUGS`,
- * shared with the `[filter]` route and the sitemap).
+ * Route for a playlist filter. `all` → `/library`, everything else → its
+ * canonical lowercase-kebab `/library/<slug>` (#25 — slugs come from
+ * `PLAYLIST_SLUGS`, shared with the `[filter]` route and the sitemap).
  */
 const filterHref = (id: PlaylistId) =>
-  id === 'all' ? '/' : `/library/${playlistSlug(id)}`;
+  id === 'all' ? '/library' : `/library/${playlistSlug(id)}`;
 
 const LIBRARY: { id: PlaylistId; label: string }[] = [
   { id: 'all', label: 'All work' },

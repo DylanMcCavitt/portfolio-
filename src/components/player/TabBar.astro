@@ -5,6 +5,9 @@
  * only below 820px (where the sidebar is hidden), so desktop is untouched.
  * Active tab derives from the current URL — zero client JS.
  *
+ * Home → `/` (the concierge); Projects → `/library` (the all-work library,
+ * relocated from `/` in #60).
+ *
  * Graduated from the player-UI prototype (mobile variant B, picked
  * 2026-06-12); styles live in `player.css` under the 820px media block.
  */
@@ -18,12 +21,12 @@ const active: TabId =
       ? 'building'
       : path.startsWith('/journey')
         ? 'resume'
-        : 'projects'; // /projects/*, other /library/* playlists
+        : 'projects'; // /library (all work), /projects/* details, other /library/* playlists
 
 const TABS: { id: TabId; label: string; href: string; glyph: string }[] = [
   { id: 'home', label: 'Home', href: '/', glyph: '⌂' },
   { id: 'building', label: 'Building', href: '/library/wip', glyph: '◐' },
-  { id: 'projects', label: 'Projects', href: '/projects', glyph: '▦' },
+  { id: 'projects', label: 'Projects', href: '/library', glyph: '▦' },
   { id: 'resume', label: 'Resume', href: '/journey', glyph: '♪' },
 ];
 ---
