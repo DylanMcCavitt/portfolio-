@@ -254,12 +254,6 @@ export function trackSeekPct(index: number, total: number = RESUME.tracks.length
   return Math.round(((clamped + 1) / total) * 100);
 }
 
-/** Seek position for a track by id; returns 0 if the id is unknown. */
-export function trackSeekPctById(id: string): number {
-  const index = RESUME.tracks.findIndex((t) => t.id === id);
-  return index < 0 ? 0 : trackSeekPct(index);
-}
-
 /** Look up a resume track by id. */
 export function getResumeTrackById(id: string): ResumeTrack | null {
   return RESUME.tracks.find((t) => t.id === id) ?? null;

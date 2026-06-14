@@ -14,7 +14,7 @@ import type { ResumeTrack } from '../data/resume';
 import { RESUME } from '../data/resume';
 
 /** Site owner — reused in titles and JSON-LD. */
-export const OWNER = 'Dylan McCavitt';
+const OWNER = 'Dylan McCavitt';
 
 /** Canonical origin (mirrors `site` in astro.config.mjs). */
 const ORIGIN = 'https://dylanmccavitt.xyz';
@@ -34,7 +34,7 @@ export interface PageMeta {
 }
 
 /** Trim to ≤160 chars on a word boundary, with an ellipsis when cut. */
-export function clampDescription(text: string, max = 160): string {
+function clampDescription(text: string, max = 160): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= max) return clean;
   const slice = clean.slice(0, max - 1);
@@ -43,7 +43,7 @@ export function clampDescription(text: string, max = 160): string {
 }
 
 /** `<thing> — Dylan McCavitt` title pattern. */
-export function titleFor(name: string): string {
+function titleFor(name: string): string {
   return `${name} — ${OWNER}`;
 }
 

@@ -6,10 +6,10 @@
  * chronological tracklist where each row is a link to the track detail page
  * (`/journey/[track]`), not a button (#23 constraint).
  *
- * Reuses the shared `.art`/`.badge`/`.track`/`.listwrap` primitives from
- * `player.css`; only this view's hero/actions shape is scoped below (mirrors
- * the pattern #22 used for the project detail page). Sidebar active state is
- * driven by `active="resume"` on the layout — URL-derived, no click handler.
+ * Reuses the shared `.art`/`.badge`/`.track`/`.listwrap`/`.actions` primitives
+ * from `player.css` — nothing is scoped here, so the shared mobile gutter
+ * overrides apply. Sidebar active state is driven by `active="resume"` on the
+ * layout — URL-derived, no click handler.
  */
 import PlayerLayout from '../layouts/Player.astro';
 import { RESUME } from '../data/resume';
@@ -64,78 +64,33 @@ const meta = journeyMeta();
         <span class="stat-col"></span>
         <span style="text-align:right">Length</span>
       </div>
-      {
-        tracks.map((t, i) => (
-          <a class="track" href={`/journey/${t.id}`}>
-            <span class="n">
-              <span class="num">{i + 1}</span>
-              <span class="hoverplay" aria-hidden="true" />
-            </span>
-            <span class="t">
-              <b>{t.title}</b>
-              <small>{t.role}</small>
-            </span>
-            <span class="album">{t.when}</span>
-            <span class="stat-col">
-              {t.current && <span class="badge live">Current</span>}
-            </span>
-            <span class="len">{t.len}</span>
-          </a>
-        ))
-      }
+      <ol class="tracklist">
+        {
+          tracks.map((t, i) => (
+            <li>
+              <a class="track" href={`/journey/${t.id}`}>
+                <span class="n">
+                  <span class="num">{i + 1}</span>
+                  <span class="hoverplay" aria-hidden="true" />
+                </span>
+                <span class="t">
+                  <b>{t.title}</b>
+                  <small>{t.role}</small>
+                </span>
+                <span class="album">{t.when}</span>
+                <span class="stat-col">
+                  {t.current && <span class="badge live">Current</span>}
+                </span>
+                <span class="len">{t.len}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ol>
     </div>
   </div>
 </PlayerLayout>
 
-<style>
-  /* ---- hero (`.art`/`.badge`/`.hero` primitives come from player.css) ---- */
-  .hero {
-    display: flex;
-    gap: 24px;
-    align-items: flex-end;
-  }
-
-  /* ---- action row (mirrors the project detail view, #22) ---- */
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    padding: 18px 30px 6px;
-  }
-  .bigplay {
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    background: var(--pl-green);
-    display: grid;
-    place-items: center;
-    transition: transform 0.12s, filter 0.12s;
-    flex-shrink: 0;
-  }
-  .bigplay:hover {
-    transform: scale(1.05);
-    filter: brightness(1.08);
-  }
-  .bigplay::after {
-    content: '';
-    width: 0;
-    height: 0;
-    border-top: 8px solid transparent;
-    border-bottom: 8px solid transparent;
-    border-left: 13px solid #0e1410;
-    margin-left: 4px;
-  }
-  .act-link {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--pl-dim);
-    border: 1px solid var(--pl-line);
-    padding: 8px 16px;
-    border-radius: 99px;
-    white-space: nowrap;
-  }
-  .act-link:hover {
-    color: var(--pl-text);
-    border-color: var(--pl-faint);
-  }
-</style>
+<!-- All styling comes from the player.css primitives (`.art`, `.badge`,
+     `.hero`, `.actions`, `.bigplay`, `.act-link`, `.listwrap`, ...) — no
+     scoped copy, so the mobile gutter overrides there apply here too. -->
