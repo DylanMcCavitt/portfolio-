@@ -1,9 +1,12 @@
 ---
 /**
- * Projects index — the all-work library at `/projects`, the "Projects" tab's
- * destination on mobile. Same view as `/` today; they diverge when the home
- * page becomes the artist-profile landing (player-UI prototype verdict,
- * 2026-06-12).
+ * All-work library, relocated from `/` in #60. The home route became the
+ * concierge ("What brings you here?"), so the full player-style "now playing"
+ * library now lives here at `/library`. Old `/`, `/projects`, and `/player`
+ * links resolve here via the vercel.json 301s.
+ *
+ * This does NOT collide with `/library/[filter]`: `PLAYLIST_SLUGS` excludes
+ * `all`, so no filter route ever emits `/library`.
  */
 import PlayerLayout from '../../layouts/Player.astro';
 import LibraryView from '../../components/player/LibraryView.astro';
@@ -11,10 +14,10 @@ import { CATALOG } from '../../data/catalog';
 import { libraryMeta } from '../../lib/seo';
 
 const now = CATALOG[0];
-const title = 'Dylan McCavitt — projects';
+const title = 'Dylan McCavitt — All work';
 const meta = {
   ...libraryMeta(
-    'Projects',
+    'All work',
     `All work — ${CATALOG.length} projects: ${CATALOG.map((p) => p.title).join(', ')}.`,
   ),
   title,
