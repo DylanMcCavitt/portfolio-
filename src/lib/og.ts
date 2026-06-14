@@ -13,8 +13,8 @@ import { createRequire } from 'node:module';
 import type { StatusKind } from '../data/catalog';
 
 /** Canonical OG image dimensions (constraint: 1200×630). */
-export const OG_WIDTH = 1200;
-export const OG_HEIGHT = 630;
+const OG_WIDTH = 1200;
+const OG_HEIGHT = 630;
 
 /** Player palette tokens, mirrored from `styles/player.css` `:root`. */
 const BG = '#121317';
@@ -22,7 +22,7 @@ const PANEL = '#1c1e24';
 const LINE = '#2a2c35';
 const TEXT = '#e6e8ed';
 const DIM = '#969aa6';
-const FAINT = '#626673';
+const FAINT = '#8a8fa0';
 
 /** Badge fill/text per status kind, mirrored from `.badge.*` in player.css. */
 const BADGE: Record<StatusKind, { bg: string; fg: string }> = {

@@ -20,10 +20,9 @@
  * navigation still works. Ported from `15-player-v4.html` (`state`, `renderBar`,
  * `togglePlay`, `step`, and the keydown handler).
  *
- * Wrapped in an IIFE so its declarations stay module-scoped: Astro bundles each
- * `src=` script as a classic script, and `astro check` type-checks them in one
- * shared global scope, so a bare top-level `const` would collide with the other
- * page scripts (e.g. theme-switcher's `STORAGE_KEY`).
+ * Wrapped in an IIFE to keep declarations out of the page's global scope
+ * alongside the site's `is:inline` scripts (e.g. the Sidebar disclosure
+ * enhancer) and to keep `astro check`'s shared-scope type-checking clean.
  */
 
 (() => {

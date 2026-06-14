@@ -2,11 +2,10 @@
  * Sitemap (#25) — emitted as a static `/sitemap.xml` at build time.
  *
  * Built directly from the catalog + resume data and the canonical filter-slug
- * map rather than from every page Astro happens to build, so it lists *exactly*
- * the canonical redesign route set and nothing else: the legacy Sera pages
- * (`/about`, `/experience`, `/projects`, `/log/*`), the redirect stubs, and the
- * `/player` shell demo are deliberately excluded. Keeping the list
- * data-derived means a new project, track, or playlist shows up automatically.
+ * map (project + track + playlist slugs) rather than from every page Astro
+ * happens to build, so it stays *exactly* the canonical redesign route set and
+ * updates automatically when a project, track, or playlist is added. Retired
+ * Sera-era URLs are handled by `vercel.json` 301s and never appear here.
  *
  * Canonical set (31 URLs):
  *   /                        — library, all work

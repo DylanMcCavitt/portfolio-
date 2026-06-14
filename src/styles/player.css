@@ -31,6 +31,7 @@
   --pl-focus: #b3a8ff;
   --pl-green: #50c878;
   --pl-amber: #e6b450;
+  --pl-ink: #0e1410; /* dark ink on --pl-green surfaces (play glyphs, 404 button) */
   --pl-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --pl-sans: 'Inter', -apple-system, sans-serif;
 }
@@ -40,7 +41,11 @@
   margin: 0; background: var(--pl-bg); color: var(--pl-text);
   font-family: var(--pl-sans); font-size: 13.5px; line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  height: 100vh; display: grid; grid-template-rows: 1fr 84px; overflow: hidden;
+  /* dvh tracks the *visible* viewport on mobile (100vh includes the collapsed
+     URL-bar area, which pushed the player bar below the fold); vh is the
+     fallback for older browsers. */
+  height: 100vh; height: 100dvh;
+  display: grid; grid-template-rows: 1fr 84px; overflow: hidden;
 }
 .player-body *, .player-body *::before, .player-body *::after { margin: 0; padding: 0; box-sizing: border-box; }
 .player-body a { color: inherit; text-decoration: none; }
@@ -58,7 +63,6 @@
 .player-body [tabindex]:focus-visible {
   outline: 2px solid var(--pl-focus);
   outline-offset: 2px;
-  border-radius: 6px;
 }
 .player-body :focus:not(:focus-visible) { outline: none; }
 /* The main region is only a skip-link target (tabindex=-1); don't ring it. */
@@ -169,15 +173,47 @@
 .hero .meta b { color: var(--pl-text); font-weight: 500; }
 
 .actions { display: flex; align-items: center; gap: 18px; padding: 18px 30px 6px; }
-.bigplay {
+/* `.player-body` prefix: the bigplay renders as <a>, <button>, or <span>
+   depending on the view — the shell's button reset (`.player-body button
+   { background: none }`) would otherwise out-specify a bare class and strip
+   the green fill. Same trick on .act-link/.back below for their dim color. */
+.player-body .bigplay {
   width: 52px; height: 52px; border-radius: 50%; background: var(--pl-green);
   display: grid; place-items: center; transition: transform 0.12s, filter 0.12s;
   flex-shrink: 0;
 }
 .bigplay:hover { transform: scale(1.05); filter: brightness(1.08); }
-.bigplay::after { content: ''; width: 0; height: 0; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 13px solid #0e1410; margin-left: 4px; }
-.act-link { font-size: 13px; font-weight: 500; color: var(--pl-dim); border: 1px solid var(--pl-line); padding: 8px 16px; border-radius: 99px; white-space: nowrap; }
-.act-link:hover { color: var(--pl-text); border-color: var(--pl-faint); }
+.bigplay::after { content: ''; width: 0; height: 0; border-top: 8px solid transparent; border-bottom: 8px solid transparent; border-left: 13px solid var(--pl-ink); margin-left: 4px; }
+/* playing (#24 toggles `.paused` on the hero bigplay when its project is now
+   playing) — swap the triangle for the two pause bars, matching the prototype. */
+.bigplay.paused::after { border: none; width: 12px; height: 15px; margin: 0; border-left: 4px solid var(--pl-ink); border-right: 4px solid var(--pl-ink); }
+.player-body .act-link { font-size: 13px; font-weight: 500; color: var(--pl-dim); border: 1px solid var(--pl-line); padding: 8px 16px; border-radius: 99px; white-space: nowrap; }
+.player-body .act-link:hover { color: var(--pl-text); border-color: var(--pl-faint); }
+
+/* ============ detail views (project + journey track) ============ */
+/* Shared between /projects/[id] and /journey/[track] — back link, metric stat
+   tiles, about/notes/credits body, and the related-albums rail. Living here
+   (not page-scoped) keeps one gutter system: the mobile block below can win. */
+.player-body .back { display: inline-flex; align-items: center; gap: 8px; color: var(--pl-dim); font-size: 13px; margin-bottom: 18px; }
+.player-body .back:hover { color: var(--pl-text); }
+.back::before { content: '←'; font-size: 15px; }
+
+.stats { display: flex; gap: 10px; padding: 18px 30px 0; flex-wrap: wrap; }
+.stat { background: var(--pl-tile); border: 1px solid var(--pl-tile-line); border-radius: 10px; padding: 12px 18px; min-width: 130px; }
+.stat b { font-family: var(--pl-mono); font-size: 17px; font-weight: 500; display: block; }
+.stat span { font-size: 11px; color: var(--pl-faint); }
+
+.pbody { padding: 8px 30px 36px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 36px; }
+.pbody h3 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; }
+.pbody p { color: var(--pl-dim); font-size: 13.5px; }
+.pbody p + p { margin-top: 9px; }
+.notes { list-style: disc; }
+.notes li { color: var(--pl-dim); font-size: 13px; margin: 7px 0 0 16px; }
+.notes li::marker { color: var(--pl-green); }
+
+.more { padding: 0 30px 40px; }
+.more h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.albums { display: flex; gap: 14px; overflow-x: auto; }
 
 /* ---- tracklist ---- */
 .listwrap { padding: 10px 30px 30px; }
@@ -194,13 +230,19 @@
   padding: 10px 14px; border-radius: 9px;
   transition: background 0.12s;
 }
-.track:hover { background: var(--pl-panel); }
+/* tap feedback on touch (where :hover never fires) so rows read as tappable */
+.track:active { background: var(--pl-panel); }
 .track .n { font-family: var(--pl-mono); font-size: 12px; color: var(--pl-faint); position: relative; }
 /* default (not playing): show number, hide equalizer; reveal play glyph on hover */
 .track .n .eq { display: none; }
-.track:hover .n .num { visibility: hidden; }
 .track .n .hoverplay { display: none; position: absolute; inset: 0; align-items: center; }
-.track:hover .n .hoverplay { display: flex; }
+/* hover affordances guard on a real pointer — sticky hover on touch would
+   otherwise leave the number hidden + play glyph stuck after a tap */
+@media (hover: hover) {
+  .track:hover { background: var(--pl-panel); }
+  .track:hover .n .num { visibility: hidden; }
+  .track:hover .n .hoverplay { display: flex; }
+}
 .hoverplay::after { content: ''; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid var(--pl-text); }
 /* playing: show equalizer, hide number + hover glyph (toggled by #24 via the class) */
 .track.playing .n .eq { display: inline-flex; }
@@ -210,16 +252,14 @@
 .track .t small { color: var(--pl-faint); font-size: 12px; }
 .track .album { color: var(--pl-dim); font-size: 12.5px; }
 .track .len { font-family: var(--pl-mono); font-size: 11.5px; color: var(--pl-faint); text-align: right; }
-@media (max-width: 820px) {
-  .list-head, .track { grid-template-columns: 34px 1fr 90px; }
-  .track .album, .track .stat-col, .list-head .album, .list-head .stat-col { display: none !important; }
-}
 
 /* ============ player bar ============ */
 .playerbar {
   background: var(--pl-side); border-top: 1px solid var(--pl-line);
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
   padding: 0 20px; gap: 20px;
+  /* any overflow clips inside the bar instead of bleeding past the viewport */
+  overflow: hidden;
 }
 .pb-now { display: flex; align-items: center; gap: 12px; min-width: 0; cursor: pointer; text-align: left; }
 .pb-art {
@@ -229,21 +269,35 @@
   position: relative; overflow: hidden;
 }
 .pb-art::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--a, var(--pl-accent)); }
+/* the title/subline wrapper is a flex item — default `min-width: auto` would
+   let nowrap text escape the column and run under the transport buttons */
+.pb-now > span:not(.pb-art) { min-width: 0; overflow: hidden; }
 .pb-now b { font-size: 13px; font-weight: 600; display: block; white-space: nowrap; }
-.pb-now small { color: var(--pl-faint); font-size: 11.5px; white-space: nowrap; }
+.pb-now small { color: var(--pl-faint); font-size: 11.5px; white-space: nowrap; display: block; }
+.pb-now b, .pb-now small { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .pb-center { display: flex; flex-direction: column; align-items: center; gap: 7px; width: min(440px, 40vw); padding: 12px 0; }
-.controls { display: flex; gap: 22px; align-items: center; }
-.ctl { width: 0; height: 0; opacity: 0.75; }
+/* 10px gap + the triangles' centering padding ≈ the prototype's 22px rhythm */
+.controls { display: flex; gap: 10px; align-items: center; }
+.ctl { opacity: 0.75; }
 .ctl:hover { opacity: 1; }
-/* prev/next are zero-box CSS triangles — an outline has nothing to hug, so the
-   focus ring is a box-shadow on a transparent padded hit area instead. */
+/* prev/next draw their triangle in ::after, centered in a real padded hit
+   area (~32px desktop, 44px mobile) — the box also gives the focus ring a
+   shape to hug, via box-shadow so it reads on the dark bar. */
 .ctl.prev:focus-visible, .ctl.next:focus-visible {
   outline: none; opacity: 1;
   box-shadow: 0 0 0 2px var(--pl-side), 0 0 0 4px var(--pl-focus);
 }
 .ctl.play:focus-visible { outline: 2px solid var(--pl-focus); outline-offset: 3px; }
-.ctl.prev { border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 9px solid var(--pl-text); }
-.ctl.next { border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid var(--pl-text); }
+.ctl.prev, .ctl.next {
+  width: 32px; height: 32px; border: 0;
+  display: grid; place-items: center;
+}
+.ctl.prev::after, .ctl.next::after {
+  content: ''; width: 0; height: 0;
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+}
+.ctl.prev::after { border-right: 9px solid var(--pl-text); }
+.ctl.next::after { border-left: 9px solid var(--pl-text); }
 .ctl.play { width: 34px; height: 34px; border-radius: 50%; background: var(--pl-text); display: grid; place-items: center; opacity: 1; }
 .ctl.play:hover { transform: scale(1.06); }
 /* paused (or no-JS default): show the play triangle */
@@ -254,7 +308,7 @@ body:not(.paused) .ctl.play::after { border: none; width: 10px; height: 12px; bo
 body.paused .eq i { animation-play-state: paused; }
 .seek { display: flex; align-items: center; gap: 10px; width: 100%; }
 .seek .time { font-family: var(--pl-mono); font-size: 10.5px; color: var(--pl-faint); white-space: nowrap; }
-.seek .rail { flex: 1; height: 4px; background: #2c2e38; border-radius: 99px; position: relative; }
+.seek .rail { flex: 1; height: 4px; background: var(--pl-line); border-radius: 99px; position: relative; }
 .seek .rail i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--pl-green); border-radius: 99px; }
 .seek .rail u { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 11px; height: 11px; border-radius: 50%; background: var(--pl-text); }
 .pb-right { display: flex; justify-content: flex-end; gap: 16px; font-size: 12.5px; color: var(--pl-faint); }
@@ -305,11 +359,14 @@ body.paused .eq i { animation-play-state: paused; }
   .sidebar[open] .st-caret { transform: rotate(180deg); }
   .side-toggle:hover .st-active { color: var(--pl-accent); }
 
-  /* profile row is desktop-only; the rest of the nav shows only when open */
+  /* profile row collapses with the rest of the nav; the open sheet re-reveals
+     it (16px gutters match .g-label/.side-toggle) so a phone visitor can see
+     whose portfolio this is and tap back to home */
   .sidebar > .me { display: none; }
   .sidebar > .g-label,
   .sidebar > .pl,
   .sidebar > .side-foot { display: none; }
+  .sidebar[open] > .me { display: flex; padding: 10px 16px 14px; }
   .sidebar[open] > .g-label { display: block; padding-left: 16px; padding-right: 16px; }
   .sidebar[open] > .pl { display: flex; margin: 0 8px; min-height: 44px; align-items: center; }
   .sidebar[open] > .pl.album-row { min-height: 52px; }
@@ -317,35 +374,47 @@ body.paused .eq i { animation-play-state: paused; }
     display: grid; grid-template-columns: 1fr 1fr;
     margin: 8px 8px 0; padding: 12px 8px 8px; gap: 10px;
   }
+  /* contact links fill their grid cell so each is a ≥44px tap target instead
+     of an ~18px bare text link that's easy to mis-tap */
+  .sidebar[open] > .side-foot a { min-height: 44px; display: flex; align-items: center; }
 
   /* tracklist: drop area + status columns, keep ≥44px rows */
   .list-head, .track { grid-template-columns: 34px 1fr 90px; }
   .track .album, .track .stat-col, .list-head .album, .list-head .stat-col { display: none !important; }
   .track { min-height: 44px; }
+  /* touch has no hover play glyph, so add a trailing chevron as the "this row
+     navigates" cue (the only affordance otherwise was the hover-only glyph) */
+  .track .len::after { content: '\203A'; margin-left: 8px; color: var(--pl-faint); }
 
-  /* tighter content paddings + smaller hero art at phone width */
+  /* tighter content paddings + smaller hero art at phone width — every
+     content band shares the .head 18px gutter so left edges line up */
   .head { padding: 20px 18px 18px; }
-  .actions, .listwrap { padding-left: 18px; padding-right: 18px; }
-  .hero { gap: 16px; }
+  .actions, .listwrap, .stats, .pbody, .more { padding-left: 18px; padding-right: 18px; }
+  /* detail pages: about/credits stack, stat tiles become equal-width rows
+     instead of a ragged column of shrink-wrapped chips */
+  .pbody { grid-template-columns: 1fr; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  /* stack the hero (art above text, Spotify-mobile style) — the desktop
+     side-by-side flex-end row leaves the art floating under a tall ragged
+     text column at phone widths */
+  .hero { flex-direction: column; align-items: flex-start; gap: 14px; }
   .art.lg { width: 120px; height: 120px; font-size: 30px; }
+  /* GitHub/Resume pills reach the 44px minimum tap target (the desktop 8px
+     padding yields only ~35px); min-height guards it even if font/padding
+     shift. `.player-body` prefix matches the global `.player-body .act-link`
+     specificity so this padding override actually wins. */
+  .player-body .act-link { min-height: 44px; display: inline-flex; align-items: center; padding: 0 18px; }
 
   /* player bar: trim right links + subline, keep transport reachable, and
-     lift it above the iOS home indicator via the bottom safe-area inset */
+     lift it above the iOS home indicator via the bottom safe-area inset.
+     The bar row is `auto` so it always fits its content (a fixed 72px row
+     clipped the seek rail below the fold once the play button grew to 44px). */
   .pb-right, .pb-now small { display: none; }
-  .player-body { grid-template-rows: 1fr calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .player-body { grid-template-rows: 1fr auto; }
   .playerbar { padding: 0 14px env(safe-area-inset-bottom, 0px); gap: 12px; }
-  .pb-center { width: auto; flex: 1; }
+  .pb-center { width: auto; flex: 1; padding: 8px 0; }
   .ctl.play { min-width: 44px; min-height: 44px; }
-  .ctl.prev, .ctl.next {
-    width: 44px; height: 44px; border: 0;
-    display: grid; place-items: center;
-  }
-  .ctl.prev::after, .ctl.next::after {
-    content: ''; width: 0; height: 0;
-    border-top: 6px solid transparent; border-bottom: 6px solid transparent;
-  }
-  .ctl.prev::after { border-right: 9px solid var(--pl-text); }
-  .ctl.next::after { border-left: 9px solid var(--pl-text); }
+  .ctl.prev, .ctl.next { width: 44px; height: 44px; }
 }
 
 /* ============================================================
