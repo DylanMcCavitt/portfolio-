@@ -9,7 +9,7 @@ export const GET: APIRoute = async () => {
     title: 'Dylan McCavitt',
     hue: '#8b7cf6',
     kind: 'Software engineer',
-    tagline: 'Agentic systems, trading infrastructure, and iOS apps in NYC.',
+    tagline: 'Practical tools, client software, and AI-assisted workflows.',
   });
   return new Response(new Uint8Array(png), {
     headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' },

@@ -373,11 +373,14 @@ const SEARCH_STOP_WORDS = new Set([
   'and',
   'are',
   'can',
+  'describe',
+  'dylan',
   'for',
   'has',
   'have',
   'her',
   'him',
+  'himself',
   'his',
   'how',
   'is',
@@ -385,6 +388,7 @@ const SEARCH_STOP_WORDS = new Set([
   'of',
   'or',
   'show',
+  'should',
   'tell',
   'the',
   'to',
@@ -429,9 +433,10 @@ function impactScore(project: Project, intent: string): number {
   if (normalized.includes('ios') && project.area === 'iOS') score += 6;
   if (normalized.includes('ship') && project.area === 'Shipped') score += 4;
   if (normalized.includes('impressive') || normalized.includes('best') || normalized.includes('strong')) {
-    if (project.id === 'exit-manager') score += 10;
-    if (project.id === 'agentic-trader') score += 7;
-    if (project.id === 'bellas-beads') score += 5;
+    if (project.id === 'bellas-beads') score += 12;
+    if (project.id === 'evalgate') score += 8;
+    if (project.id === 'homeserver') score += 6;
+    if (project.id === 'exit-manager') score += 4;
   }
 
   return score;
