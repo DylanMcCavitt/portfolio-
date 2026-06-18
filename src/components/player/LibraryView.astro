@@ -1,47 +1,32 @@
 ---
 /**
- * Library view — a "now playing" hero above a numbered tracklist of projects,
- * filtered by the active sidebar playlist. Used by `/` (the `all` filter) and
- * `/library/[filter]` for every other playlist.
+ * Library view — the project index. A flat, editorial grid of canonical
+ * Typographic project cards (#85), filtered by the active sidebar playlist.
+ * Used by `/library` (the `all` filter) and `/library/[filter]` for every other
+ * playlist. Static, zero client JS.
  *
- * Ported from the prototype `15-player-v4.html` — `renderLibrary()` and
- * `trackRow()` (lines ~779-821), tracklist CSS (lines 129-163). Static, zero
- * client JS: the hero defaults to the first catalog project server-side and the
- * playing-row treatment is driven by data attributes so the player-state island
- * (#24) can toggle it without re-rendering.
+ * Replaces the old "now playing" hero + numbered tracklist (the Spotify/player
+ * metaphor): the index is now an image-free, tile-free card index that reads
+ * like a contents page. The player chrome (sidebar + bottom bar + player-state
+ * island) still wraps the page via `Player.astro`; it degrades cleanly here
+ * because there is no `[data-now-*]` hero or `[data-track-id]` row to hydrate
+ * (the island's `applyViewState` guards on those). The shell itself is retired
+ * separately once every route has migrated.
  *
- * A11y: tracklist rows are semantic links inside an ordered list, NOT the
- * prototype's `<button>`s, so each row is a real navigation target to the
- * project detail page (#22).
- *
- * Hero variants (#51): `/` (the `all` filter) keeps the now-playing hero with
- * its `data-now-*` hooks for the island; every other playlist renders a static
- * playlist-identity hero (name + track count) with NO `data-now-*` hooks, so
- * the island's hero hydration no-ops (`applyViewState` guards on
- * `[data-now-art]`) and stored now-playing never overwrites the page title.
+ * `PlaylistMenu` (mobile playlist dropdown) still renders at the top so each
+ * playlist stays two taps away below 820px; the desktop sidebar covers it.
  */
 import PlaylistMenu from './PlaylistMenu.astro';
-import {
-  CATALOG,
-  filterCatalog,
-  type PlaylistId,
-  type Project,
-} from '../../data/catalog';
+import ProjectCardGrid from '../ProjectCardGrid.astro';
+import { filterCatalog, type PlaylistId } from '../../data/catalog';
 
 export interface Props {
   /** Active playlist filter. */
   filter: PlaylistId;
-  /** Now-playing project for the hero. Defaults to the first catalog entry. */
-  now?: Project;
 }
-const { filter, now = CATALOG[0] } = Astro.props;
+const { filter } = Astro.props;
 
 const list = filterCatalog(filter);
-
-const CONTACT = {
-  github: 'https://github.com/DylanMcCavitt',
-  resume: 'https://dylanmccavitt.xyz/resume.pdf',
-};
 
 /** Section title for each filter; areas fall back to their own label. */
 const SECTION_TITLE: Partial<Record<PlaylistId, string>> = {
@@ -51,120 +36,52 @@ const SECTION_TITLE: Partial<Record<PlaylistId, string>> = {
   Research: 'Research & retired',
 };
 const sectionTitle = SECTION_TITLE[filter] ?? filter;
-
-const isPlaylist = filter !== 'all';
-
-/**
- * Playlist hero identity (#51): a 2-letter sym derived from the label (first
- * letters of the first two words, else the first two letters) on a tile tinted
- * with the playlist's first track's hue — same visual language as album art.
- */
-const symWords = sectionTitle.split(/\s+/).filter((w) => /^[a-z0-9]/i.test(w));
-const playlistSym = (
-  symWords.length >= 2 ? symWords[0][0] + symWords[1][0] : sectionTitle.slice(0, 2)
-).toLowerCase();
-const playlistHue = list[0]?.hue ?? now.hue;
-/** Big-play target: the playlist's first track, or the now-playing project on `/`. */
-const playHref = `/projects/${(isPlaylist ? (list[0] ?? now) : now).id}`;
+const count = list.length;
 ---
 
 <div class="view">
   <PlaylistMenu active={filter} />
-  <div class="head">
-    {
-      isPlaylist ? (
-        <div class="hero">
-          <span class="art lg" style={`--a:${playlistHue}`} aria-hidden="true">
-            {playlistSym}
-          </span>
-          <div class="info">
-            <span class="kind">
-              Playlist · {list.length} {list.length === 1 ? 'track' : 'tracks'}
-            </span>
-            <h1>{sectionTitle}</h1>
-          </div>
-        </div>
-      ) : (
-        <div class="hero">
-          <span class="art lg" style={`--a:${now.hue}`} data-now-art>
-            {now.sym}
-          </span>
-          <div class="info">
-            <span class="kind" data-now-kind>
-              Now playing · {now.status[1]}
-            </span>
-            <h1 data-now-title>{now.title}</h1>
-            <p data-now-about>{now.about[0]}</p>
-            <div class="meta">
-              <span class:list={['badge', now.status[0]]} data-now-badge>
-                {now.status[1]}
-              </span>
-              <span>
-                <b data-now-stack>{now.stack.map((s) => s[1]).slice(0, 2).join(' · ')}</b>
-              </span>
-            </div>
-          </div>
-        </div>
-      )
-    }
-  </div>
-  <div class="actions">
-    <a
-      class="bigplay"
-      href={playHref}
-      title={isPlaylist ? 'play from the top' : 'open project'}
-      aria-label={isPlaylist ? 'Play from the top' : undefined}
-      data-now-open={isPlaylist ? undefined : true}
-    ></a>
-    <a class="act-link" href={CONTACT.github} target="_blank" rel="noopener">GitHub ↗</a>
-    <a class="act-link" href={CONTACT.resume} target="_blank" rel="noopener">Resume.pdf ↗</a>
-  </div>
 
-  <div class="listwrap">
-    <div class="sec-title">{sectionTitle}</div>
-    <div class="list-head">
-      <span>#</span>
-      <span>Title</span>
-      <span class="album">Area</span>
-      <span class="stat-col">Status</span>
-      <span style="text-align:right">Activity</span>
-    </div>
-    <ol class="tracklist">
-      {
-        list.map((p, i) => {
-          const playing = p.id === now.id;
-          return (
-            <li>
-              <a
-                class:list={['track', { playing }]}
-                href={`/projects/${p.id}`}
-                data-track-id={p.id}
-                data-playing={playing ? 'true' : undefined}
-              >
-                <span class="n">
-                  {playing && <span class="sr-only" data-now-playing-label>Now playing. </span>}
-                  <span class="eq" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span class="num">{i + 1}</span>
-                  <span class="hoverplay" aria-hidden="true" />
-                </span>
-                <span class="t">
-                  <b>{p.title}</b>
-                  <small>{p.line}</small>
-                </span>
-                <span class="album">{p.area}</span>
-                <span class="stat-col">
-                  <span class:list={['badge', p.status[0]]}>{p.status[1]}</span>
-                </span>
-                <span class="len">{p.activity}</span>
-              </a>
-            </li>
-          );
-        })
-      }
-    </ol>
+  <header class="libhead">
+    <p class="libhead__count">{count} {count === 1 ? 'project' : 'projects'}</p>
+    <h1 class="libhead__title">{sectionTitle}</h1>
+  </header>
+
+  <div class="libgrid">
+    <ProjectCardGrid projects={list} />
   </div>
 </div>
+
+<style>
+  /* Shell gutters match the player primitives (`.head`/`.listwrap`: 30px desktop,
+     18px mobile) so the index lines up with the rest of the main panel. */
+  .libhead {
+    padding: 30px 30px 14px;
+  }
+  .libhead__count {
+    font-family: var(--pl-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--pl-faint);
+  }
+  .libhead__title {
+    margin-top: 6px;
+    font-size: clamp(26px, 4vw, 40px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--pl-text);
+  }
+  .libgrid {
+    padding: 6px 30px 52px;
+  }
+
+  @media (max-width: 820px) {
+    .libhead {
+      padding: 22px 18px 12px;
+    }
+    .libgrid {
+      padding: 4px 18px 40px;
+    }
+  }
+</style>

@@ -10,7 +10,7 @@ import ProjectArt from '../../components/player/ProjectArt.astro';
 import StatusBadge from '../../components/player/StatusBadge.astro';
 import ShotsRail from '../../components/player/ShotsRail.astro';
 import CreditsList from '../../components/player/CreditsList.astro';
-import AlbumCard from '../../components/player/AlbumCard.astro';
+import ProjectCardGrid from '../../components/ProjectCardGrid.astro';
 import { CATALOG, getProjectById, type Project } from '../../data/catalog';
 import { projectMeta } from '../../lib/seo';
 
@@ -103,11 +103,7 @@ const meta = projectMeta(p);
       related.length > 0 && (
         <div class="more">
           <h3>More from {p.area}</h3>
-          <div class="albums">
-            {related.map((r) => (
-              <AlbumCard project={r} />
-            ))}
-          </div>
+          <ProjectCardGrid projects={related} />
         </div>
       )
     }

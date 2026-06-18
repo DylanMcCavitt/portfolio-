@@ -5,16 +5,17 @@
  * zero client JS. `getStaticPaths()` enumerates the 7 resume tracks.
  *
  * Reuses the #22 player components: `ProjectArt` (lg hero tile), `StatusBadge`
- * (era badge), `CreditsList` (label/value rows — `ResumeCredit` shares the
- * `ProjectStackEntry` shape), and `AlbumCard` for the "Shipped during this era"
- * cross-links into project detail pages. The current track ("Open to
- * opportunities") gets Email + LinkedIn actions; the others get none.
+ * (era badge), and `CreditsList` (label/value rows — `ResumeCredit` shares the
+ * `ProjectStackEntry` shape). The "Shipped during this era" cross-links into
+ * project detail pages render with the canonical `ProjectCard` grid (#85). The
+ * current track ("Open to opportunities") gets Email + LinkedIn actions; the
+ * others get none.
  */
 import PlayerLayout from '../../layouts/Player.astro';
 import ProjectArt from '../../components/player/ProjectArt.astro';
 import StatusBadge from '../../components/player/StatusBadge.astro';
 import CreditsList from '../../components/player/CreditsList.astro';
-import AlbumCard from '../../components/player/AlbumCard.astro';
+import ProjectCardGrid from '../../components/ProjectCardGrid.astro';
 import { RESUME, getResumeTrackById, type ResumeTrack } from '../../data/resume';
 import { getProjectById, type Project } from '../../data/catalog';
 import { journeyTrackMeta } from '../../lib/seo';
@@ -121,11 +122,7 @@ const meta = journeyTrackMeta(t);
       era.length > 0 && (
         <div class="more">
           <h3>Shipped during this era</h3>
-          <div class="albums">
-            {era.map((r) => (
-              <AlbumCard project={r} />
-            ))}
-          </div>
+          <ProjectCardGrid projects={era} />
         </div>
       )
     }
