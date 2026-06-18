@@ -27,7 +27,10 @@ pnpm-debug.log*
 .superpowers/
 
 # working docs
-docs/
+docs/superpowers/
+docs/workflow-playbook/
+docs/handoffs/*.md
+!docs/handoffs/.gitkeep
 
 # local agent worktrees (git worktree storage)
 .claude/worktrees/

@@ -1,0 +1,58 @@
+# Agent Task
+
+## Problem
+
+
+## Source traceability
+
+- Source PRD:
+- Parent issue:
+- Depends on:
+- Now slice:
+- Preserves from scope ledger:
+- Owner engine:
+
+## Acceptance criteria
+
+| Acceptance criterion | Expected evidence | Actual evidence |
+| --- | --- | --- |
+|  |  | Filled during closeout. |
+
+## Non-goals
+
+- 
+
+## Relevant files
+
+- 
+
+## Verification
+
+- 
+
+## Deferred scope custody
+
+- Long-term capability:
+- Why deferred:
+- Where tracked: `docs/agents/scope-ledger.md`
+- Constraint imposed on V1:
+
+## Continuity constraints checked
+
+- Constraint:
+  - Result:
+  - Evidence:
+
+## Future issue candidates
+
+| Title | Depends on | Preserves |
+| --- | --- | --- |
+|  |  |  |
+
+## Risks
+
+- 
+
+## Desired base branch
+
+preview/agent-first-redesign
