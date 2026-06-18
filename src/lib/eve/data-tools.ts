@@ -157,6 +157,12 @@ export function deriveGroundingContext(message: string, context: EveChatContext 
       : readResume({ trackIds: ['now'] });
   const contact = focus === 'contact' ? getContact() : undefined;
 
+  const remoteRequired =
+    focus === 'general' &&
+    projects.length === 0 &&
+    !context.projectIds?.length &&
+    !context.resumeTrackIds?.length;
+
   return {
     version: 1,
     source: 'portfolio-site-canonical-data',
@@ -164,8 +170,8 @@ export function deriveGroundingContext(message: string, context: EveChatContext 
     projects,
     resume,
     remoteCall: {
-      required: true,
-      reason: remoteCallReason(focus),
+      required: remoteRequired,
+      reason: remoteCallReason(focus, remoteRequired),
     },
     ...(contact ? { contact } : {}),
   };
@@ -221,11 +227,15 @@ function summarizeProject(project: Project): ProjectSummary {
     area: project.area,
     status: project.status,
     year: project.year,
+    activity: project.activity,
     line: project.line,
     wip: project.wip,
     money: project.money,
     links: project.links,
     metrics: project.metrics,
+    about: project.about,
+    notes: project.notes,
+    stack: project.stack,
   };
 }
 
@@ -284,23 +294,23 @@ function groundingFocus(normalized: string): EveGroundingFocus {
   return 'general';
 }
 
-function remoteCallReason(focus: EveGroundingFocus): string {
-  switch (focus) {
-    case 'contact':
-      return 'The deterministic contact artifact supplies the facts; the remote agent is still used for conversational wording and follow-up handling.';
-    case 'resume':
-      return 'The deterministic resume artifact supplies the timeline; the remote agent is still used to explain the background in the visitor’s framing.';
-    case 'projects':
-      return 'The deterministic project artifacts supply canonical evidence; the remote agent is still used to compare and summarize it for the visitor.';
-    case 'current':
-      return 'The deterministic current-work artifacts supply active records; the remote agent is still used to turn them into a concise answer.';
-    case 'general':
-      return 'The deterministic packet supplies safe baseline facts; the remote agent is still used because the visitor question does not map to a canned path.';
-    default: {
-      const exhaustive: never = focus;
-      return exhaustive;
+function remoteCallReason(focus: EveGroundingFocus, required: boolean): string {
+  if (!required) {
+    switch (focus) {
+      case 'contact':
+        return 'The contact answer can be served from canonical resume/contact data without waiting for the remote agent.';
+      case 'resume':
+        return 'The resume answer can be served from the canonical timeline without waiting for the remote agent.';
+      case 'projects':
+        return 'The project search answer can be served from canonical catalog matches without waiting for the remote agent.';
+      case 'current':
+        return 'The current-work answer can be served from canonical WIP project and resume data without waiting for the remote agent.';
+      case 'general':
+        return 'The visitor question matched canonical catalog context, so the site can answer immediately.';
     }
   }
+
+  return 'The visitor question did not match a deterministic portfolio path, so the remote agent is used for conversational synthesis.';
 }
 
 function groundingProjects(

@@ -44,11 +44,15 @@ export interface ProjectSummary {
   area: Project['area'];
   status: Project['status'];
   year: number;
+  activity: string;
   line: string;
   wip: boolean;
   money: boolean;
   links: Project['links'];
   metrics: Project['metrics'];
+  about: Project['about'];
+  notes: Project['notes'];
+  stack: Project['stack'];
 }
 
 export interface ResumeTrackSummary {
@@ -85,7 +89,7 @@ export interface EveGroundingPacket {
     tracks: ResumeTrackSummary[];
   };
   remoteCall: {
-    required: true;
+    required: boolean;
     reason: string;
   };
   contact?: ContactBlock;

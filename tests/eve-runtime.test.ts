@@ -52,8 +52,9 @@ test('grounding context derives compact canonical data and prioritizes explicit 
   assert.equal(context.focus, 'projects');
   assert.equal(context.projects[0]?.id, 'dog-log');
   assert.ok(context.projects.some((project) => project.area === 'Agents & MCP'));
-  assert.equal(context.remoteCall.required, true);
-  assert.match(context.remoteCall.reason, /remote agent/);
+  assert.ok((context.projects[0]?.about.length ?? 0) > 0);
+  assert.equal(context.remoteCall.required, false);
+  assert.match(context.remoteCall.reason, /without waiting/);
   assert.deepEqual(
     context.resume.tracks.map((track) => track.id),
     ['now'],
@@ -65,8 +66,8 @@ test('contact grounding includes canonical contact context and remote-call ratio
 
   assert.equal(context.focus, 'contact');
   assert.equal(context.contact?.email, 'dylanmccavitt@outlook.com');
-  assert.equal(context.remoteCall.required, true);
-  assert.match(context.remoteCall.reason, /contact artifact/);
+  assert.equal(context.remoteCall.required, false);
+  assert.match(context.remoteCall.reason, /without waiting/);
 });
 
 test('answer blocks preserve canonical ids and trace metadata', () => {
@@ -111,7 +112,30 @@ test('runtime config points at the deployed portfolio-agent host', () => {
   });
 });
 
-test('portfolio-agent stream is transformed into UI events plus artifact blocks', async () => {
+test('catalog search questions stream immediately without the remote agent', async () => {
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    calls.push(String(input));
+    return new Response('unexpected remote call', { status: 500 });
+  };
+
+  const config = readEveRuntimeConfig({ EVE_AGENT_HOST: 'http://127.0.0.1:3333' });
+  const stream = createEveAgentStream(
+    { message: 'What should I look at for agent work?' },
+    config,
+    { fetch: fetchImpl },
+  );
+
+  const events = await readNdjson(stream);
+
+  assert.deepEqual(calls, []);
+  assert.equal(events[0].type, 'ready');
+  assert.equal(events[0].provider, 'portfolio-site');
+  assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+  assert.equal(events.at(-1)?.type, 'done');
+});
+
+test('open-ended questions still stream from portfolio-agent with grounding context', async () => {
   const calls: string[] = [];
   const sessionBodies: SessionBody[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -146,7 +170,7 @@ test('portfolio-agent stream is transformed into UI events plus artifact blocks'
 
   const config = readEveRuntimeConfig({ EVE_AGENT_HOST: 'http://127.0.0.1:3333' });
   const stream = createEveAgentStream(
-    { message: 'What should I look at for agent work?' },
+    { message: 'How should Dylan describe himself?' },
     config,
     { fetch: fetchImpl },
   );
@@ -158,16 +182,13 @@ test('portfolio-agent stream is transformed into UI events plus artifact blocks'
     'http://127.0.0.1:3333/eve/v1/session/session-1/stream',
   ]);
   assert.equal(sessionBodies.length, 1);
-  assert.equal(sessionBodies[0]?.message, 'What should I look at for agent work?');
+  assert.equal(sessionBodies[0]?.message, 'How should Dylan describe himself?');
   assert.equal(sessionBodies[0]?.clientContext?.source, 'portfolio-site-canonical-data');
-  assert.equal(sessionBodies[0]?.clientContext?.focus, 'projects');
-  assert.ok(
-    sessionBodies[0]?.clientContext?.projects?.some((project) => isRecord(project) && project.area === 'Agents & MCP'),
-  );
+  assert.equal(sessionBodies[0]?.clientContext?.focus, 'general');
   assert.equal(sessionBodies[0]?.clientContext?.remoteCall?.required, true);
   assert.equal(events[0].type, 'ready');
   assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'Agent'));
-  assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+  assert.ok(events.some((event) => hasBlockKind(event, 'links')));
   assert.equal(events.at(-1)?.type, 'done');
 });
 
@@ -198,7 +219,7 @@ test('chat endpoint streams from portfolio-agent when configured', async () => {
       request: new Request('https://example.test/api/eve/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Can he ship iOS apps?' }),
+        body: JSON.stringify({ message: 'What is his favorite color?' }),
       }),
     } as never);
 
@@ -212,7 +233,7 @@ test('chat endpoint streams from portfolio-agent when configured', async () => {
 
     assert.equal(events[0].type, 'ready');
     assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'hello'));
-    assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+    assert.ok(events.some((event) => hasBlockKind(event, 'links')));
     assert.equal(events.at(-1)?.type, 'done');
   } finally {
     restoreEnv('EVE_AGENT_HOST', previousHost);
@@ -256,10 +277,6 @@ type SessionBody = {
     remoteCall?: { required?: boolean };
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 
 function hasBlockKind(event: JsonEvent, kind: string): boolean {

@@ -298,6 +298,10 @@ export function createEveAgentStream(
   const encoder = new TextEncoder();
   const artifactAnswer = createEveAnswer(request.message, request.context);
   const groundingContext = deriveGroundingContext(request.message, request.context);
+  if (!groundingContext.remoteCall.required) {
+    return createEveAnswerStream(artifactAnswer, config);
+  }
+
   const artifactBlocks = artifactAnswer.blocks.filter((block) => block.kind !== 'text');
 
   return new ReadableStream<Uint8Array>({
@@ -364,7 +368,7 @@ export function createEveAgentStream(
 }
 
 /** Legacy deterministic stream kept for tests and local contract assertions. */
-export function createEveAnswerStream(answer: EveAnswer, config: EveRuntimeConfig): ReadableStream<Uint8Array> {
+export function createEveAnswerStream(answer: EveAnswer, _config: EveRuntimeConfig): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
   return new ReadableStream<Uint8Array>({
@@ -373,7 +377,7 @@ export function createEveAnswerStream(answer: EveAnswer, config: EveRuntimeConfi
         type: 'ready',
         agent: 'Eve',
         trace: answer.trace,
-        provider: config.agentHost,
+        provider: 'portfolio-site',
       });
 
       for (const [index, block] of answer.blocks.entries()) {
