@@ -7,7 +7,14 @@ import {
   type StatusKind,
 } from '../../data/catalog';
 import { getResumeTrackById, RESUME, type ResumeTrack } from '../../data/resume';
-import type { ContactBlock, ProjectSummary, ResumeTrackSummary } from './contract';
+import type {
+  ContactBlock,
+  EveChatContext,
+  EveGroundingFocus,
+  EveGroundingPacket,
+  ProjectSummary,
+  ResumeTrackSummary,
+} from './contract';
 
 export class EveToolError extends Error {
   readonly code: string;
@@ -136,6 +143,34 @@ export function getContact(): ContactBlock {
   };
 }
 
+export function deriveGroundingContext(message: string, context: EveChatContext = {}): EveGroundingPacket {
+  if (context.projectIds) assertProjectIds(context.projectIds);
+  if (context.resumeTrackIds) assertResumeTrackIds(context.resumeTrackIds);
+
+  const query = message.trim();
+  const normalized = query.toLowerCase();
+  const focus = groundingFocus(normalized);
+  const projects = groundingProjects(query, normalized, focus, context.projectIds);
+  const resume =
+    context.resumeTrackIds || focus === 'resume'
+      ? readResume(context.resumeTrackIds ? { trackIds: context.resumeTrackIds } : {})
+      : readResume({ trackIds: ['now'] });
+  const contact = focus === 'contact' ? getContact() : undefined;
+
+  return {
+    version: 1,
+    source: 'portfolio-site-canonical-data',
+    focus,
+    projects,
+    resume,
+    remoteCall: {
+      required: true,
+      reason: remoteCallReason(focus),
+    },
+    ...(contact ? { contact } : {}),
+  };
+}
+
 export function assertProjectIds(ids: string[]): void {
   const missing = ids.filter((id) => !getProjectById(id));
   if (missing.length > 0) {
@@ -206,6 +241,112 @@ function summarizeResumeTrack(track: ResumeTrack): ResumeTrackSummary {
     credits: track.credits,
     era: track.era,
   };
+}
+
+function groundingFocus(normalized: string): EveGroundingFocus {
+  if (matchesAny(normalized, ['contact', 'reach', 'email', 'hire', 'open to work', 'available'])) return 'contact';
+  if (matchesAny(normalized, ['background', 'resume', 'experience', 'education', 'career'])) return 'resume';
+  if (matchesAny(normalized, ['now', 'current', 'building', 'active', 'wip'])) return 'current';
+  if (
+    matchesAny(normalized, [
+      'project',
+      'portfolio',
+      'ios',
+      'iphone',
+      'swift',
+      'mobile',
+      'app store',
+      'testflight',
+      'trading',
+      'options',
+      'broker',
+      'risk',
+      'market',
+      'agent',
+      'mcp',
+      'automation',
+      'ai',
+      'eval',
+      'ship',
+      'shipped',
+      'client',
+      'freelance',
+      'ecommerce',
+      'full stack',
+      'best',
+      'impressive',
+      'strongest',
+      'impact',
+    ])
+  ) {
+    return 'projects';
+  }
+  return 'general';
+}
+
+function remoteCallReason(focus: EveGroundingFocus): string {
+  switch (focus) {
+    case 'contact':
+      return 'The deterministic contact artifact supplies the facts; the remote agent is still used for conversational wording and follow-up handling.';
+    case 'resume':
+      return 'The deterministic resume artifact supplies the timeline; the remote agent is still used to explain the background in the visitor’s framing.';
+    case 'projects':
+      return 'The deterministic project artifacts supply canonical evidence; the remote agent is still used to compare and summarize it for the visitor.';
+    case 'current':
+      return 'The deterministic current-work artifacts supply active records; the remote agent is still used to turn them into a concise answer.';
+    case 'general':
+      return 'The deterministic packet supplies safe baseline facts; the remote agent is still used because the visitor question does not map to a canned path.';
+    default: {
+      const exhaustive: never = focus;
+      return exhaustive;
+    }
+  }
+}
+
+function groundingProjects(
+  query: string,
+  normalized: string,
+  focus: EveGroundingFocus,
+  projectIds: string[] | undefined,
+): ProjectSummary[] {
+  const projects: ProjectSummary[] = [];
+  appendProjects(projects, projectIds ? filterCatalog({ ids: projectIds, limit: 4 }).projects : []);
+
+  if (projects.length >= 4 || focus === 'contact' || focus === 'resume') {
+    return projects.slice(0, 4);
+  }
+
+  if (matchesAny(normalized, ['ios', 'iphone', 'swift', 'mobile', 'app store', 'testflight'])) {
+    appendProjects(projects, filterCatalog({ area: 'iOS', limit: 4 }).projects);
+  } else if (matchesAny(normalized, ['trading', 'options', 'broker', 'risk', 'market'])) {
+    appendProjects(projects, searchCatalog({ query: 'trading risk broker options', limit: 4 }).projects);
+  } else if (matchesAny(normalized, ['agent', 'mcp', 'automation', 'ai', 'eval'])) {
+    appendProjects(projects, filterCatalog({ area: 'Agents & MCP', limit: 4 }).projects);
+  } else if (matchesAny(normalized, ['now', 'current', 'building', 'active', 'wip'])) {
+    appendProjects(projects, filterCatalog({ wip: true, limit: 4 }).projects);
+  } else if (matchesAny(normalized, ['ship', 'shipped', 'client', 'freelance', 'ecommerce', 'full stack'])) {
+    appendProjects(projects, filterCatalog({ area: 'Shipped', limit: 4 }).projects);
+  } else if (matchesAny(normalized, ['best', 'impressive', 'strongest', 'impact'])) {
+    appendProjects(projects, rankProjects({ intent: query, limit: 4 }).projects);
+  } else if (query) {
+    appendProjects(projects, searchCatalog({ query, limit: 4 }).projects);
+  }
+
+  if (projects.length === 0 && focus !== 'general') {
+    appendProjects(projects, rankProjects({ intent: query, limit: 3 }).projects);
+  }
+
+  return projects.slice(0, 4);
+}
+
+function appendProjects(target: ProjectSummary[], next: ProjectSummary[]): void {
+  for (const project of next) {
+    if (!target.some((item) => item.id === project.id)) target.push(project);
+  }
+}
+
+function matchesAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
 }
 
 function tokenize(value: string): string[] {

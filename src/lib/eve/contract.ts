@@ -71,6 +71,26 @@ export interface ContactBlock {
   links: [label: string, href: string][];
 }
 
+export type EveGroundingFocus = 'projects' | 'resume' | 'contact' | 'current' | 'general';
+
+export interface EveGroundingPacket {
+  version: 1;
+  source: 'portfolio-site-canonical-data';
+  focus: EveGroundingFocus;
+  projects: ProjectSummary[];
+  resume: {
+    title: string;
+    line: string;
+    about: string;
+    tracks: ResumeTrackSummary[];
+  };
+  remoteCall: {
+    required: true;
+    reason: string;
+  };
+  contact?: ContactBlock;
+}
+
 export interface EveAnswer {
   blocks: AnswerBlock[];
   trace: ToolTraceMetadata;
