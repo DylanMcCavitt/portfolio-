@@ -49,10 +49,10 @@ export interface SuggestedPrompt {
  */
 export const SUGGESTED: SuggestedPrompt[] = [
   { label: "What's Dylan building right now?" },
-  { label: 'Show me his most impressive project' },
+  { label: 'Show me his strongest shipped work' },
   { label: "What's his background?" },
-  { label: 'Does he have trading experience?' },
-  { label: 'Can he ship iOS apps?' },
+  { label: 'Which projects show product judgment?' },
+  { label: 'Which side projects show how he learns?' },
   { label: 'Is he open to work? How do I reach him?' },
 ];
 

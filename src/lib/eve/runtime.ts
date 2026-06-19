@@ -116,7 +116,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
   let blocks: AnswerBlock[];
 
   if (!query) {
-    blocks = fallbackAnswer("Ask me about Dylan's projects, background, trading systems, iOS work, or contact details.");
+    blocks = fallbackAnswer("Ask me about Dylan's projects, shipped work, background, current side projects, or contact details.");
   } else if (matchesAny(normalized, ['contact', 'reach', 'email', 'hire', 'open to work', 'available'])) {
     const resume = readResume({ trackIds: ['now'] });
     const contact = getContact();
@@ -164,7 +164,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
       label: 'filter_catalog found iOS projects',
     });
     blocks = [
-      { kind: 'text', text: 'Yes. The portfolio has two native iOS projects with real product scope:' },
+      { kind: 'text', text: 'Yes. The portfolio includes two iOS side projects built to practice consumer product polish:' },
       { kind: 'projects', ids: result.projects.map((project) => project.id) },
     ];
   } else if (matchesAny(normalized, ['trading', 'options', 'broker', 'risk', 'market'])) {
@@ -173,12 +173,12 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
       tool: 'search_catalog',
       input: { query: 'trading risk broker options', limit: 5 },
       resultCount: result.projects.length,
-      label: 'search_catalog found trading systems',
+      label: 'search_catalog found finance automation projects',
     });
     blocks = [
       {
         kind: 'text',
-        text: "Trading infrastructure is one of Dylan's strongest areas. The best starting points are live exit automation, portfolio/risk tooling, and the autonomous trading harness.",
+        text: "Dylan has trading and personal-finance side projects, but they are framed as practical automation and research discipline rather than his whole professional identity. Start with exits-only automation, local portfolio tooling, and the scheduled RSI(2) review workflow.",
       },
       { kind: 'projects', ids: result.projects.map((project) => project.id) },
     ];
@@ -193,7 +193,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
     blocks = [
       {
         kind: 'text',
-        text: 'For agent and MCP work, start with the autonomous trader, TradingView MCP, evalgate, and harness-arena.',
+        text: 'For agent and MCP work, start with assistant regression tests, TradingView Desktop workflow tooling, the scheduled RSI(2) review project, and the shelved eval-game experiment.',
       },
       { kind: 'projects', ids: result.projects.map((project) => project.id) },
     ];
@@ -208,7 +208,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
     blocks = [
       {
         kind: 'text',
-        text: 'Right now, Dylan is building around agents, trading infrastructure, evaluation, and infrastructure scheduling.',
+        text: 'Right now, Dylan is building practical side projects around assistant evaluation, charting workflow automation, finance tooling, and infrastructure scheduling.',
       },
       { kind: 'projects', ids: result.projects.map((project) => project.id) },
     ];
@@ -223,7 +223,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
     blocks = [
       {
         kind: 'text',
-        text: 'The strongest evidence is work with real-world constraints: live options exits, an autonomous trading harness, and shipped client software.',
+        text: 'The strongest evidence is work with real-world constraints: shipped client ecommerce, assistant behavior regression tests, and practical automation with clear boundaries.',
       },
       { kind: 'projects', ids: result.projects.map((project) => project.id) },
     ];
@@ -257,7 +257,7 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
             { kind: 'projects', ids: result.projects.map((project) => project.id) },
           ]
         : fallbackAnswer(
-            'I do not have a precise match in the site data for that. I can still help with projects, resume, trading systems, iOS work, agent infrastructure, or contact details.',
+            'I do not have a precise match in the site data for that. I can still help with projects, shipped client work, current side projects, résumé, or contact details.',
           );
   }
 

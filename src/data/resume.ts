@@ -85,7 +85,7 @@ export const RESUME: ResumeAlbum = {
   title: 'Resume',
   line: 'economics → legal ops → cyber risk → engineering',
   about:
-    'Career history in chronological order, from an economics degree to building trading systems, agents, and iOS apps in NYC.',
+    'Career history in chronological order, from an economics degree through legal operations, cyber risk, graduate CS, client software, and practical side projects.',
   tracks: [
     {
       id: 'syracuse',
@@ -99,7 +99,7 @@ export const RESUME: ResumeAlbum = {
         'B.S. in Economics from Syracuse University, class of 2019.',
         'Markets, incentives, and working from data, before writing production code.',
       ],
-      notes: ['Economics intuition still anchors the trading-systems work.'],
+      notes: ['Economics intuition still helps Dylan reason from data and incentives.'],
       credits: [
         ['Degree', 'b.s. economics'],
         ['Class', '2019'],
@@ -135,7 +135,7 @@ export const RESUME: ResumeAlbum = {
       hue: '#50c878',
       about: [
         'Associate on Kroll’s Cyber Strategy & Risk team, running security assessments and risk work for client organizations.',
-        'The security habits carried forward: risk gates on trading systems, paper-first scaffolds, secrets hygiene, read-only defaults.',
+        'The security habits carried forward: explicit risk gates, paper-first scaffolds, secrets hygiene, and read-only defaults.',
       ],
       notes: ['The pivot into technical work.'],
       credits: [
@@ -203,14 +203,14 @@ export const RESUME: ResumeAlbum = {
       id: 'now',
       sym: 'dm',
       title: 'Open to opportunities',
-      role: 'Software engineer · agents, trading infra, iOS',
+      role: 'Software engineer · backend, product, AI tools',
       when: '2026 to now',
       len: 'now',
       hue: '#50c878',
       current: true,
       about: [
-        'Currently building agentic systems and trading infrastructure in NYC: one system live against real money, an autonomous trader scheduled to go live June 23, and two iOS apps heading to the App Store.',
-        'Interviewing for full-time roles.',
+        'Currently interviewing for full-time software engineering roles while building practical side projects: assistant-evaluation tooling, local finance automation, infrastructure scheduling, and small consumer apps.',
+        'Looking for teams that value product judgment, reliability habits, and clear communication.',
       ],
       notes: ['US citizen; no sponsorship needed.'],
       credits: [
@@ -218,7 +218,7 @@ export const RESUME: ResumeAlbum = {
         ['Location', 'new york city'],
         ['Email', 'dylanmccavitt@outlook.com'],
       ],
-      era: ['agentic-trader', 'exit-manager', 'hood'],
+      era: ['evalgate', 'bellas-beads', 'slurmlet', 'agentic-trader'],
     },
   ],
 };

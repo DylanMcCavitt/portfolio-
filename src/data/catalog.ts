@@ -121,32 +121,32 @@ export const CATALOG: Project[] = [
     hue: '#8b7cf6',
     wip: true,
     money: false,
-    line: 'autonomous trading agent with deterministic guardrails; the strategy is a pluggable example',
-    seek: { from: 'dry-run', to: 'live jun 23', pct: 80 },
+    line: 'side-project trading automation: Claude Code reviews a simple RSI(2) setup and journals each proposed move',
+    seek: { from: 'review loop', to: 'live jun 23', pct: 80 },
     links: [['View repo ↗', 'https://github.com/DylanMcCavitt/agentic-trader']],
     metrics: [
-      ['15:45 ET', 'scheduled run, weekdays'],
-      ['100%', 'decisions journaled in dry-run'],
+      ['15:45 ET', 'scheduled Claude Code session'],
+      ['RSI(2)', 'simple signal under review'],
       ['06·23', 'go-live date'],
     ],
     about: [
-      'An autonomous trading agent whose safety comes from deterministic, model-independent guardrails rather than from trusting the model. A scheduled headless Claude Code session wakes at 15:45 ET on weekdays, computes a signal, and trades through Robinhood’s official Agentic Trading MCP, with every order first clearing a deterministic gate that can block it.',
-      'The strategy (an RSI(2) mean-reversion rule) is a pluggable worked example; the project is really about the harness. In dry-run it journals every decision: intended entries, simulated fills, and the gate verdict that allowed or blocked each one. Going live is a config change.',
+      'A side-project trading automation workflow that runs on a schedule instead of as a black box. A headless Claude Code session wakes at 15:45 ET on weekdays, checks a simple RSI(2) mean-reversion signal, and routes proposed orders through Robinhood’s Agentic Trading MCP.',
+      'Before anything goes live, each run leaves an inspectable record: the proposed entry, the simulated fill, and the deterministic gate decision that allowed or blocked it. The point is to make the workflow reviewable before real execution, not to present trading as Dylan’s professional identity.',
     ],
     notes: [
-      'Runs unattended on launchd; no human in the loop at decision time.',
-      'Every trade gated by risk rules validated during the dry-run period.',
-      'Goes live June 23 on a dedicated account.',
+      'Runs from launchd on weekday afternoons; no manual click required to produce a reviewable proposal.',
+      'Journals proposed entries, simulated fills, and gate decisions for review.',
+      'Go-live date tracked as June 23 on a dedicated account.',
     ],
     stack: [
       ['Runtime', 'claude code · launchd'],
       ['Broker', 'robinhood agentic mcp'],
       ['Signal', 'rsi(2) mean-reversion'],
-      ['Status', 'dry-run → live 06·23'],
+      ['Status', 'review loop → live 06·23'],
     ],
     shots: [
-      { img: `${SHOTS}/agentic-trader/journal.webp`, cap: 'dry-run journal: intended vs simulated fills' },
-      { img: `${SHOTS}/agentic-trader/risk-gate.webp`, cap: 'risk-gate decision log for one session' },
+      { img: `${SHOTS}/agentic-trader/journal.webp`, cap: 'decision journal: proposed entries vs simulated fills' },
+      { img: `${SHOTS}/agentic-trader/risk-gate.webp`, cap: 'gate decision log for one session' },
       { img: `${SHOTS}/agentic-trader/backtest.webp`, cap: 'signal backtest, walk-forward windows' },
     ],
   },
@@ -161,7 +161,7 @@ export const CATALOG: Project[] = [
     hue: '#50c878',
     wip: false,
     money: true,
-    line: 'exit automation for live options positions',
+    line: 'practical exit automation for options positions Dylan already opened',
     seek: { from: 'monitoring', to: 'live', pct: 100 },
     links: [['View repo ↗', 'https://github.com/DylanMcCavitt/tastytrade-exit-manager']],
     metrics: [
@@ -170,11 +170,11 @@ export const CATALOG: Project[] = [
       ['0', 'positions it can open'],
     ],
     about: [
-      'Manages exits on existing tastytrade options positions: scale-outs, ratcheting trailing stops, and OCO brackets. It never opens positions and never adds size; you enter the trade, it places and ratchets the exit orders.',
-      'Spreads can’t use native stop orders, so the manager watches the mid and fires the closing order itself.',
+      'Practical automation for options positions Dylan has already opened. It handles scale-outs, ratcheting trailing stops, and OCO brackets, but it cannot open a new trade or add size.',
+      'Because spreads cannot use native stop orders, the manager watches the mid price and fires closing orders itself, with an audit trail for each adjustment.',
     ],
     notes: [
-      'Software-managed stops for spreads, which brokers don’t support natively.',
+      'Keeps the boundary clear: exits only, never entries.',
       'Trails ratchet as profit targets hit; risk is never widened.',
       'Running against real money since spring 2026.',
     ],
@@ -201,7 +201,7 @@ export const CATALOG: Project[] = [
     hue: '#5da8e8',
     wip: false,
     money: false,
-    line: 'portfolio tracker + high-water-mark withdrawal engine',
+    line: 'local personal finance dashboard with high-water-mark withdrawal suggestions',
     seek: { from: 'tracking', to: 'active daily', pct: 100 },
     links: [],
     metrics: [
@@ -210,8 +210,8 @@ export const CATALOG: Project[] = [
       ['local', 'account data stays on-machine'],
     ],
     about: [
-      'A local, single-user dashboard tracking realized gains across Robinhood accounts, with a high-water-mark withdrawal engine: a weekly withdrawal from profit that never takes the portfolio below its best-ever level.',
-      'Withdrawals only come from gains above the high-water mark, so the engine cannot draw down principal.',
+      'A local, single-user personal finance dashboard for tracking realized gains across Robinhood accounts. Its high-water-mark rule suggests weekly withdrawals from gains only, without taking the portfolio below its best-ever level.',
+      'The suggestions are deterministic and auditable, with account data kept on the machine.',
     ],
     notes: [
       'Local-first; account data never leaves the machine.',
@@ -220,7 +220,7 @@ export const CATALOG: Project[] = [
     ],
     stack: [
       ['Language', 'typescript'],
-      ['Shape', 'local-first dashboard'],
+      ['Shape', 'local finance dashboard'],
       ['Engine', 'high-water-mark rules'],
       ['Status', 'active daily'],
     ],
@@ -241,7 +241,7 @@ export const CATALOG: Project[] = [
     hue: '#e6b450',
     wip: true,
     money: false,
-    line: 'MCP server driving TradingView Desktop',
+    line: 'tooling around TradingView Desktop for repeatable chart review',
     seek: { from: 'scaffold', to: 'v1 charting', pct: 65 },
     links: [],
     metrics: [
@@ -250,12 +250,12 @@ export const CATALOG: Project[] = [
       ['v1', 'charting scope'],
     ],
     about: [
-      'An MCP server that drives TradingView Desktop from an agent conversation: chart whole stock universes, capture chartbooks, and round-trip Pine Script (set source, compile, read console errors back).',
-      'V1 is scoped to charting. No scanning, no execution.',
+      'An MCP server for automating TradingView Desktop workflows Dylan already does by hand: open charts, capture chartbooks, and round-trip Pine Script by setting source, compiling, and reading console errors back.',
+      'V1 is scoped to charting and review workflow support. It does not scan markets, give trading advice, or execute trades.',
     ],
     notes: [
       'Pine editor round-trip: write, compile, read errors programmatically.',
-      'Universe groups for software, semis, AI infrastructure, and cybersecurity.',
+      'Universe groups support repeatable chart review.',
       'Chartbook capture for daily review.',
     ],
     stack: [
@@ -281,7 +281,7 @@ export const CATALOG: Project[] = [
     hue: '#8b7cf6',
     wip: true,
     money: false,
-    line: 'a safety check for AI assistants that catches bad behavior before it ships',
+    line: 'regression tests for assistant behavior using real recorded sessions',
     seek: { from: 'scaffold', to: 'v0.1 launch', pct: 25 },
     links: [],
     metrics: [
@@ -290,8 +290,8 @@ export const CATALOG: Project[] = [
       ['v0.1', 'first release, building in the open'],
     ],
     about: [
-      'A tool that turns a real AI assistant session into a repeatable test. It records what the assistant actually did, step by step, then replays that run later to confirm the behavior still holds. When someone tweaks the assistant, this catches changes that quietly break it before they reach real users.',
-      'The idea: teams can watch what their AI does, but most have no way to fail a build when an edit makes it misbehave. evalgate is the missing safety check. The headline example wires it into a trading assistant, where rules like "never place an oversized order" become hard checks that stop a risky change before it can ever reach the broker.',
+      'A practical regression-test tool for AI assistant behavior. It records a real session, replays it later, and fails when a change makes the assistant do something different or unsafe.',
+      'The product problem is concrete: teams can watch assistants in demos but still need build-breaking checks for behavior changes. The headline example is a trading-assistant scenario because the rules are easy to audit, not because evalgate is a trading product.',
     ],
     notes: [
       'Records a real session, then replays it the same way every time.',
@@ -300,8 +300,8 @@ export const CATALOG: Project[] = [
     ],
     stack: [
       ['Language', 'python'],
-      ['Shape', 'safety check for AI assistants'],
-      ['Example', 'trading assistant guardrails'],
+      ['Shape', 'assistant regression tests'],
+      ['Example', 'behavior checks'],
       ['Status', 'building → v0.1'],
     ],
     shots: [
@@ -321,7 +321,7 @@ export const CATALOG: Project[] = [
     hue: '#ef8354',
     wip: false,
     money: false,
-    line: 'multi-dog routine tracking · widgets · shared households',
+    line: 'small iPhone app for household dog routines, widgets, and optional sync',
     seek: { from: 'v1.2', to: 'review', pct: 95 },
     links: [],
     metrics: [
@@ -330,12 +330,13 @@ export const CATALOG: Project[] = [
       ['v1.2', 'in app store review'],
     ],
     about: [
-      'An iPhone app and widget for tracking each dog’s potty routine across a household. Local-first with SwiftData so it works without an account; v1.2 adds optional Supabase-backed shared households so family members log to the same dog.',
+      'A small consumer iPhone app Dylan shipped to practice product polish end to end: logging each dog’s potty routine, quick actions from a home-screen widget, and optional shared households.',
+      'It is local-first with SwiftData so it works without an account; v1.2 adds Supabase-backed sync only for households that want shared logging.',
     ],
     notes: [
       'SwiftData local-first; sync is opt-in, not required.',
       'WidgetKit home-screen widget for one-tap logging.',
-      'Supabase shared households for family and caretaker sync.',
+      'App Store review and shared-household polish in v1.2.',
     ],
     stack: [
       ['Language', 'swift'],
@@ -360,7 +361,7 @@ export const CATALOG: Project[] = [
     hue: '#50c878',
     wip: false,
     money: false,
-    line: 'household chore boards with invites and a pro tier',
+    line: 'side-product practice: household chore boards, invites, stats, and Pro gating',
     seek: { from: 'build', to: 'testflight', pct: 90 },
     links: [],
     metrics: [
@@ -369,11 +370,11 @@ export const CATALOG: Project[] = [
       ['pro', 'subscription tier built'],
     ],
     about: [
-      'A Firebase-backed iOS app for managing household chores: category boards, shared households, friend invites, completion tracking, and stats, plus a Pro subscription tier and notification settings.',
-      'Built test-first: view models, services, and entitlement logic each carry their own suite, and Firebase runs against the emulator in tests.',
+      'A side product for practicing the business mechanics around an iOS app: household chore boards, friend invites, completion stats, notifications, and a Pro tier.',
+      'Built test-first: view models, services, StoreKit entitlement logic, and Firebase emulator paths each carry their own test coverage.',
     ],
     notes: [
-      'Households and friend invites for multi-user boards.',
+      'Product-building reps: households, invites, stats, and a Pro tier.',
       'StoreKit subscription with entitlement gating.',
       'Heading to TestFlight.',
     ],
@@ -400,7 +401,7 @@ export const CATALOG: Project[] = [
     hue: '#5da8e8',
     wip: false,
     money: false,
-    line: 'declarative NixOS homelab, rebuilt from one flake',
+    line: 'reproducible NixOS homelab for reliability practice',
     seek: { from: 'uptime', to: '99.9%', pct: 100 },
     links: [
       ['nixos-dotfiles ↗', 'https://github.com/DylanMcCavitt/nixos-dotfiles'],
@@ -412,7 +413,7 @@ export const CATALOG: Project[] = [
       ['1', 'flake to rebuild everything'],
     ],
     about: [
-      'A declarative, reproducible homelab: everything runs from a single NixOS flake, so a rebuild from bare metal is one command. A rack-mounted Ryzen node plus two mini PCs, peered over Tailscale with split DNS.',
+      'Infrastructure practice in a real homelab: everything runs from a single NixOS flake, so a rebuild from bare metal is one command. A rack-mounted Ryzen node plus two mini PCs are connected over Tailscale with split DNS.',
       'Caddy reverse proxy with automatic TLS, Restic snapshots to object storage, and Grafana + Loki wired to every container.',
     ],
     notes: [
@@ -444,7 +445,7 @@ export const CATALOG: Project[] = [
     hue: '#5da8e8',
     wip: true,
     money: false,
-    line: 'an all-or-nothing scheduler that places big AI training jobs across a fleet of GPUs, built in Go and Python',
+    line: 'systems-learning scheduler for all-or-nothing GPU jobs, built in Go and Python',
     seek: { from: 'go port', to: 'python port', pct: 45 },
     links: [],
     metrics: [
@@ -453,8 +454,8 @@ export const CATALOG: Project[] = [
       ['simulated', 'fleet runs on fake GPUs, so no costly hardware'],
     ],
     about: [
-      'Big AI training runs need many GPUs at the same moment: if even one is missing, the whole job stalls and the rest sit idle. slurmlet is the traffic controller that holds a job back until every GPU it asks for is free, then starts them all together, so expensive hardware never waits half-used while a run gets the machines it needs.',
-      'It is built twice, once in Go and once in Python, against one shared design, so the two implementations can be compared head to head on the same problem (and the trade-offs each language makes show up first-hand). Everything runs against a simulated fleet of stand-in GPUs, so the full lifecycle, scheduling a job, draining a machine, and rescheduling, is exercised without renting expensive hardware. The Go version is active; the Python version lands next.',
+      'A systems-learning project around one scheduling problem: a big training job should start only when every GPU it asked for is free. slurmlet holds the job back until the full set is available, then reserves them together.',
+      'It is built twice, Go first and Python next, against a simulated GPU fleet so Dylan can compare implementations without renting hardware or claiming production readiness.',
     ],
     notes: [
       'All-or-nothing start: a job only runs once every GPU it needs is reserved, so none sit idle waiting.',
@@ -484,7 +485,7 @@ export const CATALOG: Project[] = [
     hue: '#d678b6',
     wip: false,
     money: false,
-    line: 'freelance ecommerce: browse, pay, ship, track',
+    line: 'client ecommerce site: browse, pay, ship, track, and hand off',
     seek: { from: 'wireframe', to: 'handoff', pct: 100 },
     links: [['Live site ↗', 'https://bellasbeads.shop']],
     metrics: [
@@ -493,8 +494,8 @@ export const CATALOG: Project[] = [
       ['2', 'checkout flows: guest + account'],
     ],
     about: [
-      'A full ecommerce platform for a handmade-jewelry business. Guest and authenticated checkout, order history, shipment tracking, saved addresses, and an admin dashboard for products and inventory.',
-      'React + TypeScript frontend, Node/Express backend, Postgres via Supabase, Stripe payments, Shippo shipping labels, Resend transactional email. Each one carries its own webhook patterns and failure modes, reconciled into one order lifecycle.',
+      'A shipped client ecommerce platform for a handmade-jewelry business. It covers the full lifecycle: product browsing, guest and account checkout, order history, shipment tracking, saved addresses, and admin operations for products and inventory.',
+      'React + TypeScript frontend, Node/Express backend, Postgres via Supabase, Stripe payments, Shippo shipping labels, Resend transactional email. Each integration has its own webhook and failure modes, reconciled into one order lifecycle before production handoff.',
     ],
     notes: [
       'CSRF protection, rate limiting, and HMAC token hashing throughout.',
@@ -525,7 +526,7 @@ export const CATALOG: Project[] = [
     hue: '#ef8354',
     wip: false,
     money: false,
-    line: 'band site with a 3D-flippable album hero',
+    line: 'low-maintenance band site with Google Calendar as CMS',
     seek: { from: 'build', to: 'live', pct: 100 },
     links: [['Live site ↗', 'https://nohardfeelings.app']],
     metrics: [
@@ -534,8 +535,8 @@ export const CATALOG: Project[] = [
       ['live', 'nohardfeelings.app'],
     ],
     about: [
-      'A website for No Hard Feelings, a classic-rock cover band in NJ/NY. Show dates, band bios, live videos, and booking in one place.',
-      'Astro + React + Tailwind. The hero is a 3D-flippable album cover: the front is navigation styled as a tracklist, the back has band bios. Show dates pull from the band’s Google Calendar: they add a gig, the site updates, no database and no code changes.',
+      'A low-maintenance site for No Hard Feelings, a classic-rock cover band in NJ/NY. Show dates, band bios, live videos, and booking are in one place.',
+      'Astro + React + Tailwind. The 3D-flippable album hero gives the site a polished band feel; Google Calendar acts as the CMS, so show dates update when the band edits the calendar.',
     ],
     notes: [
       'Google Calendar acts as the band’s CMS; the site needs zero maintenance.',
@@ -564,7 +565,7 @@ export const CATALOG: Project[] = [
     hue: '#5da8e8',
     wip: false,
     money: false,
-    line: 'NYC work-order management: request → assign → invoice',
+    line: 'team coursework app for request → work order → contractor → invoice',
     seek: { from: 'request', to: 'invoice', pct: 100 },
     links: [['View repo ↗', 'https://github.com/apolydore/Work-Order-Management-System']],
     metrics: [
@@ -573,8 +574,8 @@ export const CATALOG: Project[] = [
       ['NYC', 'open-data contract seed'],
     ],
     about: [
-      'A web app for managing construction and maintenance work orders across NYC, built as a four-person group project for Web Programming during the Master’s. External users submit job requests; admins convert them to work orders, assign contractors, track progress, and issue invoices.',
-      'Express 5 with raw-driver MongoDB, Handlebars templating, session auth with bcrypt, and company seed data from a NYC open-data set of awarded construction contracts.',
+      'A four-person Web Programming project that models a full construction-maintenance workflow: external users submit requests, admins convert them to work orders, assign contractors, track progress, and issue invoices.',
+      'Express 5 with raw-driver MongoDB, Handlebars templating, session auth with bcrypt, and NYC open-data seed records for awarded construction contracts.',
     ],
     notes: [
       'Invoice lifecycle: charge-code validation, line totals, tax, and four states.',
@@ -604,7 +605,7 @@ export const CATALOG: Project[] = [
     hue: '#50c878',
     wip: false,
     money: false,
-    line: 'eight models against twenty years of Premier League data',
+    line: 'ML coursework comparing eight models on one Premier League split',
     seek: { from: 'raw data', to: 'xgboost', pct: 100 },
     links: [['Notebook ↗', 'https://colab.research.google.com/drive/1H1BQdfM5U6SsSEviFrj3zUG60k2ZLCgX']],
     metrics: [
@@ -614,18 +615,18 @@ export const CATALOG: Project[] = [
       ['20 yrs', 'of match data'],
     ],
     about: [
-      'A group project predicting English Premier League outcomes from 20+ years of match data, using 39 features covering goals, streaks, differentials, and form. Eight models trained on the same split: Random Forest, MLP, Decision Tree, KNN, Naive Bayes, Logistic Regression, XGBoost, SVM.',
-      'XGBoost finished at ~99% accuracy with SVM and Logistic Regression close behind. Feature engineering moved accuracy more than model choice.',
+      'An ML-learning group project using 20+ years of English Premier League data. The team engineered 39 features for goals, streaks, differentials, and form, then trained eight models on the same train/test split.',
+      'XGBoost reached the top reported accuracy on that split, with SVM and Logistic Regression close behind. The useful lesson was that cleaning and feature work moved results more than swapping model families.',
     ],
     notes: [
       'Same train/test split across all eight models for a fair comparison.',
       'Cleaning, imputation, and feature work drove most of the gains.',
-      'Groundwork for the later sports-ML and quant projects.',
+      'Coursework context, not a claim of predictive edge.',
     ],
     stack: [
       ['Language', 'python'],
       ['Models', '8-way comparison'],
-      ['Winner', 'xgboost ~99%'],
+      ['Result', 'xgboost top on split'],
       ['Data', 'kaggle · 20 yrs epl'],
     ],
     shots: [
@@ -645,7 +646,7 @@ export const CATALOG: Project[] = [
     hue: '#969aa6',
     wip: false,
     money: false,
-    line: 'no edge after costs, retired with a post-mortem',
+    line: 'disciplined negative-result options research, retired after costs',
     seek: { from: '2021', to: 'retired', pct: 100 },
     links: [],
     metrics: [
@@ -654,8 +655,8 @@ export const CATALOG: Project[] = [
       ['1', 'post-mortem published'],
     ],
     about: [
-      'QuantConnect backtests of 0DTE SPY iron condors across 2021–2024. Walk-forward testing with an honest cost model found no edge after costs.',
-      'Retired on that evidence. The post-mortem documents the cost model and what would change the verdict.',
+      'A disciplined trading-research post-mortem, not a standing trading system. QuantConnect tests covered 0DTE SPY iron condors across 2021–2024, with walk-forward windows and an explicit cost model.',
+      'Retired after the evidence showed no edge after costs. The write-up keeps the cost model and decision criteria on record.',
     ],
     notes: [
       'Four years of walk-forward windows.',
@@ -684,7 +685,7 @@ export const CATALOG: Project[] = [
     hue: '#e6b450',
     wip: false,
     money: false,
-    line: 'agent-harness evals through games',
+    line: 'shelved experiment in repeatable agent-eval game environments',
     seek: { from: 'arena loop', to: 'shelved', pct: 55 },
     links: [],
     metrics: [
@@ -692,8 +693,8 @@ export const CATALOG: Project[] = [
       ['A/B', 'preset comparison design'],
     ],
     about: [
-      'A browser-first evaluation lab for tuning agent-harness presets through games: repeatable measurements of how harness settings change agent behavior.',
-      'Shelved while the trading systems take priority; the arena loop and preset comparison design are in place.',
+      'A shelved experiment in using games as repeatable test beds for agent-harness presets. The browser arena made differences between settings visible enough to compare, instead of relying on vibes.',
+      'Paused when higher-priority portfolio and tooling work took over; the arena loop and preset comparison design remain as the useful artifact.',
     ],
     notes: [
       'Games as eval environments: legible and repeatable.',
@@ -701,7 +702,7 @@ export const CATALOG: Project[] = [
     ],
     stack: [
       ['Language', 'typescript'],
-      ['Shape', 'browser-first lab'],
+      ['Shape', 'agent-eval game lab'],
       ['Status', 'shelved'],
     ],
     shots: [

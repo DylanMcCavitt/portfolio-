@@ -123,7 +123,7 @@ export function personJsonLd(): Record<string, unknown> {
     url: ORIGIN,
     jobTitle: 'Software Engineer',
     description:
-      'Software engineer building agentic systems, trading infrastructure, and iOS apps in NYC.',
+      'Software engineer in NYC building practical tools, client software, and AI-assisted workflows.',
     image: `${ORIGIN}${OG_FALLBACK}`,
     sameAs: [
       'https://github.com/DylanMcCavitt',
