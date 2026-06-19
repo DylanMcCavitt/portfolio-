@@ -2,6 +2,7 @@ import { getVercelOidcToken } from '@vercel/oidc';
 import {
   assertProjectIds,
   assertResumeTrackIds,
+  deriveGroundingContext,
   filterCatalog,
   getContact,
   rankProjects,
@@ -14,6 +15,7 @@ import type {
   EveAnswer,
   EveChatContext,
   EveChatRequest,
+  EveGroundingPacket,
   EveStreamEvent,
   ToolTraceItem,
 } from './contract';
@@ -259,6 +261,8 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
           );
   }
 
+  blocks = applyContextBlockPriorities(blocks, context);
+
   assertAnswerBlocksValid(blocks);
   return { blocks, trace: { count: trace.length, items: trace } };
 }
@@ -293,6 +297,11 @@ export function createEveAgentStream(
   };
   const encoder = new TextEncoder();
   const artifactAnswer = createEveAnswer(request.message, request.context);
+  const groundingContext = deriveGroundingContext(request.message, request.context);
+  if (!groundingContext.remoteCall.required) {
+    return createEveAnswerStream(artifactAnswer, config);
+  }
+
   const artifactBlocks = artifactAnswer.blocks.filter((block) => block.kind !== 'text');
 
   return new ReadableStream<Uint8Array>({
@@ -301,7 +310,7 @@ export function createEveAgentStream(
       let sawDelta = false;
 
       try {
-        const session = await startRemoteSession(config, request.message, runtimeDeps);
+        const session = await startRemoteSession(config, request.message, groundingContext, runtimeDeps);
         enqueueJson(controller, encoder, {
           type: 'ready',
           agent: 'Eve',
@@ -359,7 +368,7 @@ export function createEveAgentStream(
 }
 
 /** Legacy deterministic stream kept for tests and local contract assertions. */
-export function createEveAnswerStream(answer: EveAnswer, config: EveRuntimeConfig): ReadableStream<Uint8Array> {
+export function createEveAnswerStream(answer: EveAnswer, _config: EveRuntimeConfig): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
   return new ReadableStream<Uint8Array>({
@@ -368,7 +377,7 @@ export function createEveAnswerStream(answer: EveAnswer, config: EveRuntimeConfi
         type: 'ready',
         agent: 'Eve',
         trace: answer.trace,
-        provider: config.agentHost,
+        provider: 'portfolio-site',
       });
 
       for (const [index, block] of answer.blocks.entries()) {
@@ -398,15 +407,19 @@ function enqueueJson(
   controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
 }
 
+
 async function startRemoteSession(
   config: EveRuntimeConfig,
   message: string,
+  groundingContext: EveGroundingPacket,
   deps: RemoteDeps,
 ): Promise<RemoteSession> {
+  // Eve 0.11 accepts `clientContext`; keep the visitor message exact and pass
+  // canonical grounding as structured context before runtime dispatch.
   const res = await deps.fetch(`${config.agentHost}/eve/v1/session`, {
     method: 'POST',
     headers: await remoteHeaders(config, deps, true),
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, clientContext: groundingContext }),
   });
 
   if (!res.ok) {
@@ -582,6 +595,46 @@ function fallbackAnswer(text: string): AnswerBlock[] {
       ],
     },
   ];
+}
+
+function applyContextBlockPriorities(blocks: AnswerBlock[], context: EveChatContext): AnswerBlock[] {
+  let next = blocks;
+
+  const projectIds = context.projectIds;
+  if (projectIds?.length) {
+    let sawProjectBlock = false;
+    next = next.map((block) => {
+      if (block.kind !== 'projects') return block;
+      sawProjectBlock = true;
+      return { kind: 'projects', ids: prioritizeIds(block.ids, projectIds) };
+    });
+    if (!sawProjectBlock) next = [...next, { kind: 'projects', ids: projectIds }];
+  }
+
+  const resumeTrackIds = context.resumeTrackIds;
+  if (resumeTrackIds?.length) {
+    let sawResumeBlock = false;
+    next = next.map((block) => {
+      if (block.kind !== 'resume') return block;
+      sawResumeBlock = true;
+      return { kind: 'resume', trackIds: prioritizeIds(block.trackIds, resumeTrackIds) };
+    });
+    if (!sawResumeBlock) next = [...next, { kind: 'resume', trackIds: resumeTrackIds }];
+  }
+
+  return next;
+}
+
+function prioritizeIds(ids: string[], priorityIds: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const id of [...priorityIds, ...ids]) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      next.push(id);
+    }
+  }
+  return next;
 }
 
 function matchesAny(value: string, needles: string[]): boolean {

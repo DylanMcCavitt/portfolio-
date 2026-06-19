@@ -44,11 +44,15 @@ export interface ProjectSummary {
   area: Project['area'];
   status: Project['status'];
   year: number;
+  activity: string;
   line: string;
   wip: boolean;
   money: boolean;
   links: Project['links'];
   metrics: Project['metrics'];
+  about: Project['about'];
+  notes: Project['notes'];
+  stack: Project['stack'];
 }
 
 export interface ResumeTrackSummary {
@@ -69,6 +73,26 @@ export interface ContactBlock {
   status: string;
   resumeHref: string;
   links: [label: string, href: string][];
+}
+
+export type EveGroundingFocus = 'projects' | 'resume' | 'contact' | 'current' | 'general';
+
+export interface EveGroundingPacket {
+  version: 1;
+  source: 'portfolio-site-canonical-data';
+  focus: EveGroundingFocus;
+  projects: ProjectSummary[];
+  resume: {
+    title: string;
+    line: string;
+    about: string;
+    tracks: ResumeTrackSummary[];
+  };
+  remoteCall: {
+    required: boolean;
+    reason: string;
+  };
+  contact?: ContactBlock;
 }
 
 export interface EveAnswer {

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { filterCatalog, getContact, rankProjects, readResume, searchCatalog } from '../src/lib/eve/data-tools';
+import {
+  deriveGroundingContext,
+  filterCatalog,
+  getContact,
+  rankProjects,
+  readResume,
+  searchCatalog,
+} from '../src/lib/eve/data-tools';
 import {
   createEveAgentStream,
   createEveAnswer,
@@ -23,6 +30,8 @@ test('catalog tools search and filter canonical project ids', () => {
 test('ranking and lookup tools fail loudly for bad ids', () => {
   assert.throws(() => rankProjects({ ids: ['missing-project'] }), /Unknown project id/);
   assert.throws(() => readResume({ trackIds: ['missing-track'] }), /Unknown resume track id/);
+  assert.throws(() => deriveGroundingContext('show this', { projectIds: ['missing-project'] }), /Unknown project id/);
+  assert.throws(() => deriveGroundingContext('show this', { resumeTrackIds: ['missing-track'] }), /Unknown resume track id/);
 });
 
 test('contact data is derived from the current resume track', () => {
@@ -33,6 +42,34 @@ test('contact data is derived from the current resume track', () => {
   assert.ok(contact.links.some(([label, href]) => label === 'Resume PDF' && href === '/resume.pdf'));
 });
 
+test('grounding context derives compact canonical data and prioritizes explicit ids', () => {
+  const context = deriveGroundingContext('What should I look at for agent work?', {
+    projectIds: ['dog-log'],
+    resumeTrackIds: ['now'],
+  });
+
+  assert.equal(context.source, 'portfolio-site-canonical-data');
+  assert.equal(context.focus, 'projects');
+  assert.equal(context.projects[0]?.id, 'dog-log');
+  assert.ok(context.projects.some((project) => project.area === 'Agents & MCP'));
+  assert.ok((context.projects[0]?.about.length ?? 0) > 0);
+  assert.equal(context.remoteCall.required, false);
+  assert.match(context.remoteCall.reason, /without waiting/);
+  assert.deepEqual(
+    context.resume.tracks.map((track) => track.id),
+    ['now'],
+  );
+});
+
+test('contact grounding includes canonical contact context and remote-call rationale', () => {
+  const context = deriveGroundingContext('How can I contact Dylan?');
+
+  assert.equal(context.focus, 'contact');
+  assert.equal(context.contact?.email, 'dylanmccavitt@outlook.com');
+  assert.equal(context.remoteCall.required, false);
+  assert.match(context.remoteCall.reason, /without waiting/);
+});
+
 test('answer blocks preserve canonical ids and trace metadata', () => {
   const answer = createEveAnswer('Can he ship iOS apps?');
   const projectBlock = answer.blocks.find((block) => block.kind === 'projects');
@@ -40,6 +77,20 @@ test('answer blocks preserve canonical ids and trace metadata', () => {
   assert.deepEqual(projectBlock, { kind: 'projects', ids: ['dog-log', 'chore-ladder'] });
   assert.equal(answer.trace.count, 1);
   assert.equal(answer.trace.items[0]?.tool, 'filter_catalog');
+});
+
+test('answer artifacts prioritize explicit chat context ids', () => {
+  const answer = createEveAnswer('What should I look at for agent work?', {
+    projectIds: ['dog-log'],
+    resumeTrackIds: ['now'],
+  });
+  const projectBlock = answer.blocks.find((block) => block.kind === 'projects');
+  const resumeBlock = answer.blocks.find((block) => block.kind === 'resume');
+
+  if (projectBlock?.kind !== 'projects') assert.fail('expected project block');
+  if (resumeBlock?.kind !== 'resume') assert.fail('expected resume block');
+  assert.equal(projectBlock.ids[0], 'dog-log');
+  assert.deepEqual(resumeBlock.trackIds, ['now']);
 });
 
 test('unknown and empty questions return visitor-safe fallback blocks', () => {
@@ -61,13 +112,38 @@ test('runtime config points at the deployed portfolio-agent host', () => {
   });
 });
 
-test('portfolio-agent stream is transformed into UI events plus artifact blocks', async () => {
+test('catalog search questions stream immediately without the remote agent', async () => {
   const calls: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
+    calls.push(String(input));
+    return new Response('unexpected remote call', { status: 500 });
+  };
+
+  const config = readEveRuntimeConfig({ EVE_AGENT_HOST: 'http://127.0.0.1:3333' });
+  const stream = createEveAgentStream(
+    { message: 'What should I look at for agent work?' },
+    config,
+    { fetch: fetchImpl },
+  );
+
+  const events = await readNdjson(stream);
+
+  assert.deepEqual(calls, []);
+  assert.equal(events[0].type, 'ready');
+  assert.equal(events[0].provider, 'portfolio-site');
+  assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+  assert.equal(events.at(-1)?.type, 'done');
+});
+
+test('open-ended questions still stream from portfolio-agent with grounding context', async () => {
+  const calls: string[] = [];
+  const sessionBodies: SessionBody[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     calls.push(url);
 
     if (url === 'http://127.0.0.1:3333/eve/v1/session') {
+      sessionBodies.push(JSON.parse(String(init?.body)));
       return new Response(JSON.stringify({ ok: true, sessionId: 'session-1' }), {
         status: 202,
         headers: {
@@ -94,7 +170,7 @@ test('portfolio-agent stream is transformed into UI events plus artifact blocks'
 
   const config = readEveRuntimeConfig({ EVE_AGENT_HOST: 'http://127.0.0.1:3333' });
   const stream = createEveAgentStream(
-    { message: 'What should I look at for agent work?' },
+    { message: 'How should Dylan describe himself?' },
     config,
     { fetch: fetchImpl },
   );
@@ -105,9 +181,14 @@ test('portfolio-agent stream is transformed into UI events plus artifact blocks'
     'http://127.0.0.1:3333/eve/v1/session',
     'http://127.0.0.1:3333/eve/v1/session/session-1/stream',
   ]);
+  assert.equal(sessionBodies.length, 1);
+  assert.equal(sessionBodies[0]?.message, 'How should Dylan describe himself?');
+  assert.equal(sessionBodies[0]?.clientContext?.source, 'portfolio-site-canonical-data');
+  assert.equal(sessionBodies[0]?.clientContext?.focus, 'general');
+  assert.equal(sessionBodies[0]?.clientContext?.remoteCall?.required, true);
   assert.equal(events[0].type, 'ready');
   assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'Agent'));
-  assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+  assert.ok(events.some((event) => hasBlockKind(event, 'links')));
   assert.equal(events.at(-1)?.type, 'done');
 });
 
@@ -138,7 +219,7 @@ test('chat endpoint streams from portfolio-agent when configured', async () => {
       request: new Request('https://example.test/api/eve/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'Can he ship iOS apps?' }),
+        body: JSON.stringify({ message: 'What is his favorite color?' }),
       }),
     } as never);
 
@@ -152,7 +233,7 @@ test('chat endpoint streams from portfolio-agent when configured', async () => {
 
     assert.equal(events[0].type, 'ready');
     assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'hello'));
-    assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+    assert.ok(events.some((event) => hasBlockKind(event, 'links')));
     assert.equal(events.at(-1)?.type, 'done');
   } finally {
     restoreEnv('EVE_AGENT_HOST', previousHost);
@@ -187,6 +268,16 @@ test('chat endpoint fails safely when runtime env is missing', async () => {
 });
 
 type JsonEvent = { type?: string; [key: string]: unknown };
+type SessionBody = {
+  message?: string;
+  clientContext?: {
+    source?: string;
+    focus?: string;
+    projects?: unknown[];
+    remoteCall?: { required?: boolean };
+  };
+};
+
 
 function hasBlockKind(event: JsonEvent, kind: string): boolean {
   const block = event.block;
