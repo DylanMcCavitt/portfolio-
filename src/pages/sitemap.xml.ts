@@ -6,8 +6,9 @@
  * aligned with the canonical redesign route set. Retired
  * Sera-era URLs are handled by `vercel.json` 301s and never appear here.
  *
- * Canonical set (32 URLs):
+ * Canonical set (33 URLs):
  *   /                        — the concierge landing (#60)
+ *   /fit-check               — recruiter job-description fit-check flow (#108)
  *   /hiring                  — the "I'm hiring" guided tour (#62)
  *   /library                 — all-work library (relocated from `/` in #60)
  *   /library/<slug>          — 8 filtered project indexes (wip, 7 areas)
@@ -30,6 +31,7 @@ import { RESUME } from '../data/resume';
 function canonicalPaths(): string[] {
   return [
     '/',
+    '/fit-check/',
     '/hiring/',
     '/library/',
     ...Object.values(PLAYLIST_SLUGS).map((slug) => `/library/${slug}/`),

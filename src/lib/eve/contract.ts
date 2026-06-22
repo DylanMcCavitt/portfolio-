@@ -19,6 +19,12 @@ export interface EveConversationMessage {
 export interface EveChatContext {
   projectIds?: string[];
   resumeTrackIds?: string[];
+  fitCheck?: {
+    kind: 'job-description';
+    jobDescription: string;
+    originalLength: number;
+    truncated: boolean;
+  };
 }
 
 export interface EveChatRequest {
@@ -76,7 +82,7 @@ export interface ContactBlock {
   links: [label: string, href: string][];
 }
 
-export type EveGroundingFocus = 'projects' | 'resume' | 'contact' | 'current' | 'general';
+export type EveGroundingFocus = 'projects' | 'resume' | 'contact' | 'current' | 'fit-check' | 'general';
 
 export interface EveGroundingPacket {
   version: 1;
@@ -94,6 +100,12 @@ export interface EveGroundingPacket {
     reason: string;
   };
   contact?: ContactBlock;
+  fitCheck?: {
+    kind: 'job-description';
+    jobDescription: string;
+    originalLength: number;
+    truncated: boolean;
+  };
 }
 
 export type EveGroundingFixtureId =

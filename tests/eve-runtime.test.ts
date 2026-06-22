@@ -18,6 +18,11 @@ import {
   readEveRuntimeConfig,
 } from '../src/lib/eve/runtime';
 import { parseStreamLine, resolveEvidence, validateBlock } from '../src/lib/eve';
+import {
+  FIT_CHECK_CONTEXT_LIMIT,
+  FIT_CHECK_MIN_CHARS,
+  sanitizeJobDescriptionForFitCheck,
+} from '../src/lib/eve/fit-check';
 import { POST } from '../src/pages/api/eve/chat';
 import { GET as GETGroundingFixtures } from '../src/pages/api/eve/grounding-fixtures.json';
 
@@ -267,6 +272,47 @@ test('evidence resolution drops stale ids without throwing', () => {
   }
 });
 
+test('fit-check sanitizes and bounds pasted job descriptions', () => {
+  const pasted = [
+    'Contact recruiter@example.com or visit https://jobs.example.test/private.',
+    'Call +1 (212) 555-0199 for details.',
+    'We need a software engineer with backend systems, automation, AI tools, product judgment, reliability, testing, and clear communication.',
+    'Extra context '.repeat(900),
+  ].join('\n\n');
+
+  const sanitized = sanitizeJobDescriptionForFitCheck(pasted);
+
+  assert.ok(sanitized.jobDescription.length <= FIT_CHECK_CONTEXT_LIMIT);
+  assert.equal(sanitized.truncated, true);
+  assert.equal(sanitized.originalLength, pasted.length);
+  assert.ok(!sanitized.jobDescription.includes('recruiter@example.com'));
+  assert.ok(!sanitized.jobDescription.includes('https://jobs.example.test/private'));
+  assert.ok(!sanitized.jobDescription.includes('(212) 555-0199'));
+});
+
+test('fit-check grounding returns conservative evidence blocks without remote synthesis', () => {
+  const jobDescription =
+    'Software engineer role focused on backend services, automation, AI tooling, product judgment, reliability, testing, customer-facing shipping, and clear communication. '.repeat(4);
+  const fitCheck = {
+    kind: 'job-description' as const,
+    ...sanitizeJobDescriptionForFitCheck(jobDescription),
+  };
+  const context = deriveGroundingContext('Fit-check this role', { fitCheck });
+  const answer = createEveAnswer('Fit-check this role', { fitCheck });
+
+  assert.equal(context.focus, 'fit-check');
+  assert.equal(context.remoteCall.required, false);
+  assert.match(context.remoteCall.reason, /without sending the paste to a remote agent/);
+  assert.ok((context.fitCheck?.jobDescription.length ?? 0) >= FIT_CHECK_MIN_CHARS);
+  assert.ok(answer.blocks.some((block) => block.kind === 'text' && /Fit summary:/.test(block.text)));
+  assert.ok(answer.blocks.some((block) => block.kind === 'text' && /Gaps or unknowns:/.test(block.text)));
+  assert.ok(answer.blocks.some((block) => block.kind === 'projects'));
+  assert.ok(answer.blocks.some((block) => block.kind === 'resume'));
+  assert.ok(answer.blocks.some((block) => block.kind === 'contact'));
+  assert.ok(answer.blocks.some((block) => block.kind === 'text' && /not a match score/.test(block.text)));
+  assert.ok(!JSON.stringify(answer.blocks).includes('100%'));
+});
+
 test('unknown and empty questions return visitor-safe fallback blocks', () => {
   const unknown = createEveAnswer('what is his favorite breakfast cereal?');
   assert.ok(unknown.blocks.some((block) => block.kind === 'text'));
@@ -311,6 +357,45 @@ test('catalog search questions stream remote prose with deterministic site artif
   assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'These are the strongest agent projects.'));
   assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
   assert.ok(events.some((event) => hasBlockKind(event, 'evidence')));
+  assert.equal(events.at(-1)?.type, 'done');
+});
+
+test('fit-check requests stream through the chat endpoint without calling the remote agent', async () => {
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    calls.push(String(input));
+    return new Response('unexpected remote call', { status: 500 });
+  };
+  const jobDescription =
+    'Backend software engineer role needing automation, AI tooling, testing, reliability, product judgment, clear communication, and shipped customer-facing systems. '.repeat(4);
+  const fitCheck = {
+    kind: 'job-description' as const,
+    ...sanitizeJobDescriptionForFitCheck(jobDescription),
+  };
+
+  const config = readEveRuntimeConfig({ EVE_AGENT_HOST: 'http://127.0.0.1:3333' });
+  const stream = createEveAgentStream(
+    {
+      message: 'Fit-check this job description against Dylan’s portfolio and resume.',
+      context: { fitCheck },
+    },
+    config,
+    { fetch: fetchImpl },
+  );
+
+  const events = await readNdjson(stream);
+
+  assert.deepEqual(calls, []);
+  assert.equal(events[0].type, 'ready');
+  assert.equal(events[0].provider, 'portfolio-site');
+  assert.ok(events.some((event) => hasTextBlockMatching(event, /Fit summary:/)));
+  assert.ok(events.some((event) => hasTextBlockMatching(event, /Strongest evidence projects:/)));
+  assert.ok(events.some((event) => hasTextBlockMatching(event, /Resume\/background evidence:/)));
+  assert.ok(events.some((event) => hasTextBlockMatching(event, /Gaps or unknowns:/)));
+  assert.ok(events.some((event) => hasTextBlockMatching(event, /Next contact steps:/)));
+  assert.ok(events.some((event) => hasBlockKind(event, 'projects')));
+  assert.ok(events.some((event) => hasBlockKind(event, 'resume')));
+  assert.ok(events.some((event) => hasBlockKind(event, 'contact')));
   assert.equal(events.at(-1)?.type, 'done');
 });
 
@@ -536,6 +621,66 @@ test('chat endpoint streams from portfolio-agent when configured', async () => {
   }
 });
 
+test('chat endpoint validates fit-check pasted context safely', async () => {
+  const previousHost = process.env.EVE_AGENT_HOST;
+  const previousFetch = globalThis.fetch;
+
+  process.env.EVE_AGENT_HOST = 'http://127.0.0.1:3333';
+  globalThis.fetch = (async () => new Response('unexpected remote call', { status: 500 })) as typeof fetch;
+
+  try {
+    const tooShort = await POST({
+      request: new Request('https://example.test/api/eve/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Fit-check this job description.',
+          context: {
+            fitCheck: {
+              kind: 'job-description',
+              jobDescription: 'short',
+              originalLength: 5,
+              truncated: false,
+            },
+          },
+        }),
+      }),
+    } as never);
+    assert.equal(tooShort.status, 400);
+    assert.match(JSON.stringify(await tooShort.json()), /at least/);
+
+    const valid = await POST({
+      request: new Request('https://example.test/api/eve/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Fit-check this job description.',
+          context: {
+            fitCheck: {
+              kind: 'job-description',
+              jobDescription:
+                'Software engineer role needing backend services, automation, AI tooling, testing, reliability, product judgment, customer-facing shipping, and communication. '.repeat(3),
+              originalLength: 450,
+              truncated: false,
+            },
+          },
+        }),
+      }),
+    } as never);
+    const events = (await valid.text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+
+    assert.equal(valid.status, 200);
+    assert.ok(events.some((event) => hasTextBlockMatching(event, /Fit summary:/)));
+    assert.ok(events.some((event) => hasBlockKind(event, 'contact')));
+  } finally {
+    restoreEnv('EVE_AGENT_HOST', previousHost);
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('chat endpoint fails safely when runtime env is missing', async () => {
   const previousHost = process.env.EVE_AGENT_HOST;
 
@@ -625,6 +770,20 @@ function blocksOfKind(events: JsonEvent[], kind: string): JsonEvent[] {
   return events
     .filter((event) => hasBlockKind(event, kind))
     .map((event) => event.block as JsonEvent);
+}
+
+function hasTextBlockMatching(event: JsonEvent, pattern: RegExp): boolean {
+  const block = event.block;
+  return (
+    event.type === 'block' &&
+    typeof block === 'object' &&
+    block !== null &&
+    'kind' in block &&
+    (block as { kind: unknown }).kind === 'text' &&
+    'text' in block &&
+    typeof (block as { text: unknown }).text === 'string' &&
+    pattern.test((block as { text: string }).text)
+  );
 }
 
 async function readNdjson(stream: ReadableStream<Uint8Array>): Promise<JsonEvent[]> {
