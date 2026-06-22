@@ -375,6 +375,26 @@ test('mixed remote and site artifacts dedupe canonical project ids', async () =>
   assert.ok(supplemental.ids.length > 0);
 });
 
+test('mixed remote and site artifacts preserve evidence summaries', async () => {
+  const events = await readAgentStreamEvents(
+    [
+      {
+        type: 'answer.block',
+        data: { kind: 'projects', ids: ['agentic-trader'] },
+      },
+      { type: 'message.appended', data: { messageDelta: 'Use this shortlist.' } },
+    ],
+    'What should I look at for agent work?',
+  );
+
+  const evidenceBlocks = blocksOfKind(events, 'evidence');
+  assert.equal(evidenceBlocks.length, 1);
+  const evidence = evidenceBlocks[0] as { kind?: unknown; projectIds?: unknown; resumeTrackIds?: unknown };
+  assert.equal(evidence.kind, 'evidence');
+  assert.ok(Array.isArray(evidence.projectIds));
+  assert.ok(evidence.projectIds.includes('agentic-trader'));
+});
+
 test('chat endpoint streams from portfolio-agent when configured', async () => {
   const previousHost = process.env.EVE_AGENT_HOST;
   const previousFetch = globalThis.fetch;

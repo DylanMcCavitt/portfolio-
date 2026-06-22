@@ -670,6 +670,8 @@ function dedupeArtifactBlocks(siteBlocks: ArtifactBlock[], remoteBlocks: AnswerB
     } else if (block.kind === 'links') {
       const items = block.items.filter(([, href]) => !seenLinkHrefs.has(canonicalHref(href)));
       if (items.length) next.push({ kind: 'links', items });
+    } else if (block.kind === 'evidence') {
+      next.push(block);
     }
   }
   return next;
