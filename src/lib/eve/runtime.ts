@@ -4,6 +4,7 @@ import {
   assertResumeTrackIds,
   deriveGroundingContext,
   filterCatalog,
+  fitCheckResumeTrackIds,
   getContact,
   rankProjects,
   readResume,
@@ -117,7 +118,65 @@ export function createEveAnswer(message: string, context: EveChatContext = {}): 
 
   let blocks: AnswerBlock[];
 
-  if (!query) {
+  if (context.fitCheck) {
+    const ranked = rankProjects({ intent: context.fitCheck.jobDescription, limit: 4 });
+    const resume = readResume({ trackIds: context.resumeTrackIds ?? fitCheckResumeTrackIds() });
+    const contact = getContact();
+    const projectTitles = ranked.projects.map((project) => project.title).join(', ');
+    const resumeTitles = resume.tracks.map((track) => track.title).join(', ');
+
+    addTrace({
+      tool: 'rank_projects',
+      input: {
+        intent: 'bounded job-description context',
+        limit: 4,
+        truncated: context.fitCheck.truncated,
+      },
+      resultCount: ranked.projects.length,
+      label: 'rank_projects selected strongest fit-check evidence',
+    });
+    addTrace({
+      tool: 'read_resume',
+      input: { trackIds: resume.tracks.map((track) => track.id) },
+      resultCount: resume.tracks.length,
+      label: 'read_resume returned background evidence',
+    });
+    addTrace({
+      tool: 'get_contact',
+      input: {},
+      resultCount: contact.links.length,
+      label: 'get_contact returned next contact steps',
+    });
+
+    blocks = [
+      {
+        kind: 'text',
+        text:
+          "Fit summary: this is an evidence map from Dylan's public portfolio and resume, not a match score or hiring guarantee. The strongest visible overlap is where the role calls for practical engineering, product judgment, automation, backend work, or AI-assisted tools.",
+      },
+      {
+        kind: 'text',
+        text: `Strongest evidence projects: ${projectTitles || 'the current catalog does not expose a close project match for this paste.'}`,
+      },
+      { kind: 'projects', ids: ranked.projects.map((project) => project.id) },
+      {
+        kind: 'text',
+        text: `Resume/background evidence: ${resumeTitles}. These are the canonical resume entries DM can ground today.`,
+      },
+      { kind: 'resume', trackIds: resume.tracks.map((track) => track.id) },
+      {
+        kind: 'text',
+        text:
+          'Gaps or unknowns: DM only knows the portfolio and resume data on this site. Treat anything not shown here, such as a specific enterprise stack, domain certification, or team-process requirement, as something to confirm with Dylan directly.',
+      },
+      {
+        kind: 'text',
+        text: `Next contact steps: email Dylan at ${contact.email}, review the resume PDF, or ask a follow-up about one requirement from the job description.`,
+      },
+      { kind: 'contact' },
+      { kind: 'links', items: contact.links },
+    ];
+  } else if (!query) {
     blocks = fallbackAnswer("Ask me about Dylan's projects, shipped work, background, current side projects, or contact details.");
   } else if (matchesAny(normalized, ['contact', 'reach', 'email', 'hire', 'open to work', 'available'])) {
     const resume = readResume({ trackIds: ['now'] });
@@ -310,6 +369,10 @@ export function createEveAgentStream(
   const encoder = new TextEncoder();
   const artifactAnswer = createEveAnswer(request.message, request.context);
   const groundingContext = deriveGroundingContext(request.message, request.context);
+  if (groundingContext.focus === 'fit-check' && !groundingContext.remoteCall.required) {
+    return createEveAnswerStream(artifactAnswer, config);
+  }
+
   const artifactBlocks = artifactAnswer.blocks.filter(isArtifactBlock);
 
   return new ReadableStream<Uint8Array>({

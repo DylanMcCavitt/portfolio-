@@ -158,6 +158,30 @@ export function deriveGroundingContext(message: string, context: EveChatContext 
   if (context.resumeTrackIds) assertResumeTrackIds(context.resumeTrackIds);
 
   const query = message.trim();
+  if (context.fitCheck) {
+    const projects = groundingProjects(
+      context.fitCheck.jobDescription,
+      context.fitCheck.jobDescription.toLowerCase(),
+      'fit-check',
+      context.projectIds,
+    );
+
+    return {
+      version: 1,
+      source: 'portfolio-site-canonical-data',
+      focus: 'fit-check',
+      projects,
+      resume: readResume({ trackIds: fitCheckResumeTrackIds() }),
+      remoteCall: {
+        required: false,
+        reason:
+          'The job-description fit check is assembled from bounded pasted context and canonical portfolio/resume data without sending the paste to a remote agent.',
+      },
+      contact: getContact(),
+      fitCheck: context.fitCheck,
+    };
+  }
+
   const normalized = query.toLowerCase();
   const focus = groundingFocus(normalized);
   const projects = groundingProjects(query, normalized, focus, context.projectIds);
@@ -335,6 +359,8 @@ function remoteCallReason(focus: EveGroundingFocus, required: boolean): string {
         return 'The project search answer can be served from canonical catalog matches without waiting for the remote agent.';
       case 'current':
         return 'The current-work answer can be served from canonical WIP project and resume data without waiting for the remote agent.';
+      case 'fit-check':
+        return 'The fit-check answer can be served from bounded pasted context and canonical portfolio/resume data without waiting for the remote agent.';
       case 'general':
         return 'The visitor question matched canonical catalog context, so the site can answer immediately.';
     }
@@ -383,6 +409,10 @@ function appendProjects(target: ProjectSummary[], next: ProjectSummary[]): void 
   for (const project of next) {
     if (!target.some((item) => item.id === project.id)) target.push(project);
   }
+}
+
+export function fitCheckResumeTrackIds(): string[] {
+  return ['now', 'stevens', 'bella-era', 'kroll'];
 }
 
 function matchesAny(value: string, needles: string[]): boolean {

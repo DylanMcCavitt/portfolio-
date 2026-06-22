@@ -22,11 +22,13 @@
 import {
   AGENT_NAME,
   EVE_ENDPOINT,
+  fitCheckValidationMessage,
   parseStreamLine,
   resolveContact,
   resolveEvidence,
   resolveProjects,
   resolveTracks,
+  sanitizeJobDescriptionForFitCheck,
   type AnswerBlock,
   type ChatMessage,
   type StreamEvent,
@@ -47,6 +49,16 @@ type ElProps = Record<string, string | boolean | undefined>;
 type ChatContext = {
   projectIds?: string[];
   resumeTrackIds?: string[];
+  fitCheck?: {
+    kind: 'job-description';
+    jobDescription: string;
+    originalLength: number;
+    truncated: boolean;
+  };
+};
+type AskOptions = {
+  displayMessage?: string;
+  transientContext?: ChatContext;
 };
 
 function make<K extends keyof HTMLElementTagNameMap>(
@@ -464,6 +476,11 @@ function initRoot(root: HTMLElement): void {
 
   const projectId = root.dataset.eveProjectId?.trim();
   const context = projectId ? { projectIds: [projectId] } : undefined;
+  const fitForm = root.querySelector<HTMLFormElement>('[data-eve-fit-form]');
+  const fitInput = root.querySelector<HTMLTextAreaElement>('[data-eve-fit-input]');
+  const fitSubmit = root.querySelector<HTMLButtonElement>('[data-eve-fit-submit]');
+  const fitCount = root.querySelector<HTMLElement>('[data-eve-fit-count]');
+  const fitError = root.querySelector<HTMLElement>('[data-eve-fit-error]');
 
   const history: ChatMessage[] = [];
   let busy = false;
@@ -475,24 +492,27 @@ function initRoot(root: HTMLElement): void {
   const setBusy = (next: boolean): void => {
     busy = next;
     if (sendBtn) sendBtn.disabled = next;
+    if (fitSubmit) fitSubmit.disabled = next;
   };
 
-  const ask = async (question: string): Promise<void> => {
+  const ask = async (question: string, options: AskOptions = {}): Promise<void> => {
     const message = question.trim();
     if (!message || busy) return;
+    const displayMessage = options.displayMessage?.trim() || message;
+    const requestContext = mergeContext(context, options.transientContext);
     setBusy(true);
     root.classList.add('eve-started');
 
     const historySnapshot = history.slice();
-    history.push({ role: 'user', content: message });
+    history.push({ role: 'user', content: displayMessage });
 
-    const turn = new Turn(message);
+    const turn = new Turn(displayMessage);
     thread.append(turn.root);
     thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
 
     controller = new AbortController();
     try {
-      await streamInto(turn, message, historySnapshot, context, controller.signal);
+      await streamInto(turn, message, historySnapshot, requestContext, controller.signal);
       turn.finishEmptyIfNeeded();
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
@@ -577,6 +597,46 @@ function initRoot(root: HTMLElement): void {
     void ask(text);
   });
 
+  if (fitForm && fitInput) {
+    const updateFitCount = (): void => {
+      if (fitCount) fitCount.textContent = `${fitInput.value.length.toLocaleString()} / ${fitInput.maxLength.toLocaleString()}`;
+      if (fitError) fitError.hidden = true;
+    };
+
+    fitInput.addEventListener('input', updateFitCount);
+    updateFitCount();
+
+    fitForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const raw = fitInput.value;
+      const validation = fitCheckValidationMessage(raw);
+      if (validation) {
+        if (fitError) {
+          fitError.textContent = validation;
+          fitError.hidden = false;
+        }
+        fitInput.focus();
+        return;
+      }
+
+      const sanitized = sanitizeJobDescriptionForFitCheck(raw);
+      fitInput.value = '';
+      updateFitCount();
+      void ask(
+        "Fit-check this job description against Dylan's portfolio and resume. Present a fit summary, strongest evidence projects, resume/background evidence, gaps or unknowns, and next contact steps. Do not assign a match score or imply a hiring guarantee.",
+        {
+          displayMessage: 'Fit-check pasted job description',
+          transientContext: {
+            fitCheck: {
+              kind: 'job-description',
+              ...sanitized,
+            },
+          },
+        },
+      );
+    });
+  }
+
   root.querySelector<HTMLElement>('[data-eve-reset]')?.addEventListener('click', () => {
     controller?.abort();
     controller = null;
@@ -589,3 +649,13 @@ function initRoot(root: HTMLElement): void {
 }
 
 document.querySelectorAll<HTMLElement>('[data-eve-root]').forEach(initRoot);
+
+function mergeContext(base: ChatContext | undefined, transient: ChatContext | undefined): ChatContext | undefined {
+  if (!base && !transient) return undefined;
+  return {
+    ...(base ?? {}),
+    ...(transient ?? {}),
+    projectIds: transient?.projectIds ?? base?.projectIds,
+    resumeTrackIds: transient?.resumeTrackIds ?? base?.resumeTrackIds,
+  };
+}

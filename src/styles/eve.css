@@ -50,6 +50,7 @@
 .eve-body a:focus-visible,
 .eve-body button:focus-visible,
 .eve-body input:focus-visible,
+.eve-body textarea:focus-visible,
 .eve-body summary:focus-visible {
   outline: 2px solid var(--pl-focus);
   outline-offset: 2px;
@@ -212,6 +213,20 @@
 .eve-reset:hover {
   color: var(--pl-text);
   background: var(--pl-panel);
+}
+.eve-fit-link {
+  margin-top: 0;
+  border-top: 1px solid var(--pl-line);
+}
+.eve-section--fit {
+  flex: 1;
+  min-height: 0;
+}
+.eve-fit-note {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--pl-dim);
 }
 
 /* ============ main pane ============ */
@@ -949,6 +964,92 @@ a.eve-contact-row:hover .eve-contact-val {
   box-shadow: 0 10px 34px #00000045;
 }
 
+/* ============ fit-check route ============ */
+.eve-empty--fit {
+  place-items: center;
+  overflow-y: auto;
+  z-index: 2;
+}
+.eve-fit {
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 150px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--pl-panel);
+  border: 1px solid var(--pl-line);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 18px 60px -44px rgba(0, 0, 0, 0.9);
+}
+.eve-fit-head {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.eve-fit-label {
+  margin-top: 4px;
+  font-family: var(--pl-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  color: var(--pl-faint);
+}
+.eve-fit-textarea {
+  width: 100%;
+  min-height: min(34dvh, 300px);
+  max-height: 42dvh;
+  resize: vertical;
+  overflow: auto;
+  color: var(--pl-text);
+  background: var(--pl-bg);
+  border: 1px solid var(--pl-line);
+  border-radius: 10px;
+  padding: 13px 14px;
+  font: inherit;
+  line-height: 1.55;
+}
+.eve-fit-textarea::placeholder {
+  color: var(--pl-faint);
+}
+.eve-fit-textarea:focus {
+  border-color: var(--pl-accent);
+}
+.eve-fit-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--pl-faint);
+  font-family: var(--pl-mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.eve-fit-error {
+  color: var(--pl-amber);
+  font-size: 12.5px;
+}
+.eve-fit-submit {
+  align-self: flex-start;
+  min-height: 38px;
+  padding: 0 15px;
+  border-radius: 9px;
+  background: var(--pl-accent);
+  color: var(--pl-ink);
+  font-weight: 700;
+  transition:
+    transform 0.12s,
+    filter 0.12s;
+}
+.eve-fit-submit:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+.eve-fit-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+  filter: none;
+}
 
 /* ============ project detail popup ============ */
 .project-agent {
@@ -1145,6 +1246,9 @@ a.eve-contact-row:hover .eve-contact-val {
     flex-direction: row;
     align-items: center;
   }
+  .eve-section--fit {
+    display: none;
+  }
   .eve-label {
     display: none;
   }
@@ -1176,6 +1280,19 @@ a.eve-contact-row:hover .eve-contact-val {
   }
   .eve-composer {
     padding: 12px 16px 16px;
+  }
+  .eve-empty--fit {
+    padding: 16px;
+  }
+  .eve-fit {
+    max-height: calc(100dvh - 150px);
+    padding: 16px;
+  }
+  .eve-fit-textarea {
+    min-height: 28dvh;
+  }
+  .eve-fit-meta {
+    flex-direction: column;
   }
   .project-agent-trigger {
     width: 100%;

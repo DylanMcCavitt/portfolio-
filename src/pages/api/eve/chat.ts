@@ -7,6 +7,12 @@ import {
   readEveRuntimeConfig,
 } from '../../../lib/eve/runtime';
 import type { EveChatContext, EveChatRequest } from '../../../lib/eve/contract';
+import {
+  FIT_CHECK_INPUT_LIMIT,
+  FIT_CHECK_MIN_CHARS,
+  FIT_CHECK_REQUEST_BODY_LIMIT,
+  sanitizeJobDescriptionForFitCheck,
+} from '../../../lib/eve/fit-check';
 
 export const prerender = false;
 
@@ -24,6 +30,7 @@ export const POST: APIRoute = async ({ request }) => {
   }
 
   try {
+    assertRequestSize(request);
     const payload = await parseRequest(request);
     return new Response(createEveAgentStream(payload, config), {
       headers: {
@@ -84,6 +91,15 @@ async function parseRequest(request: Request): Promise<EveChatRequest> {
   return { message, conversation, context };
 }
 
+function assertRequestSize(request: Request): void {
+  const contentLength = request.headers.get('content-length');
+  if (!contentLength) return;
+  const size = Number.parseInt(contentLength, 10);
+  if (Number.isFinite(size) && size > FIT_CHECK_REQUEST_BODY_LIMIT) {
+    throw badRequest('Request body is too large.');
+  }
+}
+
 function parseConversation(value: unknown): EveChatRequest['conversation'] {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw badRequest('conversation must be an array when provided.');
@@ -117,6 +133,7 @@ function parseContext(value: unknown): EveChatContext | undefined {
   return {
     projectIds: parseStringArray(record.projectIds, 'context.projectIds'),
     resumeTrackIds: parseStringArray(record.resumeTrackIds, 'context.resumeTrackIds'),
+    fitCheck: parseFitCheckContext(record.fitCheck),
   };
 }
 
@@ -128,6 +145,39 @@ function parseStringArray(value: unknown, field: string): string[] | undefined {
     if (typeof item !== 'string') throw badRequest(`${field} entries must be strings.`);
     return item;
   });
+}
+
+function parseFitCheckContext(value: unknown): EveChatContext['fitCheck'] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object') {
+    throw badRequest('context.fitCheck must be an object when provided.');
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.kind !== 'job-description') {
+    throw badRequest('context.fitCheck.kind must be job-description.');
+  }
+  if (typeof record.jobDescription !== 'string') {
+    throw badRequest('context.fitCheck.jobDescription must be a string.');
+  }
+  if (record.jobDescription.length > FIT_CHECK_INPUT_LIMIT) {
+    throw badRequest(`context.fitCheck.jobDescription must be ${FIT_CHECK_INPUT_LIMIT} characters or fewer.`);
+  }
+
+  const sanitized = sanitizeJobDescriptionForFitCheck(record.jobDescription);
+  if (sanitized.jobDescription.length < FIT_CHECK_MIN_CHARS) {
+    throw badRequest(`context.fitCheck.jobDescription must be at least ${FIT_CHECK_MIN_CHARS} characters after sanitizing.`);
+  }
+
+  return {
+    kind: 'job-description',
+    jobDescription: sanitized.jobDescription,
+    originalLength:
+      typeof record.originalLength === 'number' && Number.isFinite(record.originalLength)
+        ? Math.max(0, Math.trunc(record.originalLength))
+        : sanitized.originalLength,
+    truncated: Boolean(record.truncated) || sanitized.truncated,
+  };
 }
 
 function jsonError(status: number, code: string, message: string): Response {

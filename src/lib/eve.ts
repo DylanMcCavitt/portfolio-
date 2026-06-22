@@ -22,6 +22,13 @@
 
 import { CATALOG, type Project } from '../data/catalog';
 import { RESUME, type ResumeTrack } from '../data/resume';
+export {
+  FIT_CHECK_CONTEXT_LIMIT,
+  FIT_CHECK_INPUT_LIMIT,
+  FIT_CHECK_MIN_CHARS,
+  fitCheckValidationMessage,
+  sanitizeJobDescriptionForFitCheck,
+} from './eve/fit-check';
 
 /** The portfolio agent's name. */
 export const AGENT_NAME = 'DM';
