@@ -46,6 +46,8 @@ interface RemoteEveEvent {
   data?: unknown;
 }
 
+type ArtifactBlock = Exclude<AnswerBlock, { kind: 'text' }>;
+
 export class EveRuntimeConfigError extends Error {
   readonly missing: string[];
 
@@ -298,16 +300,14 @@ export function createEveAgentStream(
   const encoder = new TextEncoder();
   const artifactAnswer = createEveAnswer(request.message, request.context);
   const groundingContext = deriveGroundingContext(request.message, request.context);
-  if (!groundingContext.remoteCall.required) {
-    return createEveAnswerStream(artifactAnswer, config);
-  }
-
-  const artifactBlocks = artifactAnswer.blocks.filter((block) => block.kind !== 'text');
+  const artifactBlocks = artifactAnswer.blocks.filter(isArtifactBlock);
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       let finalText = '';
       let sawDelta = false;
+      const remoteBlocks: AnswerBlock[] = [];
+      let blockIndex = 0;
 
       try {
         const session = await startRemoteSession(config, request.message, groundingContext, runtimeDeps);
@@ -328,27 +328,37 @@ export function createEveAgentStream(
 
         await streamRemoteSession(config, session.sessionId, runtimeDeps, (event) => {
           const transformed = transformRemoteEvent(event);
-          if (!transformed) return;
 
-          if (transformed.type === 'text-delta') {
-            sawDelta = true;
-            finalText += transformed.delta;
-          }
-          if (transformed.type === 'block' && transformed.block.kind === 'text') {
-            finalText = transformed.block.text;
-            if (sawDelta) return;
-          }
+          for (const streamEvent of transformed) {
+            if (streamEvent.type === 'text-delta') {
+              sawDelta = true;
+              finalText += streamEvent.delta;
+            }
+            if (streamEvent.type === 'block') {
+              if (streamEvent.block.kind === 'text') {
+                finalText = streamEvent.block.text;
+                if (sawDelta) continue;
+              } else {
+                remoteBlocks.push(streamEvent.block);
+              }
+              streamEvent.index = blockIndex;
+              blockIndex += 1;
+            }
 
-          enqueueJson(controller, encoder, transformed);
+            enqueueJson(controller, encoder, streamEvent);
+          }
         });
 
-        for (const [index, block] of artifactBlocks.entries()) {
-          enqueueJson(controller, encoder, { type: 'block', index, block });
+        const supplementalBlocks = dedupeArtifactBlocks(artifactBlocks, remoteBlocks);
+        for (const block of supplementalBlocks) {
+          enqueueJson(controller, encoder, { type: 'block', index: blockIndex, block });
+          blockIndex += 1;
         }
 
         const answer: AnswerBlock[] = [
           ...(finalText.trim() ? [{ kind: 'text' as const, text: finalText.trim() }] : []),
-          ...artifactBlocks,
+          ...remoteBlocks,
+          ...supplementalBlocks,
         ];
         enqueueJson(controller, encoder, {
           type: 'done',
@@ -510,35 +520,195 @@ function isRemoteTurnBoundary(event: RemoteEveEvent): boolean {
   );
 }
 
-function transformRemoteEvent(event: RemoteEveEvent): EveStreamEvent | null {
+function transformRemoteEvent(event: RemoteEveEvent): EveStreamEvent[] {
+  const events: EveStreamEvent[] = [];
+
   if (event.type === 'message.appended' && isRecord(event.data)) {
-    return typeof event.data.messageDelta === 'string'
-      ? { type: 'text-delta', delta: event.data.messageDelta }
-      : null;
+    if (typeof event.data.messageDelta === 'string') {
+      events.push({ type: 'text-delta', delta: event.data.messageDelta });
+    }
   }
 
   if (event.type === 'message.completed' && isRecord(event.data)) {
-    return typeof event.data.message === 'string'
-      ? { type: 'block', index: 0, block: { kind: 'text', text: event.data.message } }
-      : null;
+    if (typeof event.data.message === 'string') {
+      events.push({ type: 'block', index: 0, block: { kind: 'text', text: event.data.message } });
+    }
   }
 
   if (event.type === 'actions.requested' && isRecord(event.data)) {
-    return { type: 'tool', name: 'portfolio-agent', summary: 'requested an action' };
+    events.push({ type: 'tool', name: 'portfolio-agent', summary: 'requested an action' });
   }
 
   if (event.type === 'action.result' && isRecord(event.data)) {
-    return { type: 'tool', name: 'portfolio-agent', summary: 'received an action result' };
+    events.push({ type: 'tool', name: 'portfolio-agent', summary: 'received an action result' });
   }
 
   if (event.type === 'session.failed' || event.type === 'turn.failed') {
-    return {
+    events.push({
       type: 'error',
       message: 'DM hit an error while answering. Try again, or ask a narrower portfolio question.',
-    };
+    });
   }
 
-  return null;
+  for (const block of extractRemoteAnswerBlocks(event)) {
+    events.push({ type: 'block', block });
+  }
+
+  return events;
+}
+
+function extractRemoteAnswerBlocks(event: RemoteEveEvent): AnswerBlock[] {
+  if (!isRecord(event.data)) return [];
+
+  const candidates: unknown[] = [];
+  collectAnswerBlockCandidates(event.data, candidates);
+
+  const result = event.data.result;
+  if (isRecord(result)) collectAnswerBlockCandidates(result, candidates);
+
+  return candidates
+    .map(validateRemoteAnswerBlock)
+    .filter((block): block is AnswerBlock => block !== null);
+}
+
+function collectAnswerBlockCandidates(data: Record<string, unknown>, candidates: unknown[]): void {
+  if (typeof data.kind === 'string') candidates.push(data);
+  for (const key of ['answerBlock', 'block'] as const) {
+    if (key in data) candidates.push(data[key]);
+  }
+  for (const key of ['answerBlocks', 'blocks'] as const) {
+    const value = data[key];
+    if (Array.isArray(value)) candidates.push(...value);
+  }
+}
+
+function validateRemoteAnswerBlock(value: unknown): AnswerBlock | null {
+  if (!isRecord(value) || typeof value.kind !== 'string') return null;
+
+  try {
+    switch (value.kind) {
+      case 'text':
+        return typeof value.text === 'string' && value.text.trim()
+          ? { kind: 'text', text: value.text }
+          : null;
+      case 'projects': {
+        if (!Array.isArray(value.ids) || !value.ids.every((id) => typeof id === 'string')) return null;
+        const ids = uniqueStrings(value.ids);
+        if (!ids.length) return null;
+        assertProjectIds(ids);
+        return { kind: 'projects', ids };
+      }
+      case 'resume': {
+        if (!Array.isArray(value.trackIds) || !value.trackIds.every((id) => typeof id === 'string')) return null;
+        const trackIds = uniqueStrings(value.trackIds);
+        if (!trackIds.length) return null;
+        assertResumeTrackIds(trackIds);
+        return { kind: 'resume', trackIds };
+      }
+      case 'contact':
+        return { kind: 'contact' };
+      case 'links': {
+        if (!Array.isArray(value.items)) return null;
+        const items: [string, string][] = [];
+        for (const item of value.items) {
+          if (
+            !Array.isArray(item) ||
+            item.length !== 2 ||
+            typeof item[0] !== 'string' ||
+            typeof item[1] !== 'string' ||
+            !item[0].trim() ||
+            !isSafeRemoteHref(item[1])
+          ) {
+            return null;
+          }
+          items.push([item[0].trim(), item[1].trim()]);
+        }
+        return items.length ? { kind: 'links', items: dedupeLinks(items) } : null;
+      }
+      default:
+        return null;
+    }
+  } catch (error) {
+    if (isEveToolError(error)) return null;
+    throw error;
+  }
+}
+
+function dedupeArtifactBlocks(siteBlocks: ArtifactBlock[], remoteBlocks: AnswerBlock[]): ArtifactBlock[] {
+  const seenProjectIds = new Set<string>();
+  const seenResumeTrackIds = new Set<string>();
+  const seenLinkHrefs = new Set<string>();
+  let sawContact = false;
+
+  for (const block of remoteBlocks) {
+    if (block.kind === 'projects') block.ids.forEach((id) => seenProjectIds.add(id));
+    if (block.kind === 'resume') block.trackIds.forEach((id) => seenResumeTrackIds.add(id));
+    if (block.kind === 'contact') sawContact = true;
+    if (block.kind === 'links') block.items.forEach(([, href]) => seenLinkHrefs.add(canonicalHref(href)));
+  }
+
+  const next: ArtifactBlock[] = [];
+  for (const block of siteBlocks) {
+    if (block.kind === 'projects') {
+      const ids = block.ids.filter((id) => !seenProjectIds.has(id));
+      if (ids.length) next.push({ kind: 'projects', ids });
+    } else if (block.kind === 'resume') {
+      const trackIds = block.trackIds.filter((id) => !seenResumeTrackIds.has(id));
+      if (trackIds.length) next.push({ kind: 'resume', trackIds });
+    } else if (block.kind === 'contact') {
+      if (!sawContact) next.push(block);
+    } else if (block.kind === 'links') {
+      const items = block.items.filter(([, href]) => !seenLinkHrefs.has(canonicalHref(href)));
+      if (items.length) next.push({ kind: 'links', items });
+    }
+  }
+  return next;
+}
+
+function isArtifactBlock(block: AnswerBlock): block is ArtifactBlock {
+  return block.kind !== 'text';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      next.push(value);
+    }
+  }
+  return next;
+}
+
+function dedupeLinks(items: [string, string][]): [string, string][] {
+  const seen = new Set<string>();
+  const next: [string, string][] = [];
+  for (const item of items) {
+    const href = canonicalHref(item[1]);
+    if (!seen.has(href)) {
+      seen.add(href);
+      next.push(item);
+    }
+  }
+  return next;
+}
+
+function isSafeRemoteHref(value: string): boolean {
+  const href = value.trim();
+  if (!href) return false;
+  if (href.startsWith('/')) return !href.startsWith('//') && !href.includes('\\');
+
+  try {
+    const url = new URL(href);
+    return url.protocol === 'https:' || url.protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}
+
+function canonicalHref(href: string): string {
+  return href.trim();
 }
 
 async function remoteHeaders(
