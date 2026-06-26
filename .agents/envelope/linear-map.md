@@ -25,7 +25,7 @@ every implementation issue; add risk as triage dictates.
 - **Type:** `Bug`, `Improvement`, `Feature`
 - **Engine routing:**
   - `claude` — UI / layout / presentation work.
-  - `codex` — Eve runtime, data tools, endpoint plumbing, tests, cleanup.
+  - `codex` — DM/runtime, data tools, endpoint plumbing, tests, cleanup.
 - **Risk tier:** `risk:low`, `risk:medium`, `risk:high`
 
 ## States → inserter triage roles
@@ -59,4 +59,4 @@ Blocked, In Review, Human Review, Needs Fixes, Merging, Done, Canceled, Duplicat
 ## Routing
 
 - One issue / one worktree / one branch / one PR.
-- UI implementation → `claude`; Eve runtime / data / plumbing / tests / cleanup → `codex`.
+- UI implementation → `claude`; DM runtime / data / plumbing / tests / cleanup → `codex`.

@@ -1,6 +1,6 @@
 ---
 name: portfolio-agent-first-redesign
-description: Use when working on the portfolio agent-first redesign, Eve runtime, Split-canvas landing, Typographic cards, Editorial project pages, or retiring the Spotify/player shell.
+description: Use when working on the portfolio agent-first redesign, DM runtime, legacy Eve runtime migration, Split-canvas landing, Typographic cards, Editorial project pages, or retiring the Spotify/player shell.
 ---
 
 # Portfolio Agent-First Redesign
@@ -18,14 +18,14 @@ description: Use when working on the portfolio agent-first redesign, Eve runtime
 - Target the issue packet's Desired base branch / immediate stack parent; never target `main` unless a maintainer changes the plan.
 - Keep one issue / one worktree / one branch / one PR.
 - UI implementation routes to Claude.
-- Eve runtime, data tools, endpoint plumbing, tests, and cleanup route to Codex agents/subagents.
-- Use `src/data/catalog.ts` and `src/data/resume.ts` as canonical content; do not duplicate project or résumé facts.
+- DM runtime, data tools, endpoint plumbing, tests, and cleanup route to Codex agents/subagents.
+- Use published DB project records when available, `src/data/catalog.ts` as shadow fallback during migration, and `src/data/resume.ts` for v1 résumé/contact facts; do not duplicate project or résumé facts.
 - Keep copy recruiter-first and jargon-light.
-- Preserve static Astro pages except the deliberate Eve chat island and server endpoint.
+- Preserve static Astro pages except the deliberate DM chat island and server endpoint.
 
 ## Locked design decisions
 
-- Landing: Eve Split-canvas agent UI from `src/pages/prototype/_AgentVariantB.astro`.
+- Landing: Split-canvas agent UI from `src/pages/prototype/_AgentVariantB.astro`; treat Eve naming there as legacy prototype naming and DM as the product seam.
 - Cards: Typographic project card from `src/pages/prototype/_CardsVariantB.astro`.
 - Detail pages: Editorial case study from `src/pages/prototype/_ProjectVariantA.astro`.
 - Retire the Spotify/player shell after replacement production routes exist.
