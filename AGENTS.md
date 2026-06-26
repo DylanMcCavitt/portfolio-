@@ -15,10 +15,12 @@ Default to zero client JS: static `.astro` pages everywhere, React islands only 
 
 ## Design Direction
 
-> **Superseded.** The repo is mid-migration to the **agent-first redesign** (Eve).
-> The authoritative product/design direction is now `.agents/envelope/domain.md`
-> plus `docs/agents/scope-ledger.md`. The Spotify/player-shell description below is
-> historical — the player shell is being retired, not extended.
+> **Superseded.** The repo is mid-migration to the **agent-first redesign** (DM).
+> DM supersedes Eve for new product architecture; Eve-era runtime code is legacy
+> implementation evidence to mine or replace. The authoritative product/design
+> direction is now `.agents/envelope/domain.md` plus `docs/agents/scope-ledger.md`.
+> The Spotify/player-shell description below is historical — the player shell is
+> being retired, not extended.
 
 Current visual direction: the "now playing" player UI — a Spotify-style app shell
 (sidebar, scrolling main, persistent bottom player bar) where projects are tracks
@@ -55,7 +57,7 @@ This repo runs the Factorio workflow kit. The per-repo envelope is the single
 binding point — read it before planning or building:
 
 - `.agents/envelope/linear-map.md` — Linear team (`dmcc`/AGE) + Portfolio project, labels, states, the inserter triage map, and the GitHub bridge.
-- `.agents/envelope/domain.md` — domain glossary (Eve, Split-canvas landing, Typographic card, Editorial detail, answer block, artifact card).
+- `.agents/envelope/domain.md` — domain glossary (DM, Eve legacy evidence, Split-canvas landing, Typographic card, Editorial detail, answer block, artifact card).
 - `.agents/envelope/commands.md` — build/test/lint/run + default branch and the redesign stack.
 - `.agents/envelope/templates/` — PR / issue / project-doc templates.
 

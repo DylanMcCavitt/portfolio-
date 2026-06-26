@@ -6,33 +6,45 @@ this so planning artifacts speak the repo's language.
 ## Audience & north star
 
 - **Audience:** recruiters and hiring managers first; write jargon-light, outcome-focused copy.
-- **North star:** an **agent-first portfolio** — visitors land on **Eve**, a chat
-  agent that answers questions about Dylan and renders project, résumé, and
-  contact artifacts. Recruiter-friendly, jargon-light, static-first outside the
+- **North star:** an **agent-first portfolio** — visitors land on **DM**, the
+  portfolio agent that answers questions about Dylan and renders project, résumé,
+  and contact artifacts. DM supersedes Eve for new product architecture while the
+  experience stays recruiter-friendly, jargon-light, and static-first outside the
   deliberate chat island.
 
 ## Canonical nouns (naming anchors)
 
 Use these exact words; avoid synonyms.
 
-- **Eve** — the portfolio's chat agent. Not "the bot", "assistant", or "chatbot".
+- **DM** — the portfolio's public agent for new architecture. Not "the bot",
+  "assistant", or "chatbot".
+- **Eve** — legacy prototype/runtime name in `agent/`, `src/lib/eve/`, and
+  `/api/eve/chat`; mine or replace this code during migration, but do not add new
+  Eve-specific product seams.
 - **agent-first portfolio** — the product framing.
-- **Split-canvas landing** — the landing UI hosting Eve.
+- **Split-canvas landing** — the landing UI hosting DM.
 - **Typographic project card** — the canonical project card.
 - **Editorial project detail** — the project detail / case-study page.
-- **answer block** — Eve's structured response unit.
-- **tool trace** — the visible record of Eve's tool calls.
+- **answer block** — DM's structured response unit.
+- **tool trace** — the visible record of DM's tool calls.
 - **artifact card** — a rendered project/résumé/contact artifact in an answer.
 - **player shell** — the retired Spotify-style app shell (sidebar + bottom player bar); being replaced, not extended.
 - **`preview/agent-first-redesign`** — the redesign stack root branch.
 
 ## Bounded contexts
 
-- **Content (canonical):** `src/data/catalog.ts` (projects) and
-  `src/data/resume.ts` (résumé + contact). Single source of truth — Eve tools and
-  static pages share these facts; never duplicate project or résumé content.
-- **Eve runtime:** the agent + streaming endpoint + data tools (`agent/`, server route).
-- **Site:** static Astro pages; client JS only for the deliberate Eve chat island.
+- **Content (migration):** published DB project records become the canonical
+  public project source after shadow parity plus one-publish proof.
+  `src/data/catalog.ts` remains a fallback during shadow only; `src/data/resume.ts`
+  remains the v1 résumé/contact source.
+- **Public DM sources:** DM public answers may use only published DB project
+  records, approved public RAG sources, and static résumé/contact data. Never use
+  hidden drafts, private docs, Slack/admin notes, candidate evidence, visitor
+  chats, or unsupported/generated claims as public answer sources.
+- **DM runtime:** the agent/service layer, streaming endpoint, and data tools for
+  the new architecture. Existing Eve paths (`agent/`, `src/lib/eve/`,
+  `/api/eve/chat`) are legacy implementation evidence to mine or replace.
+- **Site:** static Astro pages; client JS only for the deliberate DM chat island.
 
 ## Read first for this repo
 
@@ -44,4 +56,4 @@ Use these exact words; avoid synonyms.
 
 - Keep project copy jargon-light — write for a non-technical reader.
 - Default to static Astro pages; reach for client JavaScript only for deliberate
-  interactive islands such as Eve chat.
+  interactive islands such as DM chat.

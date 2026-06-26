@@ -7,7 +7,7 @@
 ## Overview
 
 One paragraph: what this project delivers and for whom (recruiter-first,
-agent-first portfolio fronted by Eve).
+agent-first portfolio fronted by DM).
 
 ## Context
 
