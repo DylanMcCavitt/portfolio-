@@ -17,7 +17,9 @@
     "verify": "npm run lint && npm run typecheck && npm run build",
     "db:migrate": "tsx scripts/db.ts migrate",
     "db:seed": "tsx scripts/db.ts seed",
-    "db:reset": "tsx scripts/db.ts reset"
+    "db:reset": "tsx scripts/db.ts reset",
+    "db:catalog:shadow": "tsx scripts/catalog-shadow.ts import-and-report",
+    "db:catalog:parity": "tsx scripts/catalog-shadow.ts report"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.0",

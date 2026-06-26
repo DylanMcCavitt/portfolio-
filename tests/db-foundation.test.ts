@@ -3,6 +3,14 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, applySeeds, resetDatabase, type Queryable } from '../scripts/db';
+import { CATALOG } from '../src/data/catalog';
+import {
+  buildCatalogShadowRecords,
+  fetchCatalogShadowRecords,
+  generateCatalogParityReport,
+  importCatalogShadowRecords,
+  type CatalogShadowRecord,
+} from '../src/lib/db/catalog-shadow';
 import {
   CANDIDATE_LIFECYCLE_STATES,
   DRAFT_LIFECYCLE_STATES,
@@ -133,6 +141,59 @@ test('seed and reset path works without external credentials', async () => {
     `SELECT id FROM projects WHERE id = 'seed-foundation-project'`,
   );
   assert.deepEqual(reseeded.rows, [{ id: 'seed-foundation-project' }]);
+});
+
+test('catalog shadow import writes every project as legacy shadow records', async () => {
+  const db = createTestDb();
+  await applyMigrations(db);
+
+  const imported = await importCatalogShadowRecords(db);
+  assert.equal(imported.imported, CATALOG.length);
+  assert.deepEqual(imported.ids, CATALOG.map((project) => project.id));
+
+  const records = await fetchCatalogShadowRecords(db);
+  assert.equal(records.length, CATALOG.length);
+  assert.deepEqual(
+    records.map((record) => record.id).sort(),
+    CATALOG.map((project) => project.id).sort(),
+  );
+
+  for (const record of records) {
+    assert.equal(record.lifecycle_state, 'shadow');
+    assert.equal(record.source, 'legacy_catalog');
+    assert.equal(record.slug, record.id);
+    assert.equal(record.published_at, null);
+    assert.equal(record.archived_at, null);
+  }
+
+  const report = generateCatalogParityReport(records);
+  assert.equal(report.status, 'pass');
+  assert.equal(report.catalogProjectCount, CATALOG.length);
+  assert.equal(report.shadowRecordCount, CATALOG.length);
+  assert.deepEqual(
+    report.sections.map((section) => section.name),
+    ['cards', 'details', 'dm_artifacts', 'seo_og_sitemap', 'media_placeholders', 'external_links', 'fallback'],
+  );
+});
+
+test('catalog parity report names missing extra and mismatched fields', () => {
+  const records = JSON.parse(JSON.stringify(buildCatalogShadowRecords())) as CatalogShadowRecord[];
+  const firstRecord = records[0];
+  assert.ok(firstRecord, 'expected at least one catalog shadow record');
+
+  const snapshot = firstRecord.details[0] as Record<string, unknown>;
+  delete snapshot.about;
+  snapshot.extra_field = 'unexpected';
+  firstRecord.title = 'wrong title';
+
+  const report = generateCatalogParityReport(records);
+  const firstProject = report.projects.find((project) => project.id === firstRecord.id);
+
+  assert.equal(report.status, 'fail');
+  assert.ok(firstProject, 'expected first project parity entry');
+  assert.ok(firstProject.missingFields.includes('about'));
+  assert.ok(firstProject.extraFields.includes('extra_field'));
+  assert.ok(firstProject.mismatchedFields.includes('title'));
 });
 
 test('public project routes remain catalog-backed', async () => {
