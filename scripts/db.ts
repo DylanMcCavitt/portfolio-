@@ -93,7 +93,7 @@ export async function resetDatabase(db: Queryable): Promise<void> {
   }
 }
 
-function createQueryable(): Queryable {
+export function createQueryable(): Queryable {
   const sql = createDbClient();
   return {
     async query<Row = unknown>(query: string, params?: unknown[]) {
