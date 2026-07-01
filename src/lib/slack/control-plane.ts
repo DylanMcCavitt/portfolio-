@@ -1,5 +1,4 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { DATABASE_ENV_KEYS } from '../db/client';
 import {
   scanGithubRepositoryCandidate,
   type GithubDiscoveryScanResult,
@@ -610,53 +609,46 @@ export function safeSlackError(error: unknown): SlackControlPlaneResult {
 
 /**
  * Logs an unexpected control-plane error server-side (Vercel runtime logs) and
- * returns a short correlation ref that is safe to show in Slack. Never logs
- * request bodies or secrets; Postgres error fields (code/table/constraint) are
- * schema-level facts, not data.
+ * returns a short correlation ref that is safe to show in Slack. Logs only
+ * structured facts: the error name, code-location stack frames, and Postgres
+ * schema-level fields (code/table/constraint). Free-text `message`, `detail`,
+ * `routine`, and stringified thrown values never reach logs — they can carry
+ * row data, connection strings, or payload content that no denylist reliably
+ * redacts.
  */
 function logSlackControlPlaneError(error: unknown): string {
   const errorRef = randomUUID().slice(0, 8);
   const details: Record<string, unknown> = { errorRef };
   if (error instanceof Error) {
     details.name = error.name;
-    details.message = redactErrorText(error.message);
-    details.stack = redactErrorText(error.stack ?? '');
+    details.frames = stackFrames(error);
     for (const key of ['code', 'table', 'constraint'] as const) {
       const value = (error as unknown as Record<string, unknown>)[key];
       if (typeof value === 'string') details[`pg_${key}`] = value;
     }
   } else {
-    details.value = redactErrorText(String(error));
+    details.thrownType = typeof error;
   }
   console.error('[slack-control-plane]', JSON.stringify(details));
   return errorRef;
 }
 
 /**
- * Env vars whose values are credentials. Any occurrence of these values in
- * error text is masked before logging, so no secret this system holds can
- * reach logs regardless of which error message carries it. DB keys are
- * derived from the client's own accepted key list.
+ * Extracts only real code-location frame lines ("at fn (file:line:col)") from
+ * a V8 stack trace. The complete `name: message` prefix is removed before any
+ * frame filtering, so multiline message content cannot spoof a frame-shaped
+ * line and reach logs. Unknown stack formats fail closed to no frames.
  */
-const SECRET_ENV_KEYS = ['SLACK_SIGNING_SECRET', ...DATABASE_ENV_KEYS] as const;
-
-/**
- * Strips data-bearing substrings from error text before it reaches logs:
- * Postgres detail values ("Key (col)=(value)…"), URL credentials, and the
- * values of configured secrets. Schema identifiers and error shapes stay
- * intact for correlation.
- */
-function redactErrorText(text: string): string {
-  let redacted = text
-    .replace(/Key \([^)]*\)=\([^)]*\)/g, 'Key (…)=(…)')
-    .replace(/\/\/[^/\s:@]+:[^/\s@]+@/g, '//…:…@');
-  for (const key of SECRET_ENV_KEYS) {
-    const value = process.env[key];
-    if (value && value.length >= 8 && redacted.includes(value)) {
-      redacted = redacted.split(value).join(`[${key}]`);
-    }
-  }
-  return redacted;
+function stackFrames(error: Error): string[] {
+  const stack = error.stack;
+  if (!stack) return [];
+  const prefix = error.message ? `${error.name}: ${error.message}` : error.name;
+  if (!stack.startsWith(prefix)) return [];
+  return stack
+    .slice(prefix.length)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^at .+:\d+:\d+\)?$/.test(line));
 }
 
 function userFacingError(code: string, message: string): SlackUserFacingError {
