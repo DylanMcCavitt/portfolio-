@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { DATABASE_ENV_KEYS } from '../db/client';
 import {
   scanGithubRepositoryCandidate,
   type GithubDiscoveryScanResult,
@@ -634,9 +635,10 @@ function logSlackControlPlaneError(error: unknown): string {
 /**
  * Env vars whose values are credentials. Any occurrence of these values in
  * error text is masked before logging, so no secret this system holds can
- * reach logs regardless of which error message carries it.
+ * reach logs regardless of which error message carries it. DB keys are
+ * derived from the client's own accepted key list.
  */
-const SECRET_ENV_KEYS = ['SLACK_SIGNING_SECRET', 'PORTFOLIO_DATABASE_URL', 'DATABASE_URL'] as const;
+const SECRET_ENV_KEYS = ['SLACK_SIGNING_SECRET', ...DATABASE_ENV_KEYS] as const;
 
 /**
  * Strips data-bearing substrings from error text before it reaches logs:
