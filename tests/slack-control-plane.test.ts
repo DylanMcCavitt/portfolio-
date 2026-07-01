@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { format } from 'node:util';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, type Queryable } from '../scripts/db';
 import { PORTFOLIO_CANDIDATE_TOPIC } from '../src/lib/db/github-discovery';
@@ -179,31 +180,20 @@ test('Slack route returns safe 200 JSON when the request itself fails', async ()
   assert.ok(!String(json.text).includes('sensitive'), 'raw request error details must not leak to Slack');
 });
 
-test('server-side error logs redact data values, not just the Slack response', async (t) => {
+test('server-side error logs carry only structured facts, never free error text', async (t) => {
   const logged: string[] = [];
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
-    logged.push(args.map(String).join(' '));
+    logged.push(format(...args));
   };
   t.after(() => {
     console.error = originalError;
   });
 
   const envSecret = 'env-secret-value-cafebabe123';
-  const fallbackSecret = 'fallback-secret-value-deadbeef456';
-  const originalEnvSecret = process.env.PORTFOLIO_DATABASE_URL;
-  const originalFallbackSecret = process.env.PORTFOLIO_POSTGRES_URL;
-  process.env.PORTFOLIO_DATABASE_URL = envSecret;
-  process.env.PORTFOLIO_POSTGRES_URL = fallbackSecret;
-  t.after(() => {
-    if (originalEnvSecret === undefined) delete process.env.PORTFOLIO_DATABASE_URL;
-    else process.env.PORTFOLIO_DATABASE_URL = originalEnvSecret;
-    if (originalFallbackSecret === undefined) delete process.env.PORTFOLIO_POSTGRES_URL;
-    else process.env.PORTFOLIO_POSTGRES_URL = originalFallbackSecret;
-  });
 
   const pgError = Object.assign(
-    new Error(`duplicate key: Key (email)=(person@example.com) already exists at postgres://user:secret-token@db.example/neon using ${envSecret} then ${fallbackSecret}`),
+    new Error(`duplicate key: Key (email)=(person@example.com) already exists at postgres://user:secret-token@db.example/neon using ${envSecret}\nat postgres://user:frame-credential-only@db.example/neon:123:456`),
     { code: '23505', table: 'project_candidates', constraint: 'project_candidates_pkey', detail: 'Key (email)=(person@example.com) already exists.', routine: 'ExecInsert' },
   );
   const db = {
@@ -222,17 +212,51 @@ test('server-side error logs redact data values, not just the Slack response', a
 
   const logLine = logged.find((line) => line.includes('[slack-control-plane]'));
   assert.ok(logLine, 'expected a [slack-control-plane] error log line');
-  assert.match(logLine, /"errorRef":"[0-9a-f]{8}"/, 'log keeps the correlation ref');
-  assert.ok(logLine.includes('"pg_code":"23505"'), 'log keeps schema-level pg code');
-  assert.ok(logLine.includes('"pg_table":"project_candidates"'), 'log keeps schema-level pg table');
-  assert.ok(!logLine.includes('person@example.com'), 'pg detail data values must not reach logs');
-  assert.ok(!logLine.includes('secret-token'), 'URL credentials must not reach logs');
-  assert.ok(!logLine.includes(envSecret), 'configured secret values must not reach logs');
-  assert.ok(logLine.includes('[PORTFOLIO_DATABASE_URL]'), 'masked secret is replaced by its env key name');
-  assert.ok(!logLine.includes(fallbackSecret), 'every DB client env key value is masked, not just the primary');
-  assert.ok(logLine.includes('[PORTFOLIO_POSTGRES_URL]'), 'fallback DB key mask carries its env key name');
-  assert.ok(!logLine.includes('pg_detail'), 'pg detail field must not be logged at all');
-  assert.ok(!logLine.includes('pg_routine'), 'pg routine field must not be logged');
+  const details = JSON.parse(logLine.slice(logLine.indexOf('{'))) as Record<string, unknown>;
+
+  assert.match(String(details.errorRef), /^[0-9a-f]{8}$/, 'log keeps the correlation ref');
+  assert.equal(details.name, 'Error', 'log keeps the error class name');
+  assert.equal(details.pg_code, '23505', 'log keeps schema-level pg code');
+  assert.equal(details.pg_table, 'project_candidates', 'log keeps schema-level pg table');
+  assert.equal(details.pg_constraint, 'project_candidates_pkey', 'log keeps schema-level pg constraint');
+  assert.equal(details.message, undefined, 'free-text message must not be logged at all');
+  assert.equal(details.pg_detail, undefined, 'pg detail field must not be logged at all');
+  assert.equal(details.pg_routine, undefined, 'pg routine field must not be logged');
+  assert.equal(details.routine, undefined, 'raw routine field must not be logged');
+
+  assert.ok(Array.isArray(details.frames), 'stack is reduced to frame lines');
+  for (const frame of details.frames as string[]) {
+    assert.match(frame, /^at .+:\d+:\d+\)?$/, 'every logged frame is a code location, not error text');
+  }
+
+  const fullLogOutput = logged.join('\n');
+  assert.ok(!fullLogOutput.includes('duplicate key'), 'error message text must not reach logs');
+  assert.ok(!fullLogOutput.includes('person@example.com'), 'pg detail data values must not reach logs');
+  assert.ok(!fullLogOutput.includes('secret-token'), 'URL credentials must not reach logs');
+  assert.ok(!fullLogOutput.includes('frame-credential-only'), 'multiline messages that resemble real frames must not reach logs');
+  assert.ok(!fullLogOutput.includes(envSecret), 'embedded env-style secret values must not reach logs');
+
+  logged.length = 0;
+  const thrownValueSecret = 'non-error-thrown-secret-value';
+  const nonErrorDb = {
+    async query() {
+      throw `plain thrown value with ${thrownValueSecret}`;
+    },
+  } satisfies Queryable;
+  const nonErrorPost = createSlackControlPlanePostHandler({ config: CONFIG, db: nonErrorDb });
+  const nonErrorResponse = await nonErrorPost({ request: signedSlackRequest(body) } as never);
+  const nonErrorJson = await responseJson(nonErrorResponse);
+
+  assert.equal(nonErrorResponse.status, 200);
+  assert.equal(nonErrorJson.ok, false);
+
+  const nonErrorLogLine = logged.find((line) => line.includes('[slack-control-plane]'));
+  assert.ok(nonErrorLogLine, 'expected a [slack-control-plane] log line for non-Error throws');
+  const nonErrorDetails = JSON.parse(nonErrorLogLine.slice(nonErrorLogLine.indexOf('{'))) as Record<string, unknown>;
+  assert.match(String(nonErrorDetails.errorRef), /^[0-9a-f]{8}$/, 'non-Error throw log keeps the correlation ref');
+  assert.equal(nonErrorDetails.thrownType, 'string', 'non-Error throws log only the thrown value type');
+  assert.equal(nonErrorDetails.value, undefined, 'non-Error thrown values must not be stringified into logs');
+  assert.ok(!logged.join('\n').includes(thrownValueSecret), 'non-Error thrown value text must not reach logs');
 });
 
 test('single-user Slack scan trigger routes authorized repo input to GitHub discovery', async () => {
