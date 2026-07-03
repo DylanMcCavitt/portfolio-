@@ -232,6 +232,34 @@ test('evidence block validation accepts canonical ids and rejects unsafe shapes'
     },
   );
 
+  const ragSource = {
+    ragSourceId: 'rag-public',
+    projectId: 'agentic-trader',
+    fileId: 'file_public',
+    filename: 'approved-readme.md',
+    score: 0.91,
+    text: 'Approved public source text cited by DM.',
+  };
+  assert.deepEqual(validateBlock({ kind: 'evidence', ragSources: [ragSource] }), {
+    kind: 'evidence',
+    ragSources: [ragSource],
+  });
+  assert.equal(validateBlock({ kind: 'evidence', ragSources: [{ ragSourceId: 'rag-public', projectId: 'agentic-trader' }] }), null);
+  assert.equal(validateBlock({ kind: 'evidence', ragSources: 'rag-public' }), null);
+
+  assert.deepEqual(
+    parseStreamLine(
+      JSON.stringify({
+        type: 'block',
+        block: { kind: 'evidence', ragSources: [ragSource] },
+      }),
+    ),
+    {
+      type: 'block',
+      block: { kind: 'evidence', ragSources: [ragSource] },
+    },
+  );
+
   const event = parseStreamLine(
     JSON.stringify({
       type: 'block',
@@ -246,6 +274,27 @@ test('evidence block validation accepts canonical ids and rejects unsafe shapes'
     parseStreamLine(JSON.stringify({ type: 'block', block: { kind: 'evidence', projectIds: [42] } })),
     null,
   );
+});
+
+test('rag evidence rejects citations without non-empty text', () => {
+  const citationWithoutText = {
+    ragSourceId: 'rag-public',
+    projectId: 'agentic-trader',
+    fileId: 'file_public',
+    filename: 'approved-readme.md',
+    score: 0.91,
+  };
+  const invalidCases = [
+    { name: 'missing text', citation: citationWithoutText },
+    { name: 'empty text', citation: { ...citationWithoutText, text: '' } },
+    { name: 'blank text', citation: { ...citationWithoutText, text: ' \n\t ' } },
+  ];
+
+  for (const { name, citation } of invalidCases) {
+    const block = { kind: 'evidence', ragSources: [citation] };
+    assert.equal(validateBlock(block), null, name);
+    assert.equal(parseStreamLine(JSON.stringify({ type: 'block', block })), null, name);
+  }
 });
 
 test('evidence resolution drops stale ids without throwing', () => {
