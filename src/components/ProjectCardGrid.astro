@@ -11,9 +11,10 @@
  */
 import ProjectCard from './ProjectCard.astro';
 import type { Project } from '../data/catalog';
+import type { ProjectCardReadModel } from '../lib/db/project-reads';
 
 export interface Props {
-  projects: Project[];
+  projects: (Project | ProjectCardReadModel)[];
 }
 const { projects } = Astro.props;
 ---

@@ -3,24 +3,25 @@
  * Library view — a flat, editorial index of canonical Typographic project
  * cards. Used by `/library` and `/library/[filter]`.
  *
- * The route is intentionally static: the active filter is the URL, and the
- * cards come from `src/data/catalog.ts`.
+ * The active filter is the URL; routes provide the public project read models
+ * from the DB gate or the catalog fallback.
  */
 import ProjectCardGrid from './ProjectCardGrid.astro';
 import {
   AREA_PLAYLISTS,
   PLAYLIST_SLUGS,
-  filterCatalog,
-  playlistCount,
   type PlaylistId,
 } from '../data/catalog';
+import { filterPublicProjectDetails } from '../lib/public-projects';
+import type { ProjectDetailReadModel } from '../lib/db/project-reads';
 
 export interface Props {
   filter: PlaylistId;
+  projects: ProjectDetailReadModel[];
 }
-const { filter } = Astro.props;
+const { filter, projects } = Astro.props;
 
-const list = filterCatalog(filter);
+const list = filterPublicProjectDetails(projects, filter);
 
 const LABELS: Record<PlaylistId, string> = {
   all: 'All work',
@@ -39,6 +40,7 @@ const hrefFor = (id: PlaylistId) =>
   id === 'all' ? '/library' : `/library/${PLAYLIST_SLUGS[id]}`;
 const sectionTitle = LABELS[filter];
 const count = list.length;
+const countFor = (id: PlaylistId) => filterPublicProjectDetails(projects, id).length;
 ---
 
 <section class="library-page">
@@ -70,7 +72,7 @@ const count = list.length;
             aria-current={id === filter ? 'page' : undefined}
           >
             <span>{LABELS[id]}</span>
-            <b>{playlistCount(id)}</b>
+            <b>{countFor(id)}</b>
           </a>
         ))
       }

@@ -16,10 +16,10 @@ import Editorial from '../../layouts/Editorial.astro';
 import LibraryView from '../../components/LibraryView.astro';
 import {
   PLAYLIST_SLUGS,
-  filterCatalog,
   playlistFromSlug,
   type PlaylistId,
 } from '../../data/catalog';
+import { filterPublicProjectDetails, loadPublicProjectDetails } from '../../lib/public-projects';
 import { libraryMeta } from '../../lib/seo';
 
 /** Page titles per filter; areas fall back to their own label. */
@@ -39,7 +39,8 @@ const filter = playlistFromSlug(slug)!;
 
 const label = PAGE_TITLE[filter] ?? filter;
 const title = `Dylan McCavitt · ${label}`;
-const projects = filterCatalog(filter);
+const { projects: allProjects } = await loadPublicProjectDetails();
+const projects = filterPublicProjectDetails(allProjects, filter);
 const meta = {
   ...libraryMeta(
     label,
@@ -52,5 +53,5 @@ const meta = {
 ---
 
 <Editorial title={title} meta={meta}>
-  <LibraryView filter={filter} />
+  <LibraryView filter={filter} projects={allProjects} />
 </Editorial>

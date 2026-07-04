@@ -217,7 +217,11 @@ class Turn {
         break;
       }
       case 'projects': {
-        const projects = mergeProjectArtifacts(block.items, resolveProjects(block.ids));
+        const streamedProjectIds = new Set(block.items?.map((item) => item.id) ?? []);
+        const projects = mergeProjectArtifacts(
+          block.items,
+          resolveProjects(block.ids.filter((id) => !streamedProjectIds.has(id))),
+        );
         if (!projects.length) break;
         const wrap = make('div', { class: 'eve-projs' });
         for (const p of projects) {

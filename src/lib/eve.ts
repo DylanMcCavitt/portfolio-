@@ -430,13 +430,14 @@ export function resolveTracks(trackIds: string[]): ResumeTrack[] {
   return out;
 }
 
-/** Resolve an evidence block to canonical site records, dropping unknown ids. */
+/** Resolve evidence ids to canonical site records, letting streamed project artifacts satisfy DB-only ids. */
 export function resolveEvidence(block: EvidenceBlock): {
   projects: Project[];
   tracks: ResumeTrack[];
 } {
+  const streamedProjectIds = new Set(block.projects?.map((project) => project.id) ?? []);
   return {
-    projects: resolveProjects(block.projectIds ?? []),
+    projects: resolveProjects((block.projectIds ?? []).filter((id) => !streamedProjectIds.has(id))),
     tracks: resolveTracks(block.resumeTrackIds ?? []),
   };
 }

@@ -9,7 +9,7 @@
  * OG image paths point at the static `/og/**.png` endpoints rendered at build
  * (see `src/pages/og/`). Shared routes use one fallback image.
  */
-import type { Project } from '../data/catalog';
+import type { ProjectLink } from '../data/catalog';
 import type { ResumeTrack } from '../data/resume';
 import { RESUME } from '../data/resume';
 
@@ -32,6 +32,16 @@ export interface PageMeta {
   /** Optional JSON-LD object, serialized into a `<script type=ld+json>`. */
   jsonLd?: Record<string, unknown>;
 }
+
+type ProjectMetaInput = {
+  id: string;
+  slug?: string;
+  title: string;
+  line: string;
+  about: string[];
+  links: ProjectLink[];
+  year: number;
+};
 
 /** Trim to ≤160 chars on a word boundary, with an ellipsis when cut. */
 function clampDescription(text: string, max = 160): string {
@@ -58,9 +68,10 @@ export function libraryMeta(name: string, description: string): PageMeta {
 }
 
 /** Project detail meta — per-project OG image + SoftwareSourceCode JSON-LD. */
-export function projectMeta(p: Project): PageMeta {
+export function projectMeta(p: ProjectMetaInput): PageMeta {
+  const slug = p.slug ?? p.id;
   const description = clampDescription(p.about[0] ?? p.line);
-  const url = `${ORIGIN}/projects/${p.id}/`;
+  const url = `${ORIGIN}/projects/${slug}/`;
   const repo = p.links.find(([label]) => /repo|github/i.test(label))?.[1];
   const live = p.links.find(([label]) => /live|site/i.test(label))?.[1];
   const jsonLd: Record<string, unknown> = {
@@ -69,7 +80,7 @@ export function projectMeta(p: Project): PageMeta {
     name: p.title,
     description,
     url,
-    image: `${ORIGIN}/og/projects/${p.id}.png`,
+    image: `${ORIGIN}/og/projects/${slug}.png`,
     author: { '@type': 'Person', name: OWNER, url: ORIGIN },
     dateModified: String(p.year),
   };
@@ -78,7 +89,7 @@ export function projectMeta(p: Project): PageMeta {
   return {
     title: titleFor(p.title),
     description,
-    ogImage: `/og/projects/${p.id}.png`,
+    ogImage: `/og/projects/${slug}.png`,
     ogType: 'article',
     jsonLd,
   };

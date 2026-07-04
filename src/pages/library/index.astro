@@ -5,19 +5,21 @@
  */
 import Editorial from '../../layouts/Editorial.astro';
 import LibraryView from '../../components/LibraryView.astro';
-import { CATALOG } from '../../data/catalog';
+import { filterPublicProjectDetails, loadPublicProjectDetails } from '../../lib/public-projects';
 import { libraryMeta } from '../../lib/seo';
 
+const { projects } = await loadPublicProjectDetails();
+const allProjects = filterPublicProjectDetails(projects, 'all');
 const title = 'Dylan McCavitt · All work';
 const meta = {
   ...libraryMeta(
     'All work',
-    `All work, ${CATALOG.length} projects: ${CATALOG.map((p) => p.title).join(', ')}.`,
+    `All work, ${allProjects.length} projects: ${allProjects.map((p) => p.title).join(', ')}.`,
   ),
   title,
 };
 ---
 
 <Editorial title={title} meta={meta}>
-  <LibraryView filter="all" />
+  <LibraryView filter="all" projects={projects} />
 </Editorial>
