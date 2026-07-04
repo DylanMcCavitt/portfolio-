@@ -213,22 +213,28 @@ test('DM stream keeps accepted file_search citation but suppresses text after a 
   assert.ok(events.some((event) => event.type === 'done'));
 });
 
-test('DM stream validates injected context ids against published DB records', async () => {
+test('DM stream drops unpublished project context ids and continues normally', async () => {
   const db = await publishedProjectDb();
+  const modelText = 'I can still share what is already public.';
   const events = await readNdjson(
     createDMChatStream(
       { message: 'Tell me about this project.', context: { projectIds: ['exit-manager'] } },
       TEST_CONFIG,
-      { db, model: throwingModel() },
+      { db, model: streamingModel(modelText) },
     ),
   );
 
-  assert.deepEqual(events, [
-    {
-      type: 'error',
-      message: 'DM can only discuss published portfolio projects and public resume facts.',
-    },
-  ]);
+  assert.ok(events.some((event) => event.type === 'ready'));
+  const contextNotice = events.find(
+    (event) =>
+      event.type === 'block' &&
+      event.block?.kind === 'text' &&
+      /isn't in my published records yet/i.test(String(event.block?.text)),
+  );
+  assert.ok(contextNotice);
+  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
+  assert.ok(events.some((event) => event.type === 'done'));
+  assert.ok(!events.some((event) => event.type === 'error'));
 });
 
 test('DM runtime config keeps provider and model env-configurable without secrets in code', () => {
@@ -244,7 +250,7 @@ test('DM runtime config keeps provider and model env-configurable without secret
   );
 });
 
-test('DM route and stream mask setup and data failures safely', async () => {
+test('DM route masks setup failures and keeps resume/contact answers available with DB project-read failures', async () => {
   const missingConfigPost = createDMPostHandler({ env: {} });
   const missingConfigResponse = await missingConfigPost({
     request: new Request('https://example.test/api/dm/chat', {
@@ -263,19 +269,20 @@ test('DM route and stream mask setup and data failures safely', async () => {
       throw new Error('select * from private_drafts using secret-token');
     },
   } satisfies Queryable;
+  const modelText = 'I can share public resume and contact details.';
   const events = await readNdjson(
-    createDMChatStream({ message: 'Which projects show backend work?' }, TEST_CONFIG, {
+    createDMChatStream({ message: "Can you share Dylan's resume background and contact details?" }, TEST_CONFIG, {
       db: failingDb,
-      model: streamingModel('This should not leak database failures.'),
+      model: streamingModel(modelText),
     }),
   );
 
-  assert.deepEqual(events, [
-    {
-      type: 'error',
-      message: 'DM could not read the public portfolio data needed for that answer.',
-    },
-  ]);
+  assert.ok(events.some((event) => event.type === 'ready'));
+  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
+  assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'resume'));
+  assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'contact'));
+  assert.ok(events.some((event) => event.type === 'done'));
+  assert.ok(!events.some((event) => event.type === 'error'));
 });
 
 async function publishedProjectDb(): Promise<Queryable> {

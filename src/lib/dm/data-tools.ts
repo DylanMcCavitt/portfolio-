@@ -56,12 +56,30 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
   let projectsPromise: Promise<ProjectDetailReadModel[]> | null = null;
 
   async function projects(): Promise<ProjectDetailReadModel[]> {
-    projectsPromise ??= fetchPublicProjectDetails(db);
+    projectsPromise ??= fetchPublicProjectDetails(db).catch((error: unknown) => {
+      projectsPromise = null;
+      throw new DMToolError('public_data_unavailable', 'Failed to read published public project records.', {
+        cause: error instanceof Error ? error.name : typeof error,
+      });
+    });
     return projectsPromise;
+  }
+
+  async function projectsOrEmpty(): Promise<ProjectDetailReadModel[]> {
+    try {
+      return await projects();
+    } catch (error) {
+      if (isPublicDataUnavailableError(error)) return [];
+      throw error;
+    }
   }
 
   async function projectIds(): Promise<Set<string>> {
     return new Set((await projects()).map((project) => project.id));
+  }
+
+  async function projectIdsOrEmpty(): Promise<Set<string>> {
+    return new Set((await projectsOrEmpty()).map((project) => project.id));
   }
 
   async function assertProjectIds(ids: string[]): Promise<void> {
@@ -87,7 +105,7 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     async searchProjects(input) {
       const query = input.query.trim();
       const tokens = tokenize(query);
-      const ranked = (await projects())
+      const ranked = (await projectsOrEmpty())
         .map((project) => ({ project, score: scoreProject(project, tokens) }))
         .filter((item) => item.score > 0)
         .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id))
@@ -98,7 +116,7 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
 
     async filterProjects(input = {}) {
       const normalizedArea = input.area?.trim().toLowerCase();
-      const filtered = (await projects())
+      const filtered = (await projectsOrEmpty())
         .filter((project) => !normalizedArea || project.area.toLowerCase() === normalizedArea)
         .filter((project) => !input.status || project.status[0] === input.status)
         .slice(0, clampLimit(input.limit, 6))
@@ -107,8 +125,9 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     },
 
     async rankProjects(input = {}) {
-      const all = await projects();
+      const all = await projectsOrEmpty();
       if (input.ids?.length) {
+        if (all.length === 0) return { projects: [] };
         await assertProjectIds(input.ids);
         const byId = new Map(all.map((project) => [project.id, project]));
         return {
@@ -132,7 +151,7 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
 
     async readResume(input = {}) {
       if (input.trackIds?.length) assertResumeTrackIds(input.trackIds);
-      const ids = await projectIds();
+      const ids = await projectIdsOrEmpty();
       const tracks = (input.trackIds?.length
         ? input.trackIds.map((id) => getResumeTrackById(id)).filter((track): track is ResumeTrack => Boolean(track))
         : RESUME.tracks
@@ -145,6 +164,10 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     assertResumeTrackIds,
     publishedProjectIds: projectIds,
   };
+}
+
+function isPublicDataUnavailableError(error: unknown): error is DMToolError {
+  return error instanceof DMToolError && error.code === 'public_data_unavailable';
 }
 
 export function getContact(): ContactBlock {
