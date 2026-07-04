@@ -1,6 +1,14 @@
 # DB foundation
 
-AGE-728 adds the Neon-on-Vercel foundation for future DM project records. It does not change public route reads; `src/data/catalog.ts` remains the public project source until shadow parity and one-publish proof land in later issues.
+AGE-728 adds the Neon-on-Vercel foundation for future DM project records. AGE-733 adds a **gated** DB-backed public project read layer on top of that foundation. **Catalog cutover** — making published DB rows the sole public project source and retiring the catalog fallback — is deferred to Linear **AGE-738**; until then, `src/data/catalog.ts` remains the shadow/fallback source.
+
+## Public project source gate (AGE-733)
+
+- Entry point: `loadPublicProjectDetails()` in `src/lib/public-projects.ts`.
+- Gate env flags (either truthy enables DB reads): `PUBLIC_PROJECT_PAGES_FROM_DB`, `PORTFOLIO_PUBLIC_PROJECTS_FROM_DB` (accepted values: `1`, `true`, `yes`, `on`).
+- When enabled: queries `projects` where `lifecycle_state = 'published'` via `fetchPublicProjectDetails()` / `fetchPublicProjectCards()` in `src/lib/db/project-reads.ts`.
+- Fallback: when the gate is disabled, the DB is unavailable, no published rows exist, or the query throws, routes receive catalog-backed shadow read models from `buildCatalogShadowRecords(CATALOG)` in `src/data/catalog.ts`.
+- Consumers: `/library`, `/library/[filter]`, `/projects/[id]` static paths, sitemap, and OG image routes.
 
 ## Environment story
 

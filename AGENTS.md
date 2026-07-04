@@ -1,44 +1,43 @@
 # Portfolio
 
-Clean, recruiter-friendly portfolio site. Current visual direction: **shadcn/ui "Sera"** — hard edges, uppercase tracked labels, hairline borders, ring-bordered surfaces, paper/ink feel. Designed for non-technical visitors first (recruiters, hiring managers).
+Clean, recruiter-friendly portfolio site on the **agent-first redesign** preview branch. Visitors land on **DM**, the public portfolio agent, in a Split-canvas chat surface. Designed for non-technical visitors first (recruiters, hiring managers).
 
 ## Stack
 
-- **Astro 5 + TypeScript** — static-first site framework
-- **Tailwind** via `@astrojs/tailwind` — utility classes map to CSS-variable design tokens
-- **React islands** via `@astrojs/react` where client state is needed (theme toggle, interactive pagers)
-- **CSS variables** own the design tokens (colors, spacing, type scale) — see the Sera design handoff for the authoritative values
-- **Markdown/MDX** for content collections (projects, log)
-- **Deployed** to Vercel or Cloudflare Pages
+- **Astro + TypeScript** — static-first site framework (see `package.json` for the pinned `astro` version)
+- **@astrojs/vercel** — Vercel adapter for server/API routes and deployment
+- **Global CSS** — design tokens in `src/styles/player.css` (`--pl-*`); Split-canvas landing styles in `src/styles/eve.css`
+- **Vanilla TypeScript client island** — `src/scripts/eve.ts` streams against `/api/dm/chat` on the DM landing and fit-check routes
+- **TypeScript data modules** — `src/data/catalog.ts` (project shadow/fallback) and `src/data/resume.ts` (résumé/contact v1 source); no Markdown/MDX content collections
+- **Neon Postgres** — DM project records, admin publish flow, RAG; see `docs/agents/db-foundation.md`
+- **Deployed** to Vercel
 
-Default to zero client JS: static `.astro` pages everywhere, React islands only where interactivity actually earns them.
+Default to zero client JS: static `.astro` pages everywhere. Client JS only for the deliberate DM chat island (`src/scripts/eve.ts`) and the hiring-tour stepper (`src/scripts/tour.ts`).
 
 ## Design Direction
 
-> **Superseded.** The repo is mid-migration to the **agent-first redesign** (DM).
-> DM supersedes Eve for new product architecture; Eve-era runtime code is legacy
-> implementation evidence to mine or replace. The authoritative product/design
-> direction is now `.agents/envelope/domain.md` plus `docs/agents/scope-ledger.md`.
-> The Spotify/player-shell description below is historical — the player shell is
-> being retired, not extended.
+> DM supersedes Eve for new product architecture; Eve-era runtime paths (`src/lib/eve/`, `/api/eve/chat`) are legacy implementation evidence to mine or replace. The authoritative product/design direction is `.agents/envelope/domain.md` plus `docs/agents/scope-ledger.md`. The retired Spotify **player shell** (sidebar + bottom player bar) is not extended — `/player` and other legacy routes 301 via `vercel.json`.
 
-Current visual direction: the "now playing" player UI — a Spotify-style app shell
-(sidebar, scrolling main, persistent bottom player bar) where projects are tracks
-and the resume is an album ("The Journey"). Dark-only; tokens are the --pl-* set
-in src/styles/player.css. All copy lives in src/data/catalog.ts / resume.ts (no
-content collections). Zero client JS except the player-state island
-(src/scripts/player.ts, vanilla TS). Retired Sera routes 301 via vercel.json.
-Spec: ~/Projects/portfolio-redesign-prototypes/15-player-v4.html.
+Current preview-branch UI:
+
+- **Split-canvas landing** (`/`) — persistent left rail + main conversation pane; DM answers stream from `/api/dm/chat`
+- **Typographic project cards** — image-free library grid at `/library` and filtered `/library/[filter]`
+- **Editorial project detail** — static case-study pages at `/projects/[id]`
+- **Résumé journey** (`/journey`, `/journey/[track]`) — editorial timeline from `src/data/resume.ts`
+- **Hiring tour** (`/hiring`) — stepped recruiter path with optional `tour.ts` progressive enhancement
+- **Fit check** (`/fit-check`) — job-description paste surface using the same DM chat island
+
+Dark-only tokens (`--pl-*` in `player.css`). Public project pages read through the gated DB load layer when enabled (see `docs/agents/db-foundation.md`); until catalog cutover (Linear **AGE-738**), `src/data/catalog.ts` remains the shadow/fallback public project source.
 
 ## Content
 
-- Landing: monogram + numbered nav grid
-- About: bio + contact row links
-- Projects: index (card grid) + dynamic detail pages from a shared `PROJECTS` array
-- Experience: resume button + education/work `dl` blocks
-- Log: dated row-link entries
-- Contact: row-link channels
-- Blog: nice-to-have, not MVP
+- Landing: Split-canvas DM (`/`)
+- Library: project index (`/library`) + area/status filters (`/library/[filter]`)
+- Projects: editorial detail pages (`/projects/[id]`) from the gated public-project loader
+- Journey: résumé timeline (`/journey`, `/journey/[track]`) from `src/data/resume.ts`
+- Hiring: guided tour (`/hiring`)
+- Fit check: JD paste + DM read (`/fit-check`)
+- Legacy routes (`/about`, `/contact`, `/experience`, `/projects`, `/log`, `/player`, …) redirect via `vercel.json`
 
 ## Constraints
 
