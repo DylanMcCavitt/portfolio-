@@ -63,3 +63,25 @@ binding point — read it before planning or building:
 
 Repo-specific skills and agents live in `.agents/skills/` and `.agents/agents/`.
 Continuity for the agent-first redesign is tracked in `docs/agents/scope-ledger.md`.
+
+## Cursor Cloud specific instructions
+
+Standard build/test/lint/run commands live in `package.json` and
+`.agents/envelope/commands.md` — use those, this section only records the
+non-obvious cloud caveats.
+
+- **Node 24 is required** (`engines: 24.x`, `.node-version`, `.nvmrc`, `mise.toml`).
+  The nvm default alias is set to `24`, so tmux / interactive login shells (where
+  `npm run dev` runs) already use Node 24. The Cursor **Shell tool runs a non-login
+  shell** with `/exec-daemon/node` (Node 22) first on `PATH`, so bare `node`/`npm`
+  there is Node 22. Before running `npm run typecheck`/`build`/`test:*` from the
+  Shell tool, activate Node 24 first, e.g. `source ~/.nvm/nvm.sh && nvm use 24`
+  (or prepend `$HOME/.nvm/versions/node/v24.18.0/bin` to `PATH`).
+- **Tests need no external services or secrets.** The `test:*` scripts use an
+  in-memory Postgres via `@electric-sql/pglite`; the CI test set is
+  `test:db test:discovery test:slack test:admin test:eve test:dm test:metrics test:rag`.
+- **DM/Eve chat is disabled without config.** `/api/dm/chat` and `/api/eve/chat`
+  return HTTP 503 `missing_config` unless `OPENAI_API_KEY` (DM) / `EVE_AGENT_HOST`
+  (legacy Eve) are set; the site shell, browsing, and all tests work without them.
+  The chat UI degrades to a "DM is unavailable right now" notice. Set those env
+  vars (never commit them) to exercise live chat.
