@@ -320,17 +320,19 @@ async function validateContext(
       if (knownProjectIds.length > 0) nextContext.projectIds = knownProjectIds;
       else delete nextContext.projectIds;
     } catch (error) {
-      console.error('[dm] project context validation unavailable', safeLogError(error));
-      delete nextContext.projectIds;
+      if (error instanceof DMAgentError) throw error;
+      throw new DMAgentError(
+        'public_data_unavailable',
+        error instanceof Error ? error.message : 'Public project data is unavailable.',
+        'DM could not read the public portfolio data needed for that answer.',
+      );
     }
   }
 
   if (context.resumeTrackIds?.length) tools.assertResumeTrackIds(context.resumeTrackIds);
 
   const hasContext = Boolean(nextContext.projectIds?.length || nextContext.resumeTrackIds?.length || nextContext.fitCheck);
-  const hasOtherContextGrounding = Boolean(nextContext.resumeTrackIds?.length || nextContext.fitCheck);
-  const endTurnAfterNotice =
-    allRequestedProjectsUnpublished && leadingBlocks.length > 0 && !hasOtherContextGrounding;
+  const endTurnAfterNotice = allRequestedProjectsUnpublished && leadingBlocks.length > 0;
 
   return {
     request: hasContext ? { ...request, context: nextContext } : { ...request, context: undefined },

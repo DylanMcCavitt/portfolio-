@@ -290,6 +290,56 @@ test('DM stream ends after unpublished project notice for mixed project and resu
   assert.ok(!events.some((event) => event.type === 'error'));
 });
 
+test('DM stream ends after unpublished project notice even with alternate context grounding', async () => {
+  const db = await publishedProjectDb();
+  const modelText = 'Dylan worked across several resume tracks.';
+  const events = await readNdjson(
+    createDMChatStream(
+      {
+        message: 'Tell me about this project and the resume track.',
+        context: { projectIds: ['exit-manager'], resumeTrackIds: ['kroll'] },
+      },
+      TEST_CONFIG,
+      { db, model: streamingModel(modelText) },
+    ),
+  );
+
+  assert.ok(events.some((event) => event.type === 'ready'));
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'block' &&
+        event.block?.kind === 'text' &&
+        /isn't in my published records yet/i.test(String(event.block?.text)),
+    ),
+  );
+  assert.ok(!events.some((event) => event.type === 'text-delta'));
+  assert.ok(events.some((event) => event.type === 'done'));
+  assert.ok(!events.some((event) => event.type === 'error'));
+});
+
+test('DM stream fails safely when project-context validation cannot read the DB', async () => {
+  const failingDb = {
+    async query() {
+      throw new Error('select * from private_drafts using secret-token');
+    },
+  } satisfies Queryable;
+  const events = await readNdjson(
+    createDMChatStream(
+      { message: 'Tell me about this.', context: { projectIds: ['exit-manager'] } },
+      TEST_CONFIG,
+      { db: failingDb, model: streamingModel('This should not leak database failures.') },
+    ),
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'error',
+      message: 'DM could not read the public portfolio data needed for that answer.',
+    },
+  ]);
+});
+
 test('DM runtime config keeps provider and model env-configurable without secrets in code', () => {
   assert.deepEqual(
     readDMRuntimeConfig({ DM_PROVIDER: 'openai', DM_MODEL: 'gpt-4.1-mini', OPENAI_API_KEY: 'test-key' }),
