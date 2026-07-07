@@ -213,7 +213,7 @@ test('DM stream keeps accepted file_search citation but suppresses text after a 
   assert.ok(events.some((event) => event.type === 'done'));
 });
 
-test('DM stream drops unpublished project context ids and continues normally', async () => {
+test('DM stream ends after unpublished project notice without model text', async () => {
   const db = await publishedProjectDb();
   const modelText = 'I can still share what is already public.';
   const events = await readNdjson(
@@ -232,6 +232,31 @@ test('DM stream drops unpublished project context ids and continues normally', a
       /isn't in my published records yet/i.test(String(event.block?.text)),
   );
   assert.ok(contextNotice);
+  assert.ok(!events.some((event) => event.type === 'text-delta'));
+  assert.ok(events.some((event) => event.type === 'done'));
+  assert.ok(!events.some((event) => event.type === 'error'));
+});
+
+test('DM stream still answers contact questions when unpublished project context is dropped', async () => {
+  const db = await publishedProjectDb();
+  const modelText = 'You can reach Dylan at his published email.';
+  const events = await readNdjson(
+    createDMChatStream(
+      { message: "What's Dylan's email?", context: { projectIds: ['exit-manager'] } },
+      TEST_CONFIG,
+      { db, model: streamingModel(modelText) },
+    ),
+  );
+
+  assert.ok(events.some((event) => event.type === 'ready'));
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'block' &&
+        event.block?.kind === 'text' &&
+        /isn't in my published records yet/i.test(String(event.block?.text)),
+    ),
+  );
   assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
   assert.ok(events.some((event) => event.type === 'done'));
   assert.ok(!events.some((event) => event.type === 'error'));

@@ -101,7 +101,7 @@ export function createDMChatStream(
       };
 
       try {
-        const { request: normalizedRequest, leadingBlocks } = await validateContext(request, tools);
+        const { request: normalizedRequest, leadingBlocks, endTurnAfterNotice } = await validateContext(request, tools);
         await assertPublicDataAvailable(tools);
         const refusal = privateDataRefusal(normalizedRequest.message);
         if (refusal) {
@@ -122,6 +122,11 @@ export function createDMChatStream(
           answer.push(block);
           emit({ type: 'block', index: blockIndex, block });
           blockIndex += 1;
+        }
+
+        if (endTurnAfterNotice) {
+          emit({ type: 'done', answer, trace: trace(traceItems) });
+          return;
         }
 
         const ragConfig = await createPublicRagSearchConfig(deps.db).catch((error: unknown) => {
@@ -293,12 +298,13 @@ function aiTools(tools: PublicDMDataTools, ragConfig?: PublicRagSearchConfig | n
 async function validateContext(
   request: DMChatRequest,
   tools: PublicDMDataTools,
-): Promise<{ request: DMChatRequest; leadingBlocks: AnswerBlock[] }> {
+): Promise<{ request: DMChatRequest; leadingBlocks: AnswerBlock[]; endTurnAfterNotice: boolean }> {
   const context = request.context;
-  if (!context) return { request, leadingBlocks: [] };
+  if (!context) return { request, leadingBlocks: [], endTurnAfterNotice: false };
 
   const leadingBlocks: AnswerBlock[] = [];
   const nextContext: DMChatRequest['context'] = { ...context };
+  let allRequestedProjectsUnpublished = false;
 
   if (context.projectIds?.length) {
     try {
@@ -310,6 +316,7 @@ async function validateContext(
           text: "That project isn't in my published records yet. I can still cover Dylan's published work, resume, or contact details.",
         });
       }
+      allRequestedProjectsUnpublished = knownProjectIds.length === 0;
       if (knownProjectIds.length > 0) nextContext.projectIds = knownProjectIds;
       else delete nextContext.projectIds;
     } catch (error) {
@@ -321,9 +328,17 @@ async function validateContext(
   if (context.resumeTrackIds?.length) tools.assertResumeTrackIds(context.resumeTrackIds);
 
   const hasContext = Boolean(nextContext.projectIds?.length || nextContext.resumeTrackIds?.length || nextContext.fitCheck);
+  const hasOtherContextGrounding = Boolean(nextContext.resumeTrackIds?.length || nextContext.fitCheck);
+  const endTurnAfterNotice =
+    allRequestedProjectsUnpublished &&
+    leadingBlocks.length > 0 &&
+    !hasOtherContextGrounding &&
+    !hasAlternateGroundingIntent(request.message);
+
   return {
     request: hasContext ? { ...request, context: nextContext } : { ...request, context: undefined },
     leadingBlocks,
+    endTurnAfterNotice,
   };
 }
 
@@ -515,4 +530,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function matchesAny(value: string, needles: string[]): boolean {
   return needles.some((needle) => value.includes(needle));
+}
+
+function hasAlternateGroundingIntent(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    matchesAny(normalized, ['resume', 'experience', 'background', 'education', 'career']) ||
+    matchesAny(normalized, ['contact', 'email', 'reach', 'hire', 'available', 'opportunities'])
+  );
 }
