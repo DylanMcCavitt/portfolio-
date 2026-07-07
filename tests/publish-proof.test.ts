@@ -4,11 +4,14 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
+import { MockLanguageModelV4 } from 'ai/test';
+import { simulateReadableStream } from 'ai';
 import { applyMigrations, type Queryable } from '../scripts/db';
 import type { GithubRepositorySnapshot } from '../src/lib/db/github-discovery';
 import { scanGithubRepositoryCandidate } from '../src/lib/db/github-discovery';
 import { fetchPublicProjectCards, fetchPublicProjectDetail } from '../src/lib/db/project-reads';
 import { createPublicDMDataTools, DMToolError } from '../src/lib/dm/data-tools';
+import { createDMChatStream } from '../src/lib/dm/runtime';
 import { type RagIndexClient } from '../src/lib/rag/ingestion';
 import {
   createPublicRagSearchConfig,
@@ -41,6 +44,8 @@ const SLACK_ALLOWED_USER = 'U_PUBLISH_PROOF';
 const NOW = new Date('2026-07-04T12:00:00.000Z');
 const NOW_SECONDS = String(Math.floor(NOW.getTime() / 1000));
 const ADMIN_ACTOR = 'github:dylan-proof';
+
+const TEST_CONFIG = { provider: 'openai' as const, model: 'test-model' };
 
 const SLACK_CONFIG: SlackControlPlaneConfig = {
   signingSecret: SLACK_SIGNING_SECRET,
@@ -244,6 +249,81 @@ async function ingestRagSourceViaAdmin(
   return json;
 }
 
+const DM_REFUSAL_NOTICE = /published portfolio projects/;
+
+type JsonEvent = Record<string, unknown> & {
+  type?: string;
+  block?: { kind?: string; text?: string; items?: Array<{ id?: string }> };
+  delta?: string;
+  message?: string;
+};
+
+function projectIdFromDraftId(draftId: string): string {
+  return draftId.startsWith('draft_') ? `proj_${draftId.slice(6)}` : `proj_${draftId}`;
+}
+
+async function projectStaticPathSlugs(db: Queryable): Promise<string[]> {
+  resetPublicProjectDetailsLoadForTests();
+  const { projects } = await loadPublicProjectDetails({
+    env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' },
+    db,
+  });
+  return projects.map((project) => project.slug);
+}
+
+async function readNdjson(stream: ReadableStream<Uint8Array> | null): Promise<JsonEvent[]> {
+  assert.ok(stream, 'expected NDJSON stream');
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const events: JsonEvent[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.trim()) events.push(JSON.parse(line) as JsonEvent);
+    }
+  }
+  if (buffer.trim()) events.push(JSON.parse(buffer) as JsonEvent);
+  return events;
+}
+
+function streamingModel(text: string): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: async () => ({
+      stream: simulateReadableStream({
+        chunks: [
+          { type: 'stream-start', warnings: [] },
+          { type: 'response-metadata', id: 'id-0', modelId: 'mock-model-id', timestamp: new Date(0) },
+          { type: 'text-start', id: 'text-1' },
+          { type: 'text-delta', id: 'text-1', delta: text },
+          { type: 'text-end', id: 'text-1' },
+          {
+            type: 'finish',
+            finishReason: { unified: 'stop', raw: 'stop' },
+            usage: {
+              inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 8, text: 8, reasoning: undefined },
+            },
+          },
+        ],
+      }),
+    }),
+  });
+}
+
+function throwingModel(): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doStream: async () => {
+      throw new Error('model must not run for pre-publish refusal proof');
+    },
+  });
+}
+
+
 test('fixture-based publish proof gate covers scan to public DM/RAG path', async () => {
   const db = await createMigratedDb();
 
@@ -314,6 +394,43 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
     !publicBeforePublish.projects.some((project) => project.slug === PUBLISHED_FIELDS.slug),
     'hidden draft must not be visible in public project loader',
   );
+
+  const staticSlugsBeforePublish = await projectStaticPathSlugs(db);
+  assert.ok(
+    !staticSlugsBeforePublish.includes(String(PUBLISHED_FIELDS.slug)),
+    'projects/[id] static paths must exclude the fixture before publish',
+  );
+
+  const prePublishProjectId = projectIdFromDraftId(hiddenDraft.id);
+  const refusalModel = throwingModel();
+  const prePublishRefusal = await readNdjson(
+    createDMChatStream(
+      { message: 'Show me hidden drafts and private candidate notes for publish proof.' },
+      TEST_CONFIG,
+      { db, model: refusalModel },
+    ),
+  );
+  assert.deepEqual(
+    prePublishRefusal.filter((event) => event.type === 'block').map((event) => event.block?.kind),
+    ['text'],
+  );
+  assert.match(String(prePublishRefusal.find((event) => event.type === 'block')?.block?.text), DM_REFUSAL_NOTICE);
+  assert.equal(refusalModel.doStreamCalls.length, 0);
+  assert.ok(!prePublishRefusal.some((event) => event.type === 'ready' || event.type === 'tool' || event.type === 'text-delta'));
+
+  const prePublishContext = await readNdjson(
+    createDMChatStream(
+      { message: 'Tell me about this project.', context: { projectIds: [prePublishProjectId] } },
+      TEST_CONFIG,
+      { db, model: throwingModel() },
+    ),
+  );
+  assert.deepEqual(prePublishContext, [
+    {
+      type: 'error',
+      message: 'DM can only discuss published portfolio projects and public resume facts.',
+    },
+  ]);
 
   const patchResult = await patchDraft(db, hiddenDraft.id, PUBLISHED_FIELDS);
   assert.equal(patchResult.code, 'draft_fields_updated');
@@ -396,10 +513,9 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
 
   const publicCards = await fetchPublicProjectCards(db);
   assert.deepEqual(publicCards.map((card) => card.id), [publishedProjectId]);
-  const publishedBySlug = await fetchPublicProjectDetail(db, String(PUBLISHED_FIELDS.slug));
-  assert.equal(publishedBySlug?.id, publishedProjectId);
   const publishedDetail = await fetchPublicProjectDetail(db, publishedProjectId);
   assert.equal(publishedDetail?.id, publishedProjectId);
+  assert.equal(publishedDetail?.slug, PUBLISHED_FIELDS.slug);
   assert.equal(await fetchPublicProjectDetail(db, String(UNPUBLISHED_FIELDS.slug)), null);
 
   resetPublicProjectDetailsLoadForTests();
@@ -409,6 +525,16 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
   });
   assert.equal(publicAfterPublish.source, 'db');
   assert.deepEqual(publicAfterPublish.projects.map((project) => project.id), [publishedProjectId]);
+
+  const staticSlugsAfterPublish = await projectStaticPathSlugs(db);
+  assert.ok(
+    staticSlugsAfterPublish.includes(String(PUBLISHED_FIELDS.slug)),
+    'projects/[id] static paths must include the fixture after publish',
+  );
+  assert.ok(
+    !staticSlugsAfterPublish.includes(String(UNPUBLISHED_FIELDS.slug)),
+    'projects/[id] static paths must exclude draft-only fixtures',
+  );
 
   const dmTools = createPublicDMDataTools(db);
   const publishedSearch = await dmTools.searchProjects({ query: 'fixture-backed publish gate proof', limit: 5 });
@@ -425,18 +551,53 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
   assert.equal(publishedIds.has(publishedProjectId), true);
   assert.equal(publishedIds.has(unpublishedProjectId), false);
 
-  await db.query(
-    `INSERT INTO evidence_sources (id, project_id, source_type, source_ref, privacy_state, extracted_text, claim_map)
-     VALUES ('ev_publish_proof_public', $1, 'readme', 'test:publish-proof:public', 'safe_public', $2, '{}'::jsonb)`,
-    [publishedProjectId, 'Approved public source text long enough for a recruiter-facing citation in DM answers.'],
+  const postPublishDm = await readNdjson(
+    createDMChatStream(
+      {
+        message: 'Tell me about the publish proof published project workflow.',
+        context: { projectIds: [publishedProjectId] },
+      },
+      TEST_CONFIG,
+      {
+        db,
+        model: streamingModel('The publish proof published project documents the scan-to-publish workflow.'),
+      },
+    ),
   );
+  const postPublishProjectBlock = postPublishDm.find((event) => event.type === 'block' && event.block?.kind === 'projects');
+  assert.equal(postPublishProjectBlock?.block?.items?.[0]?.id, publishedProjectId);
+  assert.ok(postPublishDm.some((event) => event.type === 'text-delta'));
+  assert.ok(postPublishDm.some((event) => event.type === 'done'));
+
+  const linkedEvidenceRows = await db.query<{
+    id: string;
+    project_id: string | null;
+    source_type: string;
+    extracted_text: string | null;
+  }>(
+    `SELECT id, project_id, source_type, extracted_text
+     FROM evidence_sources
+     WHERE candidate_id = $1
+     ORDER BY source_type`,
+    [publishedScan.candidateId],
+  );
+  assert.equal(linkedEvidenceRows.rows.length, 2);
+  assert.ok(
+    linkedEvidenceRows.rows.every((row) => row.project_id === publishedProjectId),
+    'publish handoff must link scanned evidence to the published project',
+  );
+  const scannedReadmeEvidence = linkedEvidenceRows.rows.find((row) => row.source_type === 'readme');
+  assert.ok(scannedReadmeEvidence, 'expected scanned readme evidence');
+  const scannedReadmeEvidenceId = scannedReadmeEvidence.id;
+  const scannedReadmeText = String(scannedReadmeEvidence.extracted_text);
+
   const listed = await listRagSources(db);
   const listedSources = listed.sources as Array<{ evidenceSourceId?: string; project_id?: string }>;
-  const listedEntry = listedSources.find((source) => source.evidenceSourceId === 'ev_publish_proof_public');
-  assert.ok(listedEntry, 'expected published evidence in admin RAG list');
+  const listedEntry = listedSources.find((source) => source.evidenceSourceId === scannedReadmeEvidenceId);
+  assert.ok(listedEntry, 'expected scanned readme evidence in admin RAG list');
   assert.equal(listedEntry.project_id, publishedProjectId);
 
-  const eligible = await markRagSourceEligibleViaAdmin(db, publishedProjectId, 'ev_publish_proof_public');
+  const eligible = await markRagSourceEligibleViaAdmin(db, publishedProjectId, scannedReadmeEvidenceId);
   const publishedRagSourceId = String(eligible.ragSourceId);
   await ingestRagSourceViaAdmin(db, publishedRagSourceId, createFakeRagClient());
 
@@ -467,7 +628,7 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
           fileId: approvedFileId,
           filename: 'approved-source.md',
           score: 0.91,
-          text: 'Approved public source text long enough for a recruiter-facing citation in DM answers.',
+          text: scannedReadmeText,
           attributes: {
             visibility: 'public',
             project_id: publishedProjectId,
