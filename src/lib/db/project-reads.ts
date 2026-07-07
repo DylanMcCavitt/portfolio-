@@ -72,6 +72,19 @@ type LegacyCatalogSnapshot = Record<string, JsonValue> & {
   dmArtifactSource?: string;
 };
 
+type ProjectReadDetails = {
+  legacy: boolean;
+  status: JsonValue;
+  hue: string;
+  wip: boolean;
+  money: boolean;
+  seek: JsonValue;
+  about: JsonValue;
+  notes: JsonValue;
+  stack: JsonValue;
+  dmArtifactSource?: string;
+};
+
 const PROJECT_COLUMNS = `id, slug, title, tagline, area, year, lifecycle_state, activity, summary,
        details, metrics, links, media, source, published_at, archived_at`;
 const PROJECT_STATUS_KINDS: Record<string, true> = { dry: true, live: true, wip: true, done: true };
@@ -114,7 +127,7 @@ export async function fetchPublicProjectDetail(
   const result = await db.query<ProjectReadRecord>(
     `SELECT ${PROJECT_COLUMNS}
      FROM projects
-     WHERE lifecycle_state = 'published' AND id = $1
+     WHERE lifecycle_state = 'published' AND (id = $1 OR slug = $1)
      LIMIT 1`,
     [id],
   );
@@ -124,15 +137,15 @@ export async function fetchPublicProjectDetail(
 }
 
 export function projectRecordToReadModels(record: ProjectReadRecord | CatalogShadowRecord): ProjectReadModels {
-  const snapshot = legacySnapshot(record);
-  const status = projectStatus(snapshot.status, record.id);
-  const links = stringTuples<ProjectLink>(record.links, 'links', record.id);
-  const metrics = stringTuples<ProjectMetric>(record.metrics, 'metrics', record.id);
-  const about = strings(snapshot.about, 'about', record.id);
-  const notes = strings(snapshot.notes, 'notes', record.id);
-  const stack = stringTuples<ProjectStackEntry>(snapshot.stack, 'stack', record.id);
-  const seek = projectSeek(snapshot.seek, record.id);
-  const shots = projectShots(record.media, record.id);
+  const readDetails = projectReadDetails(record);
+  const status = projectStatus(readDetails.status, record.id);
+  const links = projectLinks(record.links, record.id, readDetails.legacy);
+  const metrics = projectMetrics(record.metrics, record.id, readDetails.legacy);
+  const about = strings(readDetails.about, 'about', record.id);
+  const notes = strings(readDetails.notes, 'notes', record.id);
+  const stack = stringTuples<ProjectStackEntry>(readDetails.stack, 'stack', record.id);
+  const seek = projectSeek(readDetails.seek, record.id);
+  const shots = projectShotsForRecord(record.media, record, readDetails.legacy);
   const area = record.area as Project['area'];
   const href = `/projects/${record.slug}`;
   const card: ProjectCardReadModel = {
@@ -144,7 +157,7 @@ export function projectRecordToReadModels(record: ProjectReadRecord | CatalogSha
     status,
     year: record.year,
     activity: record.activity,
-    hue: snapshot.hue,
+    hue: readDetails.hue,
     line: record.tagline,
   };
   const dmArtifact: DmProjectArtifactReadModel = {
@@ -156,15 +169,15 @@ export function projectRecordToReadModels(record: ProjectReadRecord | CatalogSha
     year: record.year,
     activity: record.activity,
     line: record.tagline,
-    wip: snapshot.wip,
-    money: snapshot.money,
+    wip: readDetails.wip,
+    money: readDetails.money,
     links,
     metrics,
     about,
     notes,
     stack,
     href,
-    source: typeof snapshot.dmArtifactSource === 'string' ? snapshot.dmArtifactSource : 'portfolio-db',
+    source: typeof readDetails.dmArtifactSource === 'string' ? readDetails.dmArtifactSource : 'portfolio-db',
   };
 
   return {
@@ -179,8 +192,8 @@ export function projectRecordToReadModels(record: ProjectReadRecord | CatalogSha
       notes,
       stack,
       shots,
-      wip: snapshot.wip,
-      money: snapshot.money,
+      wip: readDetails.wip,
+      money: readDetails.money,
       source: record.source,
       seo: {
         title: `${record.title} · Dylan McCavitt`,
@@ -204,7 +217,24 @@ async function fetchPublicProjectRecords(db: ProjectReadQueryable): Promise<Proj
   return Array.isArray(result) ? result : result.rows;
 }
 
-function legacySnapshot(record: ProjectReadRecord | CatalogShadowRecord): LegacyCatalogSnapshot {
+function projectReadDetails(record: ProjectReadRecord | CatalogShadowRecord): ProjectReadDetails {
+  const snapshot = legacySnapshot(record);
+  if (snapshot) return { ...snapshot, legacy: true };
+
+  return {
+    status: ['done', 'Published'],
+    hue: '#8b7cf6',
+    wip: false,
+    money: false,
+    seek: { from: 'Draft', to: 'Published', pct: 100 },
+    about: aboutFromPublicDetails(record),
+    notes: [],
+    stack: stackFromPublicDetails(record.details),
+    legacy: false,
+  };
+}
+
+function legacySnapshot(record: ProjectReadRecord | CatalogShadowRecord): LegacyCatalogSnapshot | null {
   const snapshot = record.details.find(
     (detail): detail is LegacyCatalogSnapshot =>
       detail !== null &&
@@ -213,8 +243,69 @@ function legacySnapshot(record: ProjectReadRecord | CatalogShadowRecord): Legacy
       detail.kind === 'legacy_catalog_snapshot',
   );
 
-  if (!snapshot) throw new Error(`Project record ${record.id} is missing legacy catalog read details.`);
-  return snapshot;
+  return snapshot ?? null;
+}
+
+function aboutFromPublicDetails(record: ProjectReadRecord | CatalogShadowRecord): string[] {
+  const publicDetails = record.details.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0);
+  return publicDetails.length ? publicDetails : [record.summary];
+}
+
+function stackFromPublicDetails(value: JsonValue): ProjectStackEntry[] {
+  if (!Array.isArray(value)) return [];
+
+  const stack: ProjectStackEntry[] = [];
+  for (const item of value) {
+    if (Array.isArray(item) && item.length === 2 && typeof item[0] === 'string' && typeof item[1] === 'string') {
+      stack.push(item as ProjectStackEntry);
+      continue;
+    }
+    const record = jsonRecord(item);
+    const label = record?.label;
+    const detailValue = record?.value;
+    if (typeof label === 'string' && (typeof detailValue === 'string' || typeof detailValue === 'number')) {
+      stack.push([label, String(detailValue)]);
+    }
+  }
+  return stack;
+}
+
+function projectLinks(value: JsonValue, id: string, legacy: boolean): ProjectLink[] {
+  if (legacy) return stringTuples<ProjectLink>(value, 'links', id);
+  if (!Array.isArray(value)) return [];
+
+  const links: ProjectLink[] = [];
+  for (const item of value) {
+    if (Array.isArray(item) && item.length === 2 && typeof item[0] === 'string' && typeof item[1] === 'string') {
+      links.push(item as ProjectLink);
+      continue;
+    }
+    const record = jsonRecord(item);
+    const label = record?.label;
+    const href = record?.href ?? record?.url;
+    if (typeof label === 'string' && typeof href === 'string') links.push([label, href]);
+  }
+  return links;
+}
+
+function projectMetrics(value: JsonValue, id: string, legacy: boolean): ProjectMetric[] {
+  if (legacy) return stringTuples<ProjectMetric>(value, 'metrics', id);
+  if (!Array.isArray(value)) return [];
+
+  const metrics: ProjectMetric[] = [];
+  for (const item of value) {
+    if (Array.isArray(item) && item.length === 2 && typeof item[0] === 'string' && typeof item[1] === 'string') {
+      metrics.push(item as ProjectMetric);
+      continue;
+    }
+    const record = jsonRecord(item);
+    const label = record?.label;
+    const metricValue = record?.value;
+    if (typeof label === 'string' && (typeof metricValue === 'string' || typeof metricValue === 'number')) {
+      metrics.push([String(metricValue), label]);
+    }
+  }
+  return metrics;
 }
 
 function projectStatus(value: JsonValue, id: string): ProjectStatus {
@@ -243,6 +334,45 @@ function projectSeek(value: JsonValue, id: string): ProjectSeek {
   return value as unknown as ProjectSeek;
 }
 
+function projectShotsForRecord(
+  value: JsonValue,
+  record: ProjectReadRecord | CatalogShadowRecord,
+  legacy: boolean,
+): ProjectShot[] {
+  if (legacy) return projectShots(value, record.id);
+  if (!Array.isArray(value)) return [];
+
+  const shots: ProjectShot[] = [];
+  for (const item of value) {
+    if (isProjectShotJson(item)) {
+      shots.push(item as unknown as ProjectShot);
+      continue;
+    }
+
+    const media = jsonRecord(item);
+    if (!media) continue;
+    const caption =
+      (typeof media.cap === 'string' && media.cap) ||
+      (typeof media.caption === 'string' && media.caption) ||
+      (typeof media.alt === 'string' && media.alt) ||
+      (typeof media.label === 'string' && media.label) ||
+      `${record.title} screenshot`;
+    const source = media.src ?? media.img ?? media.url;
+    if (typeof source === 'string') {
+      shots.push({
+        img: source,
+        cap: caption,
+        ...(typeof media.phone === 'boolean' ? { phone: media.phone } : {}),
+      });
+      continue;
+    }
+    if (typeof media.kind === 'string' && Object.hasOwn(PROJECT_SHOT_KINDS, media.kind)) {
+      shots.push({ kind: media.kind, cap: caption } as ProjectShot);
+    }
+  }
+  return shots;
+}
+
 function projectShots(value: JsonValue, id: string): ProjectShot[] {
   if (!Array.isArray(value) || !value.every((item) => isProjectShotJson(item))) {
     throw new Error(`Project record ${id} has invalid media read details.`);
@@ -262,6 +392,10 @@ function isProjectShotJson(value: JsonValue): boolean {
     return typeof shot.img === 'string' && (shot.phone === undefined || typeof shot.phone === 'boolean');
   }
   return typeof shot.kind === 'string' && Object.hasOwn(PROJECT_SHOT_KINDS, shot.kind);
+}
+
+function jsonRecord(value: JsonValue): Record<string, JsonValue> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
 function strings(value: JsonValue, field: string, id: string): string[] {

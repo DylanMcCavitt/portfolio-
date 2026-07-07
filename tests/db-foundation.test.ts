@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, applySeeds, resetDatabase, type Queryable } from '../scripts/db';
 import { CATALOG } from '../src/data/catalog';
@@ -21,6 +21,12 @@ import {
   type ProjectReadQueryable,
 } from '../src/lib/db/project-reads';
 import {
+  filterPublicProjectDetails,
+  loadPublicProjectDetails,
+  resetPublicProjectDetailsLoadForTests,
+  shouldUsePublicProjectDb,
+} from '../src/lib/public-projects';
+import {
   CANDIDATE_LIFECYCLE_STATES,
   DRAFT_LIFECYCLE_STATES,
   PROJECT_LIFECYCLE_STATES,
@@ -28,6 +34,10 @@ import {
   SCAN_RUN_LIFECYCLE_STATES,
 } from '../src/lib/db/schema';
 import { projectMeta } from '../src/lib/seo';
+
+afterEach(() => {
+  resetPublicProjectDetailsLoadForTests();
+});
 
 const FOUNDATION_TABLES = [
   'projects',
@@ -381,6 +391,120 @@ test('public DB read helpers expose only published project rows', async () => {
   );
 });
 
+test('public DB read helpers render admin-published rows without legacy snapshots', async () => {
+  const db = createTestDb();
+  await applyMigrations(db);
+
+  await db.query(
+    `INSERT INTO projects (
+       id, slug, title, tagline, area, year, lifecycle_state, activity, summary,
+       details, metrics, links, media, source, published_at, archived_at
+     ) VALUES (
+       'manual-db-project', 'manual-db-slug', 'Manual DB Project', 'DB-only public tagline',
+       'Agents & MCP', 2026, 'published', 'Published from admin',
+       'Public summary from admin review.',
+       $1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb, 'manual', '2026-07-04T00:00:00.000Z', null
+     )`,
+    [
+      JSON.stringify([{ label: 'Detail', value: 'One' }, { provenance: 'not a legacy snapshot' }, 'Public admin paragraph.']),
+      JSON.stringify([{ label: 'published proof', value: '1' }]),
+      JSON.stringify([{ label: 'Live ↗', href: 'https://example.com/manual-db-project' }]),
+      JSON.stringify([{ type: 'image', src: '/manual-db-project.png', caption: 'Manual DB screenshot' }]),
+    ],
+  );
+
+  const detail = await fetchPublicProjectDetail(db, 'manual-db-slug');
+  assert.equal(detail?.id, 'manual-db-project');
+  assert.equal(detail?.href, '/projects/manual-db-slug');
+  assert.deepEqual(detail?.status, ['done', 'Published']);
+  assert.equal(detail?.hue, '#8b7cf6');
+  assert.deepEqual(detail?.about, ['Public admin paragraph.']);
+  assert.deepEqual(detail?.notes, []);
+  assert.deepEqual(detail?.stack, [['Detail', 'One']]);
+  assert.deepEqual(detail?.metrics, [['1', 'published proof']]);
+  assert.deepEqual(detail?.links, [['Live ↗', 'https://example.com/manual-db-project']]);
+  assert.deepEqual(detail?.shots, [{ img: '/manual-db-project.png', cap: 'Manual DB screenshot' }]);
+  assert.equal(detail?.dmArtifact.href, '/projects/manual-db-slug');
+
+  const byId = await fetchPublicProjectDetail(db, 'manual-db-project');
+  assert.equal(byId?.slug, 'manual-db-slug');
+});
+
+test('public project DB gate falls back to catalog until explicitly enabled and populated', async () => {
+  assert.equal(shouldUsePublicProjectDb({}), false);
+  assert.equal(shouldUsePublicProjectDb({ PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }), true);
+
+  resetPublicProjectDetailsLoadForTests();
+  const disabled = await loadPublicProjectDetails({ env: {} });
+  assert.equal(disabled.source, 'catalog');
+  assert.equal(disabled.projects.length, CATALOG.length);
+
+  resetPublicProjectDetailsLoadForTests();
+  const unavailable = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' } });
+  assert.equal(unavailable.source, 'catalog');
+  assert.equal(unavailable.projects.length, CATALOG.length);
+  assert.match(unavailable.reason ?? '', /Missing database connection string/);
+
+  const db = createTestDb();
+  await applyMigrations(db);
+  const [publishedRecord] = buildCatalogShadowRecords(CATALOG.slice(0, 1));
+  assert.ok(publishedRecord, 'expected a catalog project record');
+  const published = {
+    ...publishedRecord,
+    lifecycle_state: 'published' as const,
+    source: 'manual' as const,
+    published_at: '2026-07-04T00:00:00.000Z',
+  };
+  await insertProjectRecord(db, published);
+
+  resetPublicProjectDetailsLoadForTests();
+  const enabled = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }, db });
+  assert.equal(enabled.source, 'db');
+  assert.deepEqual(enabled.projects.map((project) => project.id), [published.id]);
+  assert.deepEqual(filterPublicProjectDetails(enabled.projects, 'all').map((project) => project.id), [published.id]);
+});
+
+test('loadPublicProjectDetails keeps one source set per process after a DB failure', async () => {
+  resetPublicProjectDetailsLoadForTests();
+
+  const db = createTestDb();
+  await applyMigrations(db);
+  const [publishedRecord] = buildCatalogShadowRecords(CATALOG.slice(0, 1));
+  assert.ok(publishedRecord, 'expected a catalog project record');
+  const published = {
+    ...publishedRecord,
+    lifecycle_state: 'published' as const,
+    source: 'manual' as const,
+    published_at: '2026-07-04T00:00:00.000Z',
+  };
+  await insertProjectRecord(db, published);
+
+  let shouldFail = true;
+  const flakyDb: ProjectReadQueryable = {
+    async query(sql, params) {
+      if (shouldFail) throw new Error('transient db error');
+      return db.query(sql, params);
+    },
+  };
+
+  const env = { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' };
+  const first = await loadPublicProjectDetails({ env, db: flakyDb });
+  assert.equal(first.source, 'catalog');
+  assert.match(first.reason ?? '', /transient db error/);
+  assert.equal(first.projects.length, CATALOG.length);
+
+  shouldFail = false;
+  const second = await loadPublicProjectDetails({ env, db: flakyDb });
+  assert.equal(second.source, 'catalog');
+  assert.equal(second.projects.length, CATALOG.length);
+  assert.equal(second, first);
+
+  resetPublicProjectDetailsLoadForTests();
+  const gateOff = await loadPublicProjectDetails({ env: {} });
+  assert.equal(gateOff.source, 'catalog');
+  assert.equal(gateOff.reason, 'Public project DB gate is disabled.');
+});
+
 test('shadow read helper reports unavailable instead of throwing on missing or failed DB', async () => {
   const missing = await tryFetchInternalShadowProjectReadModels(null);
   assert.deepEqual(missing, {
@@ -422,20 +546,17 @@ test('catalog parity report names missing extra and mismatched fields', () => {
   assert.ok(firstProject.mismatchedFields.includes('title'));
 });
 
-test('public project routes remain catalog-backed', async () => {
+test('public project routes use the gated public project source', async () => {
   const routeFiles = [
     'src/pages/library/index.astro',
     'src/pages/library/[filter].astro',
     'src/pages/projects/[id].astro',
     'src/pages/sitemap.xml.ts',
-    'src/pages/hiring.astro',
-    'src/pages/journey/[track].astro',
     'src/pages/og/projects/[id].png.ts',
   ];
 
   for (const path of routeFiles) {
     const source = await readFile(path, 'utf8');
-    assert.match(source, /data\/catalog|\.\.\/\.\.\/data\/catalog|\.\.\/data\/catalog/);
-    assert.doesNotMatch(source, /lib\/db|src\/lib\/db/);
+    assert.match(source, /loadPublicProjectDetails/);
   }
 });

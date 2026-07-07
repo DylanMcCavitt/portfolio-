@@ -18,15 +18,19 @@
  * responsive grid wrapper.
  */
 import type { Project } from '../data/catalog';
+import type { ProjectCardReadModel } from '../lib/db/project-reads';
+
+type RenderProjectCard = Project | ProjectCardReadModel;
 
 export interface Props {
-  project: Project;
+  project: RenderProjectCard;
 }
 const { project } = Astro.props;
 const [kind, label] = project.status;
+const href = 'href' in project ? project.href : `/projects/${project.id}`;
 ---
 
-<a class="pcard" href={`/projects/${project.id}`} style={`--hue:${project.hue}`}>
+<a class="pcard" href={href} style={`--hue:${project.hue}`}>
   <span class="pcard__rule" aria-hidden="true"></span>
   <span class="pcard__id">{project.id}</span>
   <span class="pcard__title">{project.title}</span>

@@ -17,7 +17,7 @@ import {
   createEveAnswer,
   readEveRuntimeConfig,
 } from '../src/lib/eve/runtime';
-import { parseStreamLine, resolveEvidence, validateBlock } from '../src/lib/eve';
+import { parseStreamLine, resolveEvidence, validateBlock, type ProjectArtifact } from '../src/lib/eve';
 import {
   FIT_CHECK_CONTEXT_LIMIT,
   FIT_CHECK_MIN_CHARS,
@@ -316,6 +316,41 @@ test('evidence resolution drops stale ids without throwing', () => {
       resolved.tracks.map((track) => track.id),
       ['now'],
     );
+  } finally {
+    console.warn = previousWarn;
+  }
+});
+
+test('streamed project artifacts satisfy DB-only project ids without catalog fallback', () => {
+  const artifact: ProjectArtifact = {
+    id: 'db-only-project',
+    title: 'DB-only Project',
+    area: 'Agents & MCP',
+    status: ['done', 'Published'],
+    year: 2026,
+    activity: 'Published from DB',
+    line: 'A project that exists only in the DB read model.',
+    href: '/projects/db-only-project',
+  };
+  const previousWarn = console.warn;
+  const warnings: unknown[] = [];
+  console.warn = (...args: unknown[]) => warnings.push(args);
+
+  try {
+    assert.deepEqual(validateBlock({ kind: 'projects', ids: [artifact.id], items: [artifact] }), {
+      kind: 'projects',
+      ids: [artifact.id],
+      items: [artifact],
+    });
+
+    const resolved = resolveEvidence({
+      kind: 'evidence',
+      projectIds: [artifact.id],
+      projects: [artifact],
+    });
+
+    assert.deepEqual(resolved.projects, []);
+    assert.deepEqual(warnings, []);
   } finally {
     console.warn = previousWarn;
   }

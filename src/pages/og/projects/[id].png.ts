@@ -1,16 +1,19 @@
 /**
- * Per-project OG image endpoint (#29). One static `/og/projects/<id>.png` per
- * catalog project, pre-rendered at build (static output — no runtime endpoint).
+ * Per-project OG image endpoint (#29). Static output follows the public project
+ * source selected by the DB gate.
  */
 import type { APIRoute, GetStaticPaths } from 'astro';
-import { CATALOG, getProjectById } from '../../../data/catalog';
+import { loadPublicProjectDetails } from '../../../lib/public-projects';
+import type { ProjectDetailReadModel } from '../../../lib/db/project-reads';
 import { renderOgImage } from '../../../lib/og';
 
-export const getStaticPaths = (() =>
-  CATALOG.map((p) => ({ params: { id: p.id } }))) satisfies GetStaticPaths;
+export const getStaticPaths = (async () => {
+  const { projects } = await loadPublicProjectDetails();
+  return projects.map((project) => ({ params: { id: project.slug }, props: { project } }));
+}) satisfies GetStaticPaths;
 
-export const GET: APIRoute = async ({ params }) => {
-  const p = getProjectById(params.id as string);
+export const GET: APIRoute = async ({ props }) => {
+  const p = (props as { project?: ProjectDetailReadModel }).project;
   if (!p) return new Response('Not found', { status: 404 });
   const png = await renderOgImage({
     title: p.title,
