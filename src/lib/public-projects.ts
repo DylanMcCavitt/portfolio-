@@ -43,15 +43,23 @@ function projectReadDb(client: DbClient): ProjectReadQueryable {
   };
 }
 
-export async function loadPublicProjectDetails(options: PublicProjectLoadOptions = {}): Promise<PublicProjectLoadResult> {
-  const env = options.env ?? process.env;
-  const catalogFallback = (reason?: string): PublicProjectLoadResult => ({
-    source: 'catalog',
-    projects: catalogProjectDetails(),
-    ...(reason ? { reason } : {}),
-  });
+let publicProjectLoadPromise: Promise<PublicProjectLoadResult> | null = null;
 
-  if (!shouldUsePublicProjectDb(env)) return catalogFallback('Public project DB gate is disabled.');
+async function resolvePublicProjectDetails(options: PublicProjectLoadOptions): Promise<PublicProjectLoadResult> {
+  const env = options.env ?? process.env;
+  const gateEnabled = shouldUsePublicProjectDb(env);
+  const catalogFallback = (reason?: string): PublicProjectLoadResult => {
+    if (gateEnabled && reason) {
+      console.warn(`[public-projects] Using catalog fallback: ${reason}`);
+    }
+    return {
+      source: 'catalog',
+      projects: catalogProjectDetails(),
+      ...(reason ? { reason } : {}),
+    };
+  };
+
+  if (!gateEnabled) return catalogFallback('Public project DB gate is disabled.');
 
   try {
     const db = options.db ?? projectReadDb(createDbClient(getDatabaseUrl(env)));
@@ -61,6 +69,16 @@ export async function loadPublicProjectDetails(options: PublicProjectLoadOptions
   } catch (error) {
     return catalogFallback(error instanceof Error ? error.message : String(error));
   }
+}
+
+export async function loadPublicProjectDetails(options: PublicProjectLoadOptions = {}): Promise<PublicProjectLoadResult> {
+  publicProjectLoadPromise ??= resolvePublicProjectDetails(options);
+  return publicProjectLoadPromise;
+}
+
+/** Clears the per-process public project load cache. For tests only. */
+export function resetPublicProjectDetailsLoadForTests(): void {
+  publicProjectLoadPromise = null;
 }
 
 export function filterPublicProjectDetails(

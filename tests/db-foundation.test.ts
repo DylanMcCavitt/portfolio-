@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, applySeeds, resetDatabase, type Queryable } from '../scripts/db';
 import { CATALOG } from '../src/data/catalog';
@@ -23,6 +23,7 @@ import {
 import {
   filterPublicProjectDetails,
   loadPublicProjectDetails,
+  resetPublicProjectDetailsLoadForTests,
   shouldUsePublicProjectDb,
 } from '../src/lib/public-projects';
 import {
@@ -33,6 +34,10 @@ import {
   SCAN_RUN_LIFECYCLE_STATES,
 } from '../src/lib/db/schema';
 import { projectMeta } from '../src/lib/seo';
+
+afterEach(() => {
+  resetPublicProjectDetailsLoadForTests();
+});
 
 const FOUNDATION_TABLES = [
   'projects',
@@ -429,10 +434,12 @@ test('public project DB gate falls back to catalog until explicitly enabled and 
   assert.equal(shouldUsePublicProjectDb({}), false);
   assert.equal(shouldUsePublicProjectDb({ PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }), true);
 
+  resetPublicProjectDetailsLoadForTests();
   const disabled = await loadPublicProjectDetails({ env: {} });
   assert.equal(disabled.source, 'catalog');
   assert.equal(disabled.projects.length, CATALOG.length);
 
+  resetPublicProjectDetailsLoadForTests();
   const unavailable = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' } });
   assert.equal(unavailable.source, 'catalog');
   assert.equal(unavailable.projects.length, CATALOG.length);
@@ -450,10 +457,52 @@ test('public project DB gate falls back to catalog until explicitly enabled and 
   };
   await insertProjectRecord(db, published);
 
+  resetPublicProjectDetailsLoadForTests();
   const enabled = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }, db });
   assert.equal(enabled.source, 'db');
   assert.deepEqual(enabled.projects.map((project) => project.id), [published.id]);
   assert.deepEqual(filterPublicProjectDetails(enabled.projects, 'all').map((project) => project.id), [published.id]);
+});
+
+test('loadPublicProjectDetails keeps one source set per process after a DB failure', async () => {
+  resetPublicProjectDetailsLoadForTests();
+
+  const db = createTestDb();
+  await applyMigrations(db);
+  const [publishedRecord] = buildCatalogShadowRecords(CATALOG.slice(0, 1));
+  assert.ok(publishedRecord, 'expected a catalog project record');
+  const published = {
+    ...publishedRecord,
+    lifecycle_state: 'published' as const,
+    source: 'manual' as const,
+    published_at: '2026-07-04T00:00:00.000Z',
+  };
+  await insertProjectRecord(db, published);
+
+  let shouldFail = true;
+  const flakyDb: ProjectReadQueryable = {
+    async query(sql, params) {
+      if (shouldFail) throw new Error('transient db error');
+      return db.query(sql, params);
+    },
+  };
+
+  const env = { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' };
+  const first = await loadPublicProjectDetails({ env, db: flakyDb });
+  assert.equal(first.source, 'catalog');
+  assert.match(first.reason ?? '', /transient db error/);
+  assert.equal(first.projects.length, CATALOG.length);
+
+  shouldFail = false;
+  const second = await loadPublicProjectDetails({ env, db: flakyDb });
+  assert.equal(second.source, 'catalog');
+  assert.equal(second.projects.length, CATALOG.length);
+  assert.equal(second, first);
+
+  resetPublicProjectDetailsLoadForTests();
+  const gateOff = await loadPublicProjectDetails({ env: {} });
+  assert.equal(gateOff.source, 'catalog');
+  assert.equal(gateOff.reason, 'Public project DB gate is disabled.');
 });
 
 test('shadow read helper reports unavailable instead of throwing on missing or failed DB', async () => {
