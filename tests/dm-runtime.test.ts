@@ -17,7 +17,7 @@ import {
   resolveEvidence,
   validateBlock,
   type ProjectArtifact,
-} from '../src/lib/eve';
+} from '../src/lib/dm/client';
 import { createDMPostHandler } from '../src/pages/api/dm/chat';
 
 const TEST_CONFIG = { provider: 'openai' as const, model: 'test-model' };
