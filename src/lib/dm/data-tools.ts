@@ -56,12 +56,26 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
   let projectsPromise: Promise<ProjectDetailReadModel[]> | null = null;
 
   async function projects(): Promise<ProjectDetailReadModel[]> {
-    projectsPromise ??= fetchPublicProjectDetails(db);
+    projectsPromise ??= fetchPublicProjectDetails(db).catch((error: unknown) => {
+      projectsPromise = null;
+      throw new DMToolError('public_data_unavailable', 'Failed to read published public project records.', {
+        cause: error instanceof Error ? error.name : typeof error,
+      });
+    });
     return projectsPromise;
   }
 
   async function projectIds(): Promise<Set<string>> {
     return new Set((await projects()).map((project) => project.id));
+  }
+
+  async function projectIdsOrEmpty(): Promise<Set<string>> {
+    try {
+      return await projectIds();
+    } catch (error) {
+      if (isPublicDataUnavailableError(error)) return new Set();
+      throw error;
+    }
   }
 
   async function assertProjectIds(ids: string[]): Promise<void> {
@@ -132,7 +146,7 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
 
     async readResume(input = {}) {
       if (input.trackIds?.length) assertResumeTrackIds(input.trackIds);
-      const ids = await projectIds();
+      const ids = await projectIdsOrEmpty();
       const tracks = (input.trackIds?.length
         ? input.trackIds.map((id) => getResumeTrackById(id)).filter((track): track is ResumeTrack => Boolean(track))
         : RESUME.tracks
@@ -145,6 +159,10 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     assertResumeTrackIds,
     publishedProjectIds: projectIds,
   };
+}
+
+function isPublicDataUnavailableError(error: unknown): error is DMToolError {
+  return error instanceof DMToolError && error.code === 'public_data_unavailable';
 }
 
 export function getContact(): ContactBlock {

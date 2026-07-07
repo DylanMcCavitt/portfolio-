@@ -101,9 +101,9 @@ export function createDMChatStream(
       };
 
       try {
-        await validateContext(request, tools);
-        await assertPublicDataAvailable(tools);
-        const refusal = privateDataRefusal(request.message);
+        const { request: normalizedRequest, leadingBlocks, endTurnAfterNotice } = await validateContext(request, tools);
+        await assertPublicDataAvailable(tools, normalizedRequest);
+        const refusal = privateDataRefusal(normalizedRequest.message);
         if (refusal) {
           emit({ type: 'block', index: blockIndex, block: refusal });
           answer.push(refusal);
@@ -118,6 +118,17 @@ export function createDMChatStream(
           trace: trace(traceItems),
         });
 
+        for (const block of leadingBlocks) {
+          answer.push(block);
+          emit({ type: 'block', index: blockIndex, block });
+          blockIndex += 1;
+        }
+
+        if (endTurnAfterNotice) {
+          emit({ type: 'done', answer, trace: trace(traceItems) });
+          return;
+        }
+
         const ragConfig = await createPublicRagSearchConfig(deps.db).catch((error: unknown) => {
           console.error('[dm] rag setup failure', safeLogError(error));
           return null;
@@ -129,7 +140,7 @@ export function createDMChatStream(
         const result = streamText({
           model,
           system: systemPrompt(),
-          messages: modelMessages(request),
+          messages: modelMessages(normalizedRequest),
           tools: aiTools(tools, ragConfig),
           providerOptions,
           stopWhen: isStepCount(4),
@@ -213,7 +224,7 @@ export function createDMChatStream(
           answer.unshift({ kind: 'text', text: finalText.trim() });
         }
 
-        const supplementalBlocks = await deterministicBlocks(request, tools, answer);
+        const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
         for (const block of supplementalBlocks) {
           answer.push(block);
           emit({ type: 'block', index: blockIndex, block });
@@ -284,12 +295,59 @@ function aiTools(tools: PublicDMDataTools, ragConfig?: PublicRagSearchConfig | n
   };
 }
 
-async function validateContext(request: DMChatRequest, tools: PublicDMDataTools): Promise<void> {
-  if (request.context?.projectIds?.length) await tools.assertProjectIds(request.context.projectIds);
-  if (request.context?.resumeTrackIds?.length) tools.assertResumeTrackIds(request.context.resumeTrackIds);
+async function validateContext(
+  request: DMChatRequest,
+  tools: PublicDMDataTools,
+): Promise<{ request: DMChatRequest; leadingBlocks: AnswerBlock[]; endTurnAfterNotice: boolean }> {
+  const context = request.context;
+  if (!context) return { request, leadingBlocks: [], endTurnAfterNotice: false };
+
+  const leadingBlocks: AnswerBlock[] = [];
+  const nextContext: DMChatRequest['context'] = { ...context };
+  let allRequestedProjectsUnpublished = false;
+
+  if (context.projectIds?.length) {
+    try {
+      const published = await tools.publishedProjectIds();
+      const knownProjectIds = context.projectIds.filter((id) => published.has(id));
+      if (knownProjectIds.length !== context.projectIds.length) {
+        leadingBlocks.push({
+          kind: 'text',
+          text: "That project isn't in my published records yet. I can still cover Dylan's published work, resume, or contact details.",
+        });
+      }
+      allRequestedProjectsUnpublished = knownProjectIds.length === 0;
+      if (knownProjectIds.length > 0) nextContext.projectIds = knownProjectIds;
+      else delete nextContext.projectIds;
+    } catch (error) {
+      if (error instanceof DMAgentError) throw error;
+      throw new DMAgentError(
+        'public_data_unavailable',
+        error instanceof Error ? error.message : 'Public project data is unavailable.',
+        'DM could not read the public portfolio data needed for that answer.',
+      );
+    }
+  }
+
+  if (context.resumeTrackIds?.length) tools.assertResumeTrackIds(context.resumeTrackIds);
+
+  const hasContext = Boolean(nextContext.projectIds?.length || nextContext.resumeTrackIds?.length || nextContext.fitCheck);
+  const endTurnAfterNotice = allRequestedProjectsUnpublished && leadingBlocks.length > 0;
+
+  return {
+    request: hasContext ? { ...request, context: nextContext } : { ...request, context: undefined },
+    leadingBlocks,
+    endTurnAfterNotice,
+  };
 }
 
-async function assertPublicDataAvailable(tools: PublicDMDataTools): Promise<void> {
+async function assertPublicDataAvailable(tools: PublicDMDataTools, request: DMChatRequest): Promise<void> {
+  const normalized = request.message.toLowerCase();
+  const needsProjectData =
+    Boolean(request.context?.projectIds?.length) ||
+    /\b(projects?|work|built|ship|backend|ai|client)\b/.test(normalized);
+  if (!needsProjectData) return;
+
   try {
     await tools.publishedProjectIds();
   } catch (error) {
@@ -312,12 +370,15 @@ async function deterministicBlocks(
   const hasResume = existing.some((block) => block.kind === 'resume');
   const hasContact = existing.some((block) => block.kind === 'contact');
 
-  if (!hasProjects) {
+  const shouldResolveProjects =
+    Boolean(request.context?.projectIds?.length) ||
+    /\b(projects?|work|built|ship|backend|ai|client)\b/.test(normalized);
+  if (!hasProjects && shouldResolveProjects) {
     const projectItems = request.context?.projectIds?.length
       ? (await tools.rankProjects({ ids: request.context.projectIds })).projects
       : (await tools.searchProjects({ query: request.message, limit: 3 })).projects;
     const ids = projectItems.map((project) => project.id);
-    if (ids.length > 0 && (request.context?.projectIds?.length || matchesAny(normalized, ['project', 'work', 'built', 'ship', 'backend', 'ai', 'client']))) {
+    if (ids.length > 0) {
       blocks.push({ kind: 'projects', ids, items: projectItems });
       blocks.push({ kind: 'evidence', projectIds: ids, projects: projectItems });
     }
