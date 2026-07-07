@@ -9,7 +9,7 @@ import type { GithubRepositorySnapshot } from '../src/lib/db/github-discovery';
 import { scanGithubRepositoryCandidate } from '../src/lib/db/github-discovery';
 import { fetchPublicProjectCards, fetchPublicProjectDetail } from '../src/lib/db/project-reads';
 import { createPublicDMDataTools, DMToolError } from '../src/lib/dm/data-tools';
-import { ingestRagSource, markRagSourceEligible, type RagIndexClient } from '../src/lib/rag/ingestion';
+import { type RagIndexClient } from '../src/lib/rag/ingestion';
 import {
   createPublicRagSearchConfig,
   publicRagCitationsFromFileSearchResult,
@@ -19,10 +19,14 @@ import {
   signSlackBody,
   type SlackControlPlaneConfig,
 } from '../src/lib/slack/control-plane';
-import { loadPublicProjectDetails } from '../src/lib/public-projects';
+import { loadPublicProjectDetails, resetPublicProjectDetailsLoadForTests } from '../src/lib/public-projects';
 import { createAdminDraftApprovePostHandler } from '../src/pages/api/admin/drafts/[id]/approve';
 import { createAdminDraftDetailPatchHandler } from '../src/pages/api/admin/drafts/[id]';
 import { createAdminDraftPublishPostHandler } from '../src/pages/api/admin/drafts/[id]/publish';
+import {
+  createAdminRagSourcesGetHandler,
+  createAdminRagSourcesPostHandler,
+} from '../src/pages/api/admin/rag-sources';
 import { createSlackControlPlanePostHandler } from '../src/pages/api/slack/control-plane';
 
 type JsonObject = Record<string, unknown>;
@@ -169,6 +173,10 @@ async function publishDraft(db: Queryable, draftId: string): Promise<JsonObject>
   return responseJson(response);
 }
 
+function adminSession() {
+  return { ok: true as const, actor: ADMIN_ACTOR };
+}
+
 function createFakeRagClient(): RagIndexClient {
   let fileCounter = 0;
   return {
@@ -186,6 +194,54 @@ function createFakeRagClient(): RagIndexClient {
     async detachFile() {},
     async deleteFile() {},
   };
+}
+
+async function listRagSources(db: Queryable): Promise<JsonObject> {
+  const GET = createAdminRagSourcesGetHandler({ db, session: adminSession });
+  const response = await GET({ request: new Request('https://example.test/api/admin/rag-sources', { method: 'GET' }) } as never);
+  assert.equal(response.status, 200);
+  const json = await responseJson(response);
+  assert.equal(json.code, 'rag_sources_listed');
+  return json;
+}
+
+async function markRagSourceEligibleViaAdmin(
+  db: Queryable,
+  projectId: string,
+  evidenceSourceId: string,
+): Promise<JsonObject> {
+  const POST = createAdminRagSourcesPostHandler({ db, session: adminSession });
+  const response = await POST({
+    request: jsonRequest('https://example.test/api/admin/rag-sources', {
+      action: 'mark_eligible',
+      projectId,
+      evidenceSourceId,
+    }),
+  } as never);
+  assert.equal(response.status, 200);
+  const json = await responseJson(response);
+  assert.equal(json.code, 'rag_source_eligible');
+  return json;
+}
+
+async function ingestRagSourceViaAdmin(
+  db: Queryable,
+  ragSourceId: string,
+  ragClient: RagIndexClient,
+): Promise<JsonObject> {
+  const POST = createAdminRagSourcesPostHandler({
+    db,
+    session: adminSession,
+    ragClient,
+    ingestOptions: { vectorStoreId: 'vs_publish_proof', poll: { maxAttempts: 2, sleep: async () => {} } },
+  });
+  const response = await POST({
+    request: jsonRequest('https://example.test/api/admin/rag-sources', { action: 'ingest', ragSourceId }),
+  } as never);
+  assert.equal(response.status, 200);
+  const json = await responseJson(response);
+  assert.equal(json.code, 'rag_source_indexed');
+  return json;
 }
 
 test('fixture-based publish proof gate covers scan to public DM/RAG path', async () => {
@@ -248,6 +304,7 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
 
   assert.deepEqual(await fetchPublicProjectCards(db), []);
   assert.equal(await fetchPublicProjectDetail(db, String(PUBLISHED_FIELDS.slug)), null);
+  resetPublicProjectDetailsLoadForTests();
   const publicBeforePublish = await loadPublicProjectDetails({
     env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' },
     db,
@@ -345,6 +402,7 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
   assert.equal(publishedDetail?.id, publishedProjectId);
   assert.equal(await fetchPublicProjectDetail(db, String(UNPUBLISHED_FIELDS.slug)), null);
 
+  resetPublicProjectDetailsLoadForTests();
   const publicAfterPublish = await loadPublicProjectDetails({
     env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' },
     db,
@@ -372,17 +430,15 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
      VALUES ('ev_publish_proof_public', $1, 'readme', 'test:publish-proof:public', 'safe_public', $2, '{}'::jsonb)`,
     [publishedProjectId, 'Approved public source text long enough for a recruiter-facing citation in DM answers.'],
   );
-  const eligible = await markRagSourceEligible(db, {
-    projectId: publishedProjectId,
-    evidenceSourceId: 'ev_publish_proof_public',
-    actor: 'age-737-proof',
-  });
-  assert.equal(eligible.ok, true);
+  const listed = await listRagSources(db);
+  const listedSources = listed.sources as Array<{ evidenceSourceId?: string; project_id?: string }>;
+  const listedEntry = listedSources.find((source) => source.evidenceSourceId === 'ev_publish_proof_public');
+  assert.ok(listedEntry, 'expected published evidence in admin RAG list');
+  assert.equal(listedEntry.project_id, publishedProjectId);
+
+  const eligible = await markRagSourceEligibleViaAdmin(db, publishedProjectId, 'ev_publish_proof_public');
   const publishedRagSourceId = String(eligible.ragSourceId);
-  const ingested = await ingestRagSource(db, createFakeRagClient(), publishedRagSourceId, 'age-737-proof', {
-    poll: { maxAttempts: 2, sleep: async () => {} },
-  });
-  assert.equal(ingested.ok, true);
+  await ingestRagSourceViaAdmin(db, publishedRagSourceId, createFakeRagClient());
 
   await db.query(
     `INSERT INTO evidence_sources (id, project_id, source_type, source_ref, privacy_state, extracted_text, claim_map)
