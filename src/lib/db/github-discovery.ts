@@ -24,6 +24,7 @@ export interface GithubDiscoveryScanInput {
   repo: GithubRepositorySnapshot;
   trigger?: 'manual' | 'slack' | 'test';
   allowlistTopic?: string;
+  scannerMode?: 'manual-snapshot' | 'live-github';
 }
 
 export type GithubDiscoveryScanResult =
@@ -65,6 +66,7 @@ export async function scanGithubRepositoryCandidate(
   const allowlistTopic = input.allowlistTopic ?? PORTFOLIO_CANDIDATE_TOPIC;
   const repo = normalizeRepoSnapshot(input.repo);
   const trigger = input.trigger ?? 'manual';
+  const scannerMode = input.scannerMode ?? 'manual-snapshot';
   const scanRunId = `scan_${randomUUID()}`;
   const startedAt = new Date().toISOString();
   const repoScope = {
@@ -81,7 +83,7 @@ export async function scanGithubRepositoryCandidate(
   );
 
   try {
-    const audit = buildAudit(repo, allowlistTopic);
+    const audit = buildAudit(repo, allowlistTopic, scannerMode);
 
     if (!audit.allowlisted) {
       const reason = `missing required GitHub topic: ${allowlistTopic}`;
@@ -188,14 +190,18 @@ function normalizeRepoSnapshot(repo: GithubRepositorySnapshot): GithubRepository
   };
 }
 
-function buildAudit(repo: GithubRepositorySnapshot & { fullName: string }, allowlistTopic: string): JsonRecord {
+function buildAudit(
+  repo: GithubRepositorySnapshot & { fullName: string },
+  allowlistTopic: string,
+  scannerMode: 'manual-snapshot' | 'live-github',
+): JsonRecord {
   const allowlisted = repo.topics.includes(allowlistTopic);
   return {
     allowlisted,
     allowlistTopic,
     matchedTopics: allowlisted ? [allowlistTopic] : [],
     rejectedReason: allowlisted ? null : `missing required GitHub topic: ${allowlistTopic}`,
-    scannerMode: 'manual-snapshot',
+    scannerMode,
     mutatesRepository: false,
     repoVisibility: repo.isPrivate ? 'private' : 'public',
   };
