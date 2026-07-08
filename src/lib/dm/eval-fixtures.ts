@@ -71,7 +71,7 @@ export function createStubModelForEvalCase(testCase: DMEvalCase): MockLanguageMo
   return createThrowingMockModel();
 }
 
-export function createStreamingMockModel(text: string): MockLanguageModelV4 {
+function createStreamingMockModel(text: string): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: async () => ({
       stream: simulateReadableStream({
@@ -95,7 +95,7 @@ export function createStreamingMockModel(text: string): MockLanguageModelV4 {
   });
 }
 
-export function createThrowingMockModel(message = 'offline eval refusal case should not call the model'): MockLanguageModelV4 {
+function createThrowingMockModel(message = 'offline eval refusal case should not call the model'): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: async () => {
       throw new Error(message);

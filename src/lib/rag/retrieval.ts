@@ -6,9 +6,9 @@ import {
   type SearchableRagSource,
 } from './ingestion';
 
-export const PUBLIC_RAG_MAX_RESULTS = 4;
-export const PUBLIC_RAG_SCORE_THRESHOLD = 0.2;
-export const PUBLIC_RAG_MIN_TEXT_CHARS = 32;
+const PUBLIC_RAG_MAX_RESULTS = 4;
+const PUBLIC_RAG_SCORE_THRESHOLD = 0.2;
+const PUBLIC_RAG_MIN_TEXT_CHARS = 32;
 
 export interface PublicRagSearchOptions {
   maxNumResults?: number;

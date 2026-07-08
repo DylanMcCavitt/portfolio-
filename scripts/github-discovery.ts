@@ -14,7 +14,7 @@ async function readFixture(path: string): Promise<GithubDiscoveryFixture> {
   return { actor: parsed.actor, repo: parsed.repo };
 }
 
-export async function runGithubDiscoveryFixture(path: string, actor = 'manual-github-discovery'): Promise<void> {
+async function runGithubDiscoveryFixture(path: string, actor = 'manual-github-discovery'): Promise<void> {
   const fixture = await readFixture(path);
   const db = createQueryable();
   await applyMigrations(db);

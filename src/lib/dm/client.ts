@@ -69,11 +69,7 @@ export interface Contact {
 }
 
 /**
- * UI fallback contact card. The production `get_contact` tool (#84) is the
- * authoritative source and its payload overrides these per-field (see
- * {@link ContactBlock}); this fallback lets the contact artifact render before
- * the endpoint is wired. These are the same facts already carried in the résumé
- * `now` track and site metadata — not new content.
+ * UI fallback contact card merged with streamed contact blocks.
  */
 export const CONTACT: Contact = {
   email: 'dylanmccavitt@outlook.com',

@@ -165,7 +165,7 @@ function isPublicDataUnavailableError(error: unknown): error is DMToolError {
   return error instanceof DMToolError && error.code === 'public_data_unavailable';
 }
 
-export function getContact(): ContactBlock {
+function getContact(): ContactBlock {
   const current = RESUME.tracks.find((track) => track.current) ?? RESUME.tracks[RESUME.tracks.length - 1];
   const email = creditValue(current, 'Email');
   const location = creditValue(current, 'Location');
@@ -186,7 +186,7 @@ export function getContact(): ContactBlock {
   };
 }
 
-export function summarizeProject(project: ProjectDetailReadModel): ProjectSummary {
+function summarizeProject(project: ProjectDetailReadModel): ProjectSummary {
   return {
     id: project.id,
     title: project.title,

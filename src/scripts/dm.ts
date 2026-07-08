@@ -1,22 +1,10 @@
 /**
- * DM landing — production chat client island (#86).
+ * DM landing — production chat client island.
  *
- * The one deliberate client-JS island on the landing (the rest of the site
- * stays static). It replaces the canned reveal driver
- * (`_agentProto.client.ts`) with a real integration against the DM streaming
- * endpoint (#84): it submits the visitor's question, consumes the NDJSON stream
- * incrementally, and renders the user turn, streamed answer text, the tool
- * trace (live "working…" log + `USED N tools`), and project / résumé /
- * evidence / contact / link artifacts — building each turn's DOM from streamed payloads rather than
- * pre-rendered canned turns.
- *
- * Failure is graceful by construction: a missing/erroring endpoint, a malformed
- * line, or an unknown answer-block kind is skipped or surfaced as a friendly
- * notice without breaking the conversation surface. Network text is only ever
- * written via `textContent`, so streamed content can never inject markup.
- *
- * The contract (answer-block + stream-event types, the tolerant NDJSON parser,
- * and id resolvers over canonical catalog/résumé data) lives in `lib/dm/client.ts`.
+ * Submits visitor questions to `/api/dm/chat`, consumes the NDJSON stream,
+ * and renders user turns, streamed answer text, tool trace, and artifact blocks.
+ * Network text is only ever written via `textContent`, so streamed content
+ * can never inject markup. The contract lives in `lib/dm/client.ts`.
  */
 
 import {
@@ -182,14 +170,12 @@ class Turn {
   private addTool(name: string, summary?: string): void {
     this.toolCount += 1;
     const label = summary ? `${name} · ${summary}` : `${name}()`;
-    // live "working…" log (visible only until the answer reveals)
     this.logEl.append(
       make('li', { class: 'dm-log-line' }, [
         make('span', { class: 'dm-spin', 'aria-hidden': 'true' }),
         make('code', { text: label }),
       ]),
     );
-    // persistent USED N tools disclosure
     this.usedListEl.append(make('li', {}, [make('code', { text: label })]));
     this.usedSummaryCount.textContent = `used ${this.toolCount} tool${
       this.toolCount === 1 ? '' : 's'

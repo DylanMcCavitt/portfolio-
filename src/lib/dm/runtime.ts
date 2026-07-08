@@ -10,7 +10,7 @@ import {
 } from '../rag/retrieval';
 import { createPublicDMDataTools, DMToolError, type PublicDMDataTools } from './data-tools';
 import { createDMMetricsRecorder, shouldRecordDMMetrics } from './metrics';
-import type { AnswerBlock, DMChatRequest, DMStreamEvent, ProjectSummary, ToolTraceItem, ToolTraceMetadata } from './contract';
+import { AGENT_NAME, type AnswerBlock, type DMChatRequest, type DMStreamEvent, type ProjectSummary, type ToolTraceItem, type ToolTraceMetadata } from './contract';
 
 export interface DMRuntimeConfig {
   provider: 'openai';
@@ -113,7 +113,7 @@ export function createDMChatStream(
 
         emit({
           type: 'ready',
-          agent: 'DM',
+          agent: AGENT_NAME,
           provider: config.provider,
           trace: trace(traceItems),
         });
@@ -243,7 +243,7 @@ export function createDMChatStream(
   });
 }
 
-export function isDMToolError(error: unknown): error is DMToolError {
+function isDMToolError(error: unknown): error is DMToolError {
   return error instanceof Error && error.name === 'DMToolError';
 }
 
@@ -506,7 +506,7 @@ function enqueueJson(
 }
 
 function trace(items: ToolTraceItem[]): ToolTraceMetadata {
-  return { mode: 'vercel-ai-sdk', agent: 'DM', items: [...items] };
+  return { mode: 'vercel-ai-sdk', agent: AGENT_NAME, items: [...items] };
 }
 
 function traceItem(toolName: string, label: string): ToolTraceItem {

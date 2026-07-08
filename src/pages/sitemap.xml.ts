@@ -18,7 +18,7 @@
  * from either published DB rows or the catalog shadow fallback.
  *
  * `/projects` (the index) is intentionally absent — it now 301s to `/library`.
- * Retired Sera-era URLs are handled by `vercel.json` 301s and never appear here.
+ * Retired legacy URLs are handled by `vercel.json` 301s and never appear here.
  */
 import type { APIRoute } from 'astro';
 import { PLAYLIST_SLUGS } from '../data/catalog';
