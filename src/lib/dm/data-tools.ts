@@ -25,10 +25,20 @@ export interface SearchProjectsInput {
   limit?: number;
 }
 
+export interface SearchProjectsOutput {
+  query: string;
+  projects: ProjectSummary[];
+  fallbackUsed: boolean;
+}
+
 export interface FilterProjectsInput {
   area?: string;
   status?: ProjectSummary['status'][0];
   limit?: number;
+}
+
+export interface FilterProjectsOutput {
+  projects: ProjectSummary[];
 }
 
 export interface RankProjectsInput {
@@ -37,14 +47,18 @@ export interface RankProjectsInput {
   limit?: number;
 }
 
+export interface RankProjectsOutput {
+  projects: ProjectSummary[];
+}
+
 export interface ReadResumeInput {
   trackIds?: string[];
 }
 
 export interface PublicDMDataTools {
-  searchProjects(input: SearchProjectsInput): Promise<{ query: string; projects: ProjectSummary[] }>;
-  filterProjects(input?: FilterProjectsInput): Promise<{ projects: ProjectSummary[] }>;
-  rankProjects(input?: RankProjectsInput): Promise<{ projects: ProjectSummary[] }>;
+  searchProjects(input: SearchProjectsInput): Promise<SearchProjectsOutput>;
+  filterProjects(input?: FilterProjectsInput): Promise<FilterProjectsOutput>;
+  rankProjects(input?: RankProjectsInput): Promise<RankProjectsOutput>;
   readResume(input?: ReadResumeInput): Promise<{ tracks: ResumeTrackSummary[] }>;
   getContact(): ContactBlock;
   assertProjectIds(ids: string[]): Promise<void>;
@@ -100,14 +114,18 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
   return {
     async searchProjects(input) {
       const query = input.query.trim();
-      const tokens = tokenize(query);
-      const ranked = (await projects())
-        .map((project) => ({ project, score: scoreProject(project, tokens) }))
-        .filter((item) => item.score > 0)
-        .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id))
+      const tokenSets = expandQuery(query);
+      const all = await projects();
+      const scored = all
+        .map((project) => ({ project, score: scoreProject(project, tokenSets) }))
+        .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id));
+      const matched = scored.filter((item) => item.score > 0);
+      const fallbackUsed = matched.length === 0;
+      const source = fallbackUsed ? scored : matched;
+      const ranked = source
         .slice(0, clampLimit(input.limit, 4))
         .map(({ project }) => summarizeProject(project));
-      return { query, projects: ranked };
+      return { query, projects: ranked, fallbackUsed };
     },
 
     async filterProjects(input = {}) {
@@ -134,10 +152,10 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
         };
       }
 
-      const tokens = tokenize(input.intent ?? '');
+      const tokenSets = expandQuery(input.intent ?? '');
       return {
         projects: all
-          .map((project) => ({ project, score: impactScore(project, tokens) }))
+          .map((project) => ({ project, score: impactScore(project, tokenSets) }))
           .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id))
           .slice(0, clampLimit(input.limit, 4))
           .map(({ project }) => summarizeProject(project)),
@@ -219,17 +237,23 @@ function summarizeResumeTrack(track: ResumeTrack, publishedProjectIds: Set<strin
   };
 }
 
-function tokenize(value: string): string[] {
+function expandQuery(value: string): string[][] {
   const normalized = value.toLowerCase().replace(/[^a-z0-9+.#-]+/g, ' ');
-  return normalized.split(' ').filter((token) => token.length > 1 && !SEARCH_STOP_WORDS.has(token));
+  const tokens = normalized.split(' ').filter((token) => token.length > 1 && !SEARCH_STOP_WORDS.has(token));
+  return tokens.map((token) => {
+    const synonyms = TERM_SYNONYMS[token];
+    return synonyms ? [...new Set([token, ...synonyms])] : [token];
+  });
 }
 
-function scoreProject(project: ProjectDetailReadModel, tokens: string[]): number {
-  if (tokens.length === 0) return 0;
-  const haystack = [
+function projectHaystack(project: ProjectDetailReadModel): string {
+  return [
     project.id,
     project.title,
     project.area,
+    project.status[0],
+    project.status[1] ?? '',
+    String(project.year),
     project.activity,
     project.line,
     project.summary,
@@ -240,13 +264,18 @@ function scoreProject(project: ProjectDetailReadModel, tokens: string[]): number
   ]
     .join(' ')
     .toLowerCase();
-  return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0);
 }
 
-function impactScore(project: ProjectDetailReadModel, tokens: string[]): number {
+function scoreProject(project: ProjectDetailReadModel, tokenSets: string[][]): number {
+  if (tokenSets.length === 0) return 0;
+  const haystack = projectHaystack(project);
+  return tokenSets.reduce((score, terms) => score + (terms.some((term) => haystack.includes(term)) ? 1 : 0), 0);
+}
+
+function impactScore(project: ProjectDetailReadModel, tokenSets: string[][]): number {
   const statusScore = project.status[0] === 'live' || project.status[0] === 'done' ? 3 : 1;
   const moneyScore = project.money ? 2 : 0;
-  return statusScore + moneyScore + scoreProject(project, tokens);
+  return statusScore + moneyScore + scoreProject(project, tokenSets);
 }
 
 function creditValue(track: ResumeTrack, label: string): string {
@@ -277,3 +306,38 @@ const SEARCH_STOP_WORDS = new Set([
   'which',
   'with',
 ]);
+
+const TERM_SYNONYMS: Record<string, string[]> = {
+  ai: ['ai', 'agent', 'agents', 'llm', 'mcp', 'ml'],
+  agent: ['agent', 'agents', 'mcp', 'ai', 'llm'],
+  agents: ['agents', 'agent', 'mcp', 'ai'],
+  llm: ['llm', 'ai', 'agent', 'agents'],
+  mcp: ['mcp', 'agent', 'agents', 'ai'],
+  ml: ['ml', 'ai', 'model'],
+  app: ['app', 'ios', 'mobile'],
+  apps: ['apps', 'app', 'ios', 'mobile'],
+  ios: ['ios', 'app', 'mobile'],
+  mobile: ['mobile', 'app', 'ios'],
+  infrastructure: ['infrastructure', 'infra', 'server', 'backend'],
+  infra: ['infra', 'infrastructure', 'server', 'backend'],
+  backend: ['backend', 'server', 'api', 'infrastructure'],
+  frontend: ['frontend', 'web', 'ui'],
+  web: ['web', 'frontend', 'ui'],
+  ui: ['ui', 'frontend', 'web'],
+  trading: ['trading', 'trade', 'options', 'stock', 'robinhood', 'tastytrade'],
+  trade: ['trade', 'trading', 'options'],
+  automation: ['automation', 'automated', 'workflow', 'script'],
+  automated: ['automated', 'automation', 'workflow'],
+  workflow: ['workflow', 'automation', 'automated'],
+  cloud: ['cloud', 'aws', 'gcp', 'azure'],
+  deploy: ['deploy', 'deployment', 'ci', 'cd'],
+  database: ['database', 'db', 'postgres', 'sql'],
+  db: ['db', 'database', 'postgres', 'sql'],
+  test: ['test', 'testing', 'eval', 'benchmark'],
+  testing: ['testing', 'test', 'eval', 'benchmark'],
+  eval: ['eval', 'evaluate', 'testing', 'benchmark'],
+  security: ['security', 'cyber', 'risk', 'kroll'],
+  python: ['python', 'script', 'backend'],
+  typescript: ['typescript', 'ts', 'js', 'javascript'],
+  javascript: ['javascript', 'js', 'typescript', 'ts'],
+};

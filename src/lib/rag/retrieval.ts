@@ -1,3 +1,5 @@
+import { OpenAI } from 'openai';
+import type { VectorStoreSearchParams } from 'openai/resources/vector-stores/vector-stores';
 import {
   buildPublicFileSearchTool,
   listSearchableRagSources,
@@ -90,6 +92,84 @@ export function publicRagCitationsFromFileSearchResult(
 
 export function publicRagProjectIds(citations: PublicRagCitation[]): string[] {
   return [...new Set(citations.map((citation) => citation.projectId))];
+}
+
+export interface PublicRagSearchOutput {
+  citations: PublicRagCitation[];
+}
+
+export async function publicRagSearch(
+  query: string,
+  config: PublicRagSearchConfig,
+  options: { apiKey: string },
+): Promise<PublicRagSearchOutput> {
+  const openai = new OpenAI({ apiKey: options.apiKey });
+  const all: Array<PublicRagCitation & { score: number }> = [];
+
+  for (const vectorStoreId of config.tool.vectorStoreIds) {
+    const page = await openai.vectorStores.search(vectorStoreId, {
+      query,
+      max_num_results: config.tool.maxNumResults,
+      filters: config.tool.filters as VectorStoreSearchParams['filters'],
+      ranking_options: { ranker: 'auto', score_threshold: config.scoreThreshold },
+    });
+
+    for (const result of page.data) {
+      const text = result.content.map((content) => content.text).join('\n');
+      const citation = citationFromSearchResult(result, text, config);
+      if (citation) all.push(citation);
+    }
+  }
+
+  const seen = new Set<string>();
+  const citations = all
+    .filter((citation) => {
+      const key = `${citation.ragSourceId}:${citation.fileId}:${citation.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, config.tool.maxNumResults);
+
+  return { citations };
+}
+
+function citationFromSearchResult(
+  value: unknown,
+  text: string,
+  config: PublicRagSearchConfig,
+): (PublicRagCitation & { score: number }) | null {
+  if (!isRecord(value)) return null;
+
+  const attributes = isRecord(value.attributes) ? value.attributes : {};
+  if (typeof attributes.visibility === 'string' && attributes.visibility !== 'public') return null;
+
+  const fileId = stringValue(value.file_id);
+  const ragSourceId = stringValue(attributes.rag_source_id) ?? stringValue(attributes.ragSourceId);
+  const projectId = stringValue(attributes.project_id) ?? stringValue(attributes.projectId);
+
+  if (!fileId) return null;
+
+  const source = config.sources.find((candidate) => candidate.openai_file_id === fileId);
+  if (!source) return null;
+  if (ragSourceId && ragSourceId !== source.id) return null;
+  if (projectId && projectId !== source.project_id) return null;
+
+  const trimmed = text.trim();
+  if (trimmed.length < config.minTextChars) return null;
+
+  const score = numberValue(value.score);
+  if (score === undefined || score < config.scoreThreshold) return null;
+
+  return {
+    ragSourceId: source.id,
+    projectId: source.project_id,
+    fileId: source.openai_file_id,
+    ...(typeof value.filename === 'string' ? { filename: value.filename } : {}),
+    score,
+    text: trimmed,
+  };
 }
 
 function citationFromResult(
