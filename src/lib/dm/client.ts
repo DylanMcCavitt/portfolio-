@@ -430,7 +430,7 @@ export function resolveTracks(trackIds: string[]): ResumeTrack[] {
   return out;
 }
 
-/** Resolve evidence ids to canonical site records, letting streamed project artifacts satisfy DB-only ids. */
+/** Resolve evidence ids to canonical site records, letting streamed artifacts satisfy active DB-source ids. */
 export function resolveEvidence(block: EvidenceBlock): {
   projects: Project[];
   tracks: ResumeTrack[];

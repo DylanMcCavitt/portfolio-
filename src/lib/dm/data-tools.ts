@@ -1,6 +1,6 @@
 import { RESUME, getResumeTrackById, type ResumeTrack } from '../../data/resume';
 import type { ProjectDetailReadModel, ProjectReadQueryable } from '../db/project-reads';
-import { fetchPublicProjectDetails } from '../db/project-reads';
+import { loadPublicProjectDetails } from '../public-projects';
 import type { ContactBlock, ProjectSummary, ResumeTrackSummary } from './contract';
 
 export class DMToolError extends Error {
@@ -56,9 +56,9 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
   let projectsPromise: Promise<ProjectDetailReadModel[]> | null = null;
 
   async function projects(): Promise<ProjectDetailReadModel[]> {
-    projectsPromise ??= fetchPublicProjectDetails(db).catch((error: unknown) => {
+    projectsPromise ??= loadPublicProjectDetails({ db }).then(({ projects }) => projects).catch((error: unknown) => {
       projectsPromise = null;
-      throw new DMToolError('public_data_unavailable', 'Failed to read published public project records.', {
+      throw new DMToolError('public_data_unavailable', 'Failed to read active public project records.', {
         cause: error instanceof Error ? error.name : typeof error,
       });
     });

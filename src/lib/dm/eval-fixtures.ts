@@ -14,14 +14,14 @@ export interface DMEvalCase {
 
 export const DM_EVAL_CASES: DMEvalCase[] = [
   {
-    name: 'grounding: trading automation resolves to published project',
+    name: 'grounding: trading automation resolves through active public project source',
     prompt: 'Which published project shows trading automation and brokerage workflow work?',
     modelText: 'Dylan has public evidence for practical trading automation work.',
     expect(events) {
       const projectBlock = events.find((event) => event.type === 'block' && event.block.kind === 'projects');
       if (!projectBlock || projectBlock.type !== 'block' || projectBlock.block.kind !== 'projects') return 'missing projects answer block';
       if (!projectBlock.block.ids.includes('agentic-trader')) return `expected agentic-trader, got ${projectBlock.block.ids.join(', ')}`;
-      if (JSON.stringify(events).includes('exit-manager') || JSON.stringify(events).includes('candidate-hidden')) return 'leaked draft or candidate data';
+      if (JSON.stringify(events).includes('candidate-hidden')) return 'leaked candidate data';
       return null;
     },
   },

@@ -143,7 +143,7 @@ export function createDMChatStream(
           messages: modelMessages(normalizedRequest),
           tools: aiTools(tools, ragConfig),
           providerOptions,
-          stopWhen: isStepCount(4),
+          stopWhen: isStepCount(8),
         });
 
         for await (const part of result.stream) {
@@ -415,6 +415,7 @@ function systemPrompt(): string {
     'Answer only from tool results over published portfolio project records, approved public RAG sources, and static public resume/contact data.',
     'Never claim access to drafts, candidate records, private repos, Slack/admin notes, visitor chats, database metadata, or hidden plans.',
     'If asked for private, draft, candidate-record, unsupported, or unknown facts, refuse briefly and redirect to public project, resume, contact, or approved public source facts.',
+    'When tool results contain relevant public data, answer directly from those results; if a specific item is not public, say that and offer nearby public evidence.',
     'When file search returns weak or empty context, fall back to structured public project/resume/contact tools or refuse unsupported claims.',
     'Keep answers concise, concrete, jargon-light, and outcome-focused.',
   ].join(' ');
@@ -422,7 +423,7 @@ function systemPrompt(): string {
 
 function privateDataRefusal(message: string): AnswerBlock | null {
   const normalized = message.toLowerCase();
-  if (!matchesAny(normalized, ['candidate record', 'candidate note', 'project candidate', 'draft', 'private', 'hidden', 'slack', 'admin note', 'visitor chat', 'database row', 'secret'])) {
+  if (!PRIVATE_DATA_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return null;
   }
   return {
@@ -430,6 +431,22 @@ function privateDataRefusal(message: string): AnswerBlock | null {
     text: 'I can only discuss Dylan’s published portfolio projects, public resume facts, and contact details. Ask about shipped work, current strengths, or how to reach him.',
   };
 }
+
+const PRIVATE_DATA_REQUEST_PATTERNS = [
+  /\bcandidate\s+(?:records?|notes?)\b/,
+  /\bproject\s+candidate\b/,
+  /\badmin\s+(?:notes?|records?)\b/,
+  /\bvisitor\s+(?:chats?|messages?)\b/,
+  /\bdatabase\s+(?:rows?|records?|metadata)\b/,
+  /\bdraft\s+projects?\b/,
+  /\bproject\s+drafts?\b/,
+  /\b(?:hidden|private|internal|unpublished)\s+drafts?\b/,
+  /\b(?:hidden|internal|unpublished)\s+projects?\b/,
+  /\bprivate\s+(?:notes?|records?|drafts?)\b/,
+  /\bshow\s+me\s+(?:your|dylan(?:'|’)?s)\s+drafts?\b/,
+  /\bslack\s+(?:messages?|notes?|channels?|admin\s+notes?)\b/,
+  /\bsecret\s+(?:projects?|plans?|roadmaps?|notes?|records?|drafts?)\b/,
+];
 
 function blocksFromToolResult(output: unknown): AnswerBlock[] {
   if (!isRecord(output)) return [];
