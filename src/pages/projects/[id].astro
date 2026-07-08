@@ -22,30 +22,27 @@ import {
 } from '@/data/catalog';
 import type { ProjectDetailReadModel } from '@/lib/db/project-reads';
 import { publicProjectStaticPaths, resolvePublicProjectByReference } from '@/lib/public-project-route-resolver';
-import { loadPublicProjectDetails, shouldRenderPublicProjectsLive } from '@/lib/public-projects';
+import { loadPublicProjectDetails } from '@/lib/public-projects';
 import { projectMeta } from '@/lib/seo';
 import { AGENT_NAME } from '@/lib/dm/client';
 import '@/styles/dm.css';
 
-export const prerender = !shouldRenderPublicProjectsLive(process.env);
-
 export async function getStaticPaths() {
-  if (!prerender) return [];
   const { projects } = await loadPublicProjectDetails();
   return publicProjectStaticPaths(projects);
 }
 
 interface Props {
-  project: ProjectDetailReadModel;
-  projects: ProjectDetailReadModel[];
+  project?: ProjectDetailReadModel;
+  projects?: ProjectDetailReadModel[];
 }
 
-const liveProjects = prerender ? null : (await loadPublicProjectDetails()).projects;
-const project =
-  prerender
-    ? (Astro.props as Props).project
-    : resolvePublicProjectByReference(liveProjects!, Astro.params.id!);
-const projects = prerender ? (Astro.props as Props).projects : liveProjects!;
+// Prerendered builds receive props from getStaticPaths. When the DB-backed
+// public project source is active, astro.config.mjs flips this route to
+// on-demand rendering and each request loads published rows instead.
+const staticProps = Astro.props as Props;
+const projects = staticProps.projects ?? (await loadPublicProjectDetails()).projects;
+const project = staticProps.project ?? resolvePublicProjectByReference(projects, Astro.params.id ?? '');
 
 if (!project) {
   return new Response(null, { status: 404, statusText: 'Not Found' });

@@ -528,7 +528,11 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
     db,
   });
   assert.equal(publicAfterPublish.source, 'db');
-  assert.deepEqual(publicAfterPublish.projects.map((project) => project.id), [publishedProjectId]);
+  assert.equal(publicAfterPublish.projects[0]?.id, publishedProjectId);
+  assert.ok(
+    !publicAfterPublish.projects.some((project) => project.id === unpublishedProjectId),
+    'draft-only project rows must stay hidden from the public overlay',
+  );
 
   const staticSlugsAfterPublish = await projectStaticPathSlugs(db);
   assert.ok(
@@ -542,7 +546,11 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
 
   const dmTools = createPublicDMDataTools(db);
   const publishedSearch = await dmTools.searchProjects({ query: 'fixture-backed publish gate proof', limit: 5 });
-  assert.deepEqual(publishedSearch.projects.map((project) => project.id), [publishedProjectId]);
+  assert.equal(publishedSearch.projects[0]?.id, publishedProjectId);
+  assert.ok(
+    !publishedSearch.projects.some((project) => project.id === unpublishedProjectId),
+    'draft-only project rows must never surface in DM search',
+  );
   const unpublishedSearch = await dmTools.searchProjects({ query: 'proof-sentinel-unpublished-737', limit: 5 });
   assert.deepEqual(unpublishedSearch.projects, []);
 

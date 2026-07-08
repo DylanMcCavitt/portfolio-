@@ -39,11 +39,6 @@ export function shouldUsePublicProjectDb(env: PublicProjectEnv = process.env): b
   return false;
 }
 
-/** Public project pages should SSR from the DB instead of prerendering at build time. */
-export function shouldRenderPublicProjectsLive(env: PublicProjectEnv = process.env): boolean {
-  return shouldUsePublicProjectDb(env);
-}
-
 function hasDatabaseUrl(env: DatabaseEnv): boolean {
   return DATABASE_ENV_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
@@ -55,6 +50,23 @@ function isPublicProjectDbSourceEnabled(options: PublicProjectLoadOptions = {}):
 
 function catalogProjectDetails(): ProjectDetailReadModel[] {
   return buildCatalogShadowRecords(CATALOG).map((record) => projectRecordToReadModels(record).detail);
+}
+
+/**
+ * Pre-cutover overlay (until Linear AGE-738 retires the catalog): published DB
+ * rows come first, then catalog projects that no DB row shadows by id or slug.
+ * A single publish must add to the public site, not collapse it to one entry.
+ */
+function overlayCatalogProjects(dbProjects: ProjectDetailReadModel[]): ProjectDetailReadModel[] {
+  const shadowed = new Set<string>();
+  for (const project of dbProjects) {
+    shadowed.add(project.id);
+    shadowed.add(project.slug);
+  }
+  const catalog = catalogProjectDetails().filter(
+    (project) => !shadowed.has(project.id) && !shadowed.has(project.slug),
+  );
+  return [...dbProjects, ...catalog];
 }
 
 function projectReadDb(client: DbClient): ProjectReadQueryable {
@@ -87,7 +99,7 @@ async function resolvePublicProjectDetails(options: PublicProjectLoadOptions): P
     const db = options.db ?? projectReadDb(createDbClient(getDatabaseUrl(env)));
     const projects = await fetchPublicProjectDetails(db);
     if (!projects.length) return catalogFallback('No published DB project rows were found.');
-    return { source: 'db', projects };
+    return { source: 'db', projects: overlayCatalogProjects(projects) };
   } catch (error) {
     return catalogFallback(error instanceof Error ? error.message : String(error));
   }

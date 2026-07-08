@@ -32,7 +32,7 @@ test('DM route streams NDJSON text and answer blocks from the AI SDK seam', asyn
     request: new Request('https://example.test/api/dm/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'Which projects show practical AI workflow work?' }),
+      body: JSON.stringify({ message: 'Which projects show trading automation with Robinhood?' }),
     }),
   } as never);
 
@@ -56,20 +56,25 @@ test('DM data tools expose DB-gated public records and static resume/contact onl
   const db = await publishedProjectDb();
   const tools = createPublicDMDataTools(db);
 
+  // Pre-cutover overlay: published DB rows lead, catalog projects stay public,
+  // and DB rows that are not published never surface.
   const search = await tools.searchProjects({ query: 'trading automation robinhood', limit: 5 });
-  assert.deepEqual(search.projects.map((project) => project.id), ['agentic-trader']);
+  assert.equal(search.projects[0]?.id, 'agentic-trader');
 
   const ranked = await tools.rankProjects({ ids: ['agentic-trader'] });
   assert.deepEqual(ranked.projects.map((project) => project.id), ['agentic-trader']);
 
+  const catalogRanked = await tools.rankProjects({ ids: ['exit-manager'] });
+  assert.deepEqual(catalogRanked.projects.map((project) => project.id), ['exit-manager']);
+
   await assert.rejects(
-    () => tools.rankProjects({ ids: ['exit-manager'] }),
+    () => tools.rankProjects({ ids: ['proj-draft-only-unlisted'] }),
     (error: unknown) => error instanceof DMToolError && error.code === 'bad_project_id',
   );
 
   const resume = await tools.readResume({ trackIds: ['now'] });
   assert.deepEqual(resume.tracks.map((track) => track.id), ['now']);
-  assert.deepEqual(resume.tracks[0]?.era, ['agentic-trader']);
+  assert.deepEqual(resume.tracks[0]?.era, ['evalgate', 'bellas-beads', 'slurmlet', 'agentic-trader']);
 
   const contact = tools.getContact();
   assert.equal(contact.email, 'dylanmccavitt@outlook.com');
@@ -286,7 +291,7 @@ test('DM stream ends after DB-gated unpublished project notice without model tex
   const model = throwingModel();
   const events = await readNdjson(
     createDMChatStream(
-      { message: 'Tell me about this project.', context: { projectIds: ['exit-manager'] } },
+      { message: 'Tell me about this project.', context: { projectIds: ['proj-draft-only-unlisted'] } },
       TEST_CONFIG,
       { db, model },
     ),
@@ -693,6 +698,13 @@ async function publishedProjectDb(): Promise<Queryable> {
     published_at: '2026-06-28T00:00:00.000Z',
   });
   await insertProjectRecord(db, { ...draft, lifecycle_state: 'draft_only', source: 'github_discovery' });
+  await insertProjectRecord(db, {
+    ...draft,
+    id: 'proj-draft-only-unlisted',
+    slug: 'proj-draft-only-unlisted',
+    lifecycle_state: 'draft_only',
+    source: 'github_discovery',
+  });
   await insertProjectRecord(db, shadow);
   await db.query(
     `INSERT INTO project_candidates (id, source_kind, source_ref, lifecycle_state)

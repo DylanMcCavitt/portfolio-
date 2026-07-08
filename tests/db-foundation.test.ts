@@ -544,15 +544,20 @@ test('public project DB gate falls back to catalog until explicitly enabled and 
   await insertProjectRecord(db, published);
 
   resetPublicProjectDetailsLoadForTests();
+  // Pre-cutover overlay: the published DB row leads and the rest of the
+  // catalog stays public; the published id shadows its catalog twin.
   const enabled = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }, db });
   assert.equal(enabled.source, 'db');
-  assert.deepEqual(enabled.projects.map((project) => project.id), [published.id]);
-  assert.deepEqual(filterPublicProjectDetails(enabled.projects, 'all').map((project) => project.id), [published.id]);
+  assert.equal(enabled.projects[0]?.id, published.id);
+  assert.equal(enabled.projects.length, CATALOG.length);
+  assert.equal(new Set(enabled.projects.map((project) => project.id)).size, CATALOG.length);
+  assert.equal(filterPublicProjectDetails(enabled.projects, 'all').length, CATALOG.length);
 
   resetPublicProjectDetailsLoadForTests();
   const injectedDb = await loadPublicProjectDetails({ db });
   assert.equal(injectedDb.source, 'db');
-  assert.deepEqual(injectedDb.projects.map((project) => project.id), [published.id]);
+  assert.equal(injectedDb.projects[0]?.id, published.id);
+  assert.equal(injectedDb.projects.length, CATALOG.length);
 });
 
 test('loadPublicProjectDetails retries live DB reads after a transient failure', async () => {
@@ -587,7 +592,7 @@ test('loadPublicProjectDetails retries live DB reads after a transient failure',
   shouldFail = false;
   const second = await loadPublicProjectDetails({ env, db: flakyDb });
   assert.equal(second.source, 'db');
-  assert.deepEqual(second.projects.map((project) => project.id), [published.id]);
+  assert.equal(second.projects[0]?.id, published.id);
 
   resetPublicProjectDetailsLoadForTests();
   const gateOff = await loadPublicProjectDetails({ env: {} });
