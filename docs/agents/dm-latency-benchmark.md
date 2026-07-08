@@ -11,18 +11,31 @@
 ## Run dry plumbing check (no API key)
 
 ```bash
-npm run dm:bench -- --models openai/gpt-4o-mini,openai/gpt-4.1-mini --iterations 2
+npm run dm:bench -- --models openai/gpt-4.1,anthropic/claude-sonnet-4.5 --iterations 2
 ```
 
-Dry mode uses deterministic model stubs and shared eval fixtures so timing instrumentation, aggregation, and failure classification remain testable in CI/local environments without secrets.
+Dry mode uses deterministic model stubs and shared eval fixtures so timing instrumentation, aggregation, and failure classification remain testable in CI/local environments without secrets. Gateway model ids are accepted in dry mode.
 
 ## Run live comparison (maintainer only)
 
+Direct OpenAI models:
+
 ```bash
 OPENAI_API_KEY=... \
-DM_BENCH_MODELS="openai/gpt-4o-mini,openai/gpt-4.1-mini" \
+DM_BENCH_MODELS="openai/gpt-4.1,openai/gpt-5-mini" \
 npm run dm:bench -- --iterations 5 --json-path ./.tmp/dm-benchmark-live.json
 ```
+
+Models through Vercel AI Gateway:
+
+```bash
+AI_GATEWAY_API_KEY=... \
+OPENAI_API_KEY=... \
+DM_BENCH_MODELS="openai/gpt-4.1,anthropic/claude-sonnet-4.5" \
+npm run dm:bench -- --iterations 5 --json-path ./.tmp/dm-benchmark-live.json
+```
+
+`OPENAI_API_KEY` is still required even with the gateway because the public `searchSources` RAG tool calls the OpenAI Vector Store Search API directly.
 
 Then run the deterministic fixture checker:
 

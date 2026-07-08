@@ -17,7 +17,7 @@ interface CliOptions {
 }
 
 interface BenchmarkModelSpec {
-  provider: 'openai';
+  provider: 'gateway' | 'openai';
   model: string;
   label: string;
 }
@@ -36,7 +36,9 @@ async function main(): Promise<void> {
 
   const iterations = parseIterations(options.iterationsArg ?? process.env.DM_BENCH_ITERATIONS);
   const modelSpecs = parseModelSpecs(options.modelsArg ?? process.env.DM_BENCH_MODELS, process.env.DM_MODEL);
-  const dryRun = !process.env.OPENAI_API_KEY?.trim();
+  const hasGatewayKey = Boolean(process.env.AI_GATEWAY_API_KEY?.trim());
+  const hasOpenaiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const dryRun = !hasGatewayKey && !hasOpenaiKey;
 
   if (modelSpecs.length < 2) {
     console.warn(`[dm:bench] expected at least two models for comparison; running ${modelSpecs.length}.`);
@@ -189,11 +191,13 @@ function parseModelSpec(value: string): BenchmarkModelSpec {
   if (trimmed.includes('/')) {
     const [provider, ...rest] = trimmed.split('/');
     const model = rest.join('/').trim();
-    if (provider !== 'openai') {
-      throw new Error(`Unsupported provider "${provider}" in model "${trimmed}". Use openai/<model>.`);
+    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google') {
+      throw new Error(
+        `Unsupported provider "${provider}" in model "${trimmed}". Use openai/<model>, anthropic/<model>, or google/<model>.`,
+      );
     }
     if (!model) throw new Error(`Missing model name in "${trimmed}".`);
-    return { provider: 'openai', model, label: `${provider}/${model}` };
+    return { provider: provider === 'openai' ? 'openai' : 'gateway', model, label: `${provider}/${model}` };
   }
   return { provider: 'openai', model: trimmed, label: `openai/${trimmed}` };
 }
@@ -314,7 +318,7 @@ function printUsage(): void {
 Usage: npm run dm:bench -- [options]
 
 Options:
-  --models <list>       Comma-separated model list (gpt-4o-mini,openai/gpt-4.1-mini)
+  --models <list>       Comma-separated model list (openai/gpt-4.1,anthropic/claude-sonnet-4.5)
   --iterations <n>      Iterations per fixture (default: 3 or DM_BENCH_ITERATIONS)
   --json                Print JSON report to stdout
   --json-path <path>    Write JSON report to a file path
@@ -323,7 +327,8 @@ Options:
 Environment:
   DM_BENCH_MODELS       Comma-separated model list (same format as --models)
   DM_BENCH_ITERATIONS   Iteration count override
-  OPENAI_API_KEY        Required for live model calls. Missing key enables dry mode.
+  AI_GATEWAY_API_KEY    Required for gateway models (anthropic/google/etc). Missing key enables dry mode.
+  OPENAI_API_KEY        Required for direct OpenAI models and for RAG search. Missing key enables dry mode.
 `);
 }
 

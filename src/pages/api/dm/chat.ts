@@ -51,7 +51,7 @@ export function createDMPostHandler(deps: DMPostHandlerDeps = {}): APIRoute {
     try {
       assertRequestSize(request);
       const payload = await parseRequest(request);
-      return new Response(createDMChatStream(payload, config, { db, model: deps.model }), {
+      return new Response(createDMChatStream(payload, config, { db, model: deps.model, env: deps.env }), {
         headers: {
           'Cache-Control': 'no-store',
           'Content-Type': 'application/x-ndjson; charset=utf-8',
