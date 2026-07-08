@@ -731,26 +731,6 @@ export const AREA_PLAYLISTS: ProjectArea[] = [
 ];
 
 /**
- * Filter the catalog by library filter:
- * `all` → everything, `wip` → the flag, area → `area === id`.
- */
-export function filterCatalog(id: PlaylistId): Project[] {
-  return CATALOG.filter((p) =>
-    id === 'all' ? true : id === 'wip' ? p.wip : p.area === id,
-  );
-}
-
-/** Count of projects in a library filter. */
-export function playlistCount(id: PlaylistId): number {
-  return filterCatalog(id).length;
-}
-
-/** Look up a project by id. */
-export function getProjectById(id: string): Project | null {
-  return CATALOG.find((p) => p.id === id) ?? null;
-}
-
-/**
  * Canonical URL slugs for the filtered library routes (#25). The filter ids
  * double as area labels, so several contain spaces, ampersands, and uppercase
  * (`Trading systems`, `Agents & MCP`, `iOS`); those are not stable, shareable
@@ -777,11 +757,6 @@ const SLUG_TO_PLAYLIST = new Map<string, PlaylistId>(
     id,
   ]),
 );
-
-/** Canonical `/library/<slug>` segment for a non-`all` playlist. */
-export function playlistSlug(id: Exclude<PlaylistId, 'all'>): string {
-  return PLAYLIST_SLUGS[id];
-}
 
 /** Resolve a `/library/<slug>` segment back to its playlist id (or null). */
 export function playlistFromSlug(slug: string): PlaylistId | null {

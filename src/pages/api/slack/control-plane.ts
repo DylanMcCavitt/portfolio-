@@ -8,6 +8,7 @@ import {
   type SlackControlPlaneConfig,
   type SlackControlPlaneQueryable,
 } from '../../../lib/slack/control-plane';
+import { createGithubSnapshotFetcher } from '../../../lib/slack/github-fetch';
 
 export const prerender = false;
 
@@ -26,6 +27,8 @@ type SlackControlPlaneEnv = Partial<{
   POSTGRES_URL: string;
   PORTFOLIO_DATABASE_URL: string;
   PORTFOLIO_POSTGRES_URL: string;
+  GITHUB_DISCOVERY_TOKEN: string;
+  GITHUB_TOKEN: string;
 }>;
 
 export function createSlackControlPlanePostHandler(deps: SlackControlPlanePostHandlerDeps = {}): APIRoute {
@@ -74,6 +77,9 @@ export function readSlackControlPlaneConfig(env: SlackControlPlaneEnv = process.
   return {
     signingSecret: env.SLACK_SIGNING_SECRET ?? '',
     allowedUserId,
+    githubFetcher: createGithubSnapshotFetcher({
+      token: env.GITHUB_DISCOVERY_TOKEN?.trim() || env.GITHUB_TOKEN?.trim(),
+    }),
   };
 }
 

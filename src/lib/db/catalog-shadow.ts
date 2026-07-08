@@ -188,7 +188,7 @@ function snapshotFor(project: Project): LegacyCatalogSnapshot {
   };
 }
 
-export function catalogProjectToShadowRecord(project: Project): CatalogShadowRecord {
+function catalogProjectToShadowRecord(project: Project): CatalogShadowRecord {
   return {
     id: project.id,
     slug: project.id,

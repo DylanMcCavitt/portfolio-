@@ -3,13 +3,14 @@ import test from 'node:test';
 import { format } from 'node:util';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, type Queryable } from '../scripts/db';
-import { PORTFOLIO_CANDIDATE_TOPIC } from '../src/lib/db/github-discovery';
+import { PORTFOLIO_CANDIDATE_TOPIC, type GithubRepositorySnapshot } from '../src/lib/db/github-discovery';
 import {
   handleSlackFormEncodedRequest,
   signSlackBody,
   verifySlackRequest,
   type SlackControlPlaneConfig,
 } from '../src/lib/slack/control-plane';
+import { createGithubSnapshotFetcher } from '../src/lib/slack/github-fetch';
 import { createSlackControlPlanePostHandler } from '../src/pages/api/slack/control-plane';
 
 const SIGNING_SECRET = 'test-signing-secret';
@@ -21,6 +22,22 @@ const CONFIG: SlackControlPlaneConfig = {
   signingSecret: SIGNING_SECRET,
   allowedUserId: DYLAN_SLACK_USER,
   now: () => NOW,
+};
+
+const LIVE_REPO: GithubRepositorySnapshot = {
+  owner: 'DylanMcCavitt',
+  name: 'portfolio-candidate-app',
+  fullName: 'DylanMcCavitt/portfolio-candidate-app',
+  htmlUrl: 'https://github.com/DylanMcCavitt/portfolio-candidate-app',
+  description: 'A live GitHub repo worth reviewing for the portfolio.',
+  homepageUrl: 'https://example.com/candidate',
+  language: 'TypeScript',
+  topics: [PORTFOLIO_CANDIDATE_TOPIC, 'astro'],
+  isPrivate: false,
+  defaultBranch: 'main',
+  pushedAt: '2026-06-01T00:00:00.000Z',
+  stars: 2,
+  readmeMarkdown: '# Live candidate\n\nFetched from GitHub.',
 };
 
 function createTestDb(): Queryable {
@@ -78,6 +95,117 @@ function assertSlackLogKeys(logged: string[]): void {
     );
   }
 }
+
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'application/json');
+  return new Response(JSON.stringify(payload), {
+    status: init.status ?? 200,
+    headers,
+  });
+}
+
+function fetchHeaders(init: RequestInit | undefined): Record<string, string> {
+  return Object.fromEntries(new Headers(init?.headers).entries());
+}
+
+test('GitHub snapshot fetcher maps REST metadata and sends token-authenticated headers', async () => {
+  const calls: { url: string; headers: Record<string, string> }[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, headers: fetchHeaders(init) });
+    if (url.endsWith('/readme')) {
+      return new Response('# Candidate app\n\nReadme body');
+    }
+    return jsonResponse({
+      description: 'Fetched description',
+      homepage: 'https://example.com/fetched',
+      language: 'TypeScript',
+      topics: [PORTFOLIO_CANDIDATE_TOPIC, 'workflow'],
+      private: false,
+      default_branch: 'main',
+      pushed_at: '2026-06-01T00:00:00.000Z',
+      stargazers_count: 7,
+      html_url: 'https://github.com/DylanMcCavitt/portfolio-candidate-app',
+      full_name: 'DylanMcCavitt/portfolio-candidate-app',
+    });
+  };
+
+  const fetcher = createGithubSnapshotFetcher({ token: 'ghs_test_token', fetchImpl });
+  const snapshot = await fetcher('DylanMcCavitt', 'portfolio-candidate-app');
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    'https://api.github.com/repos/DylanMcCavitt/portfolio-candidate-app',
+    'https://api.github.com/repos/DylanMcCavitt/portfolio-candidate-app/readme',
+  ]);
+  assert.equal(calls[0]?.headers.accept, 'application/vnd.github+json');
+  assert.equal(calls[0]?.headers['x-github-api-version'], '2022-11-28');
+  assert.equal(calls[0]?.headers['user-agent'], 'portfolio-dm-scan');
+  assert.equal(calls[0]?.headers.authorization, 'Bearer ghs_test_token');
+  assert.equal(calls[1]?.headers.accept, 'application/vnd.github.raw+json');
+  assert.equal(calls[1]?.headers.authorization, 'Bearer ghs_test_token');
+
+  assert.deepEqual(snapshot, {
+    owner: 'DylanMcCavitt',
+    name: 'portfolio-candidate-app',
+    fullName: 'DylanMcCavitt/portfolio-candidate-app',
+    htmlUrl: 'https://github.com/DylanMcCavitt/portfolio-candidate-app',
+    description: 'Fetched description',
+    homepageUrl: 'https://example.com/fetched',
+    language: 'TypeScript',
+    topics: [PORTFOLIO_CANDIDATE_TOPIC, 'workflow'],
+    isPrivate: false,
+    defaultBranch: 'main',
+    pushedAt: '2026-06-01T00:00:00.000Z',
+    stars: 7,
+    readmeMarkdown: '# Candidate app\n\nReadme body',
+  });
+});
+
+test('GitHub snapshot fetcher omits authorization without a token and degrades readme 404 to null', async () => {
+  const calls: { url: string; headers: Record<string, string> }[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, headers: fetchHeaders(init) });
+    if (url.endsWith('/readme')) return new Response('not found', { status: 404 });
+    return jsonResponse({
+      description: null,
+      homepage: null,
+      language: null,
+      topics: [],
+      private: true,
+      default_branch: 'trunk',
+      pushed_at: null,
+      stargazers_count: 0,
+      html_url: 'https://github.com/DylanMcCavitt/private-app',
+      full_name: 'DylanMcCavitt/private-app',
+    });
+  };
+
+  const snapshot = await createGithubSnapshotFetcher({ fetchImpl })('DylanMcCavitt', 'private-app');
+
+  assert.equal(calls[0]?.headers.authorization, undefined);
+  assert.equal(calls[1]?.headers.authorization, undefined);
+  assert.equal(snapshot.isPrivate, true);
+  assert.equal(snapshot.readmeMarkdown, null);
+});
+
+test('GitHub snapshot fetcher repo failures throw safe errors without body or token leakage', async () => {
+  const fetchImpl: typeof fetch = async () => new Response('body secret ghs_test_token', { status: 404 });
+  const fetcher = createGithubSnapshotFetcher({ token: 'ghs_test_token', fetchImpl });
+
+  await assert.rejects(
+    () => fetcher('DylanMcCavitt', 'missing-private-app'),
+    (error) => {
+      const thrown = error as { code?: string; message?: string };
+      assert.equal(thrown.code, 'github_fetch_failed');
+      assert.match(String(thrown.message), /not found or is not accessible \(HTTP 404\)/);
+      assert.ok(!String(thrown.message).includes('body secret'), 'repo response body must not leak');
+      assert.ok(!String(thrown.message).includes('ghs_test_token'), 'GitHub token must not leak');
+      return true;
+    },
+  );
+});
 
 async function insertCandidate(db: Queryable, id = 'candidate_test'): Promise<string> {
   await db.query(
@@ -387,6 +515,129 @@ test('single-user Slack scan trigger routes authorized repo input to GitHub disc
   assert.deepEqual(candidates.rows, [
     { lifecycle_state: 'qualified', source_ref: 'https://github.com/DylanMcCavitt/portfolio-candidate-app' },
   ]);
+});
+
+test('Slack scan shorthand uses live GitHub metadata when no topics are explicit', async () => {
+  const db = await createMigratedDb();
+  const calls: { owner: string; name: string }[] = [];
+  const config: SlackControlPlaneConfig = {
+    ...CONFIG,
+    githubFetcher: async (owner, name) => {
+      calls.push({ owner, name });
+      return LIVE_REPO;
+    },
+  };
+
+  const result = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    formBody({ user_id: DYLAN_SLACK_USER, command: '/dm-scan', text: 'DylanMcCavitt/portfolio-candidate-app' }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 'scan_qualified');
+  assert.deepEqual(calls, [{ owner: 'DylanMcCavitt', name: 'portfolio-candidate-app' }]);
+  assert.equal(result.scan?.status, 'qualified');
+  assert.equal(result.scan?.audit.scannerMode, 'live-github');
+
+  const evidence = await db.query<{ source_type: string; extracted_text: string | null; claim_map: { audit?: { scannerMode?: string } } }>(
+    `SELECT source_type, extracted_text, claim_map FROM evidence_sources ORDER BY source_type`,
+  );
+  assert.equal(evidence.rows.length, 2);
+  assert.equal(evidence.rows.find((row) => row.source_type === 'readme')?.extracted_text, LIVE_REPO.readmeMarkdown);
+  assert.equal(evidence.rows[0]?.claim_map.audit?.scannerMode, 'live-github');
+
+  const scanRuns = await db.query<{ result_counts: { audit?: { scannerMode?: string } } }>(
+    `SELECT result_counts FROM scan_runs WHERE id = $1`,
+    [result.scan?.scanRunId],
+  );
+  assert.equal(scanRuns.rows[0]?.result_counts.audit?.scannerMode, 'live-github');
+});
+
+test('Slack scan shorthand live metadata without the allowlist topic is rejected without candidates', async () => {
+  const db = await createMigratedDb();
+  const config: SlackControlPlaneConfig = {
+    ...CONFIG,
+    githubFetcher: async () => ({
+      ...LIVE_REPO,
+      topics: ['astro'],
+    }),
+  };
+
+  const result = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    formBody({ user_id: DYLAN_SLACK_USER, command: '/dm-scan', text: 'DylanMcCavitt/portfolio-candidate-app' }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 'scan_rejected');
+  assert.equal(result.scan?.status, 'rejected');
+  assert.equal(result.scan?.audit.scannerMode, 'live-github');
+  assert.match(result.message, /missing required GitHub topic/);
+
+  const candidates = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM project_candidates`);
+  assert.equal(candidates.rows[0]?.count, '0');
+});
+
+test('Slack scan shorthand fetcher failures return safe ephemeral errors before scanning', async () => {
+  const db = await createMigratedDb();
+  const config: SlackControlPlaneConfig = {
+    ...CONFIG,
+    githubFetcher: async () => {
+      throw new Error('GitHub token secret and raw network internals');
+    },
+  };
+
+  const result = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    formBody({ user_id: DYLAN_SLACK_USER, command: '/dm-scan', text: 'DylanMcCavitt/portfolio-candidate-app' }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.equal(result.code, 'github_fetch_failed');
+  assert.equal(result.responseType, 'ephemeral');
+  assert.ok(!result.message.includes('secret'), 'fetcher internals must not leak to Slack');
+
+  const candidates = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM project_candidates`);
+  assert.equal(candidates.rows[0]?.count, '0');
+  const scanRuns = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM scan_runs`);
+  assert.equal(scanRuns.rows[0]?.count, '0');
+});
+
+test('Slack scan explicit topic option preserves manual snapshot behavior and does not fetch', async () => {
+  const db = await createMigratedDb();
+  let fetchCalls = 0;
+  const config: SlackControlPlaneConfig = {
+    ...CONFIG,
+    githubFetcher: async () => {
+      fetchCalls += 1;
+      return LIVE_REPO;
+    },
+  };
+
+  const result = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    formBody({
+      user_id: DYLAN_SLACK_USER,
+      command: '/dm-scan',
+      text: `DylanMcCavitt/portfolio-candidate-app topic=${PORTFOLIO_CANDIDATE_TOPIC}`,
+    }),
+  );
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 'scan_qualified');
+  assert.equal(result.scan?.audit.scannerMode, 'manual-snapshot');
+
+  const evidence = await db.query<{ source_type: string }>(`SELECT source_type FROM evidence_sources ORDER BY source_type`);
+  assert.deepEqual(
+    evidence.rows.map((row) => row.source_type),
+    ['repo'],
+  );
 });
 
 test('single-user Slack scan trigger rejects non-maintainer users without scanning', async () => {

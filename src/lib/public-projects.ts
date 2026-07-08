@@ -31,7 +31,7 @@ export function shouldUsePublicProjectDb(env: PublicProjectEnv = process.env): b
   return PUBLIC_PROJECT_DB_FLAGS.some((key) => Object.hasOwn(TRUTHY_ENV_VALUES, env[key]?.trim().toLowerCase() ?? ''));
 }
 
-export function catalogProjectDetails(): ProjectDetailReadModel[] {
+function catalogProjectDetails(): ProjectDetailReadModel[] {
   return buildCatalogShadowRecords(CATALOG).map((record) => projectRecordToReadModels(record).detail);
 }
 

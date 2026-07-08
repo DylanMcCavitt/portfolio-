@@ -5,6 +5,7 @@ import {
   type GithubRepositorySnapshot,
 } from '../db/github-discovery';
 import type { JsonRecord } from '../db/schema';
+import { GithubSnapshotFetchError, type GithubSnapshotFetcher } from './github-fetch';
 
 export const SLACK_SIGNATURE_VERSION = 'v0';
 export const DEFAULT_SLACK_SIGNATURE_TOLERANCE_SECONDS = 60 * 5;
@@ -18,6 +19,7 @@ export interface SlackControlPlaneConfig {
   allowedUserId: string;
   signatureToleranceSeconds?: number;
   now?: () => Date;
+  githubFetcher?: GithubSnapshotFetcher;
 }
 
 export interface SlackRequestVerificationInput {
@@ -73,6 +75,13 @@ interface CandidateRow {
 
 interface DraftRow {
   id: string;
+}
+
+interface ParsedSlackRepoSnapshotInput {
+  repo: GithubRepositorySnapshot;
+  isJson: boolean;
+  options: Record<string, string>;
+  hasExplicitTopics: boolean;
 }
 
 export function verifySlackRequest(
@@ -148,9 +157,10 @@ export async function handleSlackCommand(
   const auth = authorizeSlackUser(config, payload.userId);
   if (!auth.ok) return auth;
 
-  const repo = parseSlackRepoSnapshot(payload.text);
+  const parsed = parseSlackRepoSnapshotInput(payload.text);
+  const { repo, scannerMode } = await resolveSlackRepoSnapshot(config, parsed);
   const actor = `slack:${payload.userId}`;
-  const scan = await scanGithubRepositoryCandidate(db, { actor, trigger: 'slack', repo });
+  const scan = await scanGithubRepositoryCandidate(db, { actor, trigger: 'slack', repo, scannerMode });
 
   if (scan.status === 'qualified') {
     const repoLabel = repo.fullName ?? `${repo.owner}/${repo.name}`;
@@ -273,6 +283,10 @@ export function parseSlackInteractionPayload(payloadJson: string): SlackInteract
 }
 
 export function parseSlackRepoSnapshot(text: string): GithubRepositorySnapshot {
+  return parseSlackRepoSnapshotInput(text).repo;
+}
+
+function parseSlackRepoSnapshotInput(text: string): ParsedSlackRepoSnapshotInput {
   const trimmed = text.trim();
   if (!trimmed) {
     throw userFacingError('repo_input_missing', 'Use `/dm-scan owner/repo topic=portfolio-candidate`.');
@@ -280,7 +294,12 @@ export function parseSlackRepoSnapshot(text: string): GithubRepositorySnapshot {
 
   if (trimmed.startsWith('{')) {
     const parsed = parseJsonRecord(trimmed, 'Repo input JSON is invalid.');
-    return parseJsonRepoSnapshot(parsed);
+    return {
+      repo: parseJsonRepoSnapshot(parsed),
+      isJson: true,
+      options: {},
+      hasExplicitTopics: true,
+    };
   }
 
   const [repoToken, ...optionTokens] = trimmed.split(/\s+/);
@@ -305,17 +324,69 @@ export function parseSlackRepoSnapshot(text: string): GithubRepositorySnapshot {
   const topics = topicValues ? topicValues.split(',').map((topic) => topic.trim()).filter(Boolean) : [];
 
   return {
-    owner,
-    name,
-    fullName: `${owner}/${name}`,
-    htmlUrl,
-    description: options.description,
-    homepageUrl: options.homepage,
-    language: options.language,
-    topics,
-    isPrivate: options.private === 'true',
-    defaultBranch: options.branch,
-    readmeMarkdown: options.readme,
+    repo: {
+      owner,
+      name,
+      fullName: `${owner}/${name}`,
+      htmlUrl,
+      description: options.description,
+      homepageUrl: options.homepage,
+      language: options.language,
+      topics,
+      isPrivate: options.private === 'true',
+      defaultBranch: options.branch,
+      readmeMarkdown: options.readme,
+    },
+    isJson: false,
+    options,
+    hasExplicitTopics: hasOwnOption(options, 'topic') || hasOwnOption(options, 'topics'),
+  };
+}
+
+async function resolveSlackRepoSnapshot(
+  config: SlackControlPlaneConfig,
+  parsed: ParsedSlackRepoSnapshotInput,
+): Promise<{ repo: GithubRepositorySnapshot; scannerMode: 'manual-snapshot' | 'live-github' }> {
+  if (parsed.isJson || parsed.hasExplicitTopics || !config.githubFetcher) {
+    return { repo: parsed.repo, scannerMode: 'manual-snapshot' };
+  }
+
+  let fetched: GithubRepositorySnapshot;
+  try {
+    fetched = await config.githubFetcher(parsed.repo.owner, parsed.repo.name);
+  } catch (error) {
+    if (error instanceof GithubSnapshotFetchError) {
+      throw userFacingError(error.code, error.message);
+    }
+    throw userFacingError(
+      'github_fetch_failed',
+      'GitHub metadata fetch failed before scanning. Check repository access and try again.',
+    );
+  }
+
+  return {
+    repo: applySlackTextOverrides(fetched, parsed.repo, parsed.options),
+    scannerMode: 'live-github',
+  };
+}
+
+function applySlackTextOverrides(
+  fetched: GithubRepositorySnapshot,
+  parsed: GithubRepositorySnapshot,
+  options: Record<string, string>,
+): GithubRepositorySnapshot {
+  return {
+    ...fetched,
+    owner: fetched.owner || parsed.owner,
+    name: fetched.name || parsed.name,
+    fullName: fetched.fullName || parsed.fullName,
+    htmlUrl: fetched.htmlUrl || parsed.htmlUrl,
+    description: hasOwnOption(options, 'description') ? parsed.description : fetched.description,
+    homepageUrl: hasOwnOption(options, 'homepage') ? parsed.homepageUrl : fetched.homepageUrl,
+    language: hasOwnOption(options, 'language') ? parsed.language : fetched.language,
+    isPrivate: hasOwnOption(options, 'private') ? parsed.isPrivate : fetched.isPrivate,
+    defaultBranch: hasOwnOption(options, 'branch') ? parsed.defaultBranch : fetched.defaultBranch,
+    readmeMarkdown: hasOwnOption(options, 'readme') ? parsed.readmeMarkdown : fetched.readmeMarkdown,
   };
 }
 
@@ -551,6 +622,10 @@ function parseSlackOptions(tokens: string[]): Record<string, string> {
     options[token.slice(0, separator)] = token.slice(separator + 1);
   }
   return options;
+}
+
+function hasOwnOption(options: Record<string, string>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(options, key);
 }
 
 function parseCandidateAction(actionId: string): SlackCandidateAction {

@@ -7,6 +7,7 @@ import { applyMigrations, type Queryable } from '../scripts/db';
 import { CATALOG } from '../src/data/catalog';
 import { buildCatalogShadowRecords, type CatalogShadowRecord } from '../src/lib/db/catalog-shadow';
 import { createPublicDMDataTools, DMToolError } from '../src/lib/dm/data-tools';
+import { resetPublicProjectDetailsLoadForTests } from '../src/lib/public-projects';
 import {
   FIT_CHECK_CONTEXT_LIMIT,
   sanitizeJobDescriptionForFitCheck,
@@ -22,7 +23,7 @@ import { createDMPostHandler } from '../src/pages/api/dm/chat';
 
 const TEST_CONFIG = { provider: 'openai' as const, model: 'test-model' };
 
-test('DM route streams NDJSON text and answer blocks from the AI SDK seam', async () => {
+test('DM route streams NDJSON text and answer blocks from the AI SDK seam', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
   const model = streamingModel('Dylan ships practical tooling for real users.');
   const POST = createDMPostHandler({ config: TEST_CONFIG, db, model });
@@ -49,9 +50,9 @@ test('DM route streams NDJSON text and answer blocks from the AI SDK seam', asyn
   const evidenceBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'evidence');
   assert.equal(evidenceBlock?.block?.projects?.[0]?.id, 'agentic-trader');
   assert.ok(events.some((event) => event.type === 'done'));
-});
+}));
 
-test('DM data tools expose published project records and static resume/contact only', async () => {
+test('DM data tools expose DB-gated public records and static resume/contact only', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
   const tools = createPublicDMDataTools(db);
 
@@ -73,7 +74,24 @@ test('DM data tools expose published project records and static resume/contact o
   const contact = tools.getContact();
   assert.equal(contact.email, 'dylanmccavitt@outlook.com');
   assert.equal(contact.resume, '/resume.pdf');
-});
+}));
+
+test('DM data tools use catalog fallback when the public project DB gate is disabled', async () => withoutPublicProjectDbGate(async () => {
+  const db = await publishedProjectDb();
+  const tools = createPublicDMDataTools(db);
+
+  const ids = await tools.publishedProjectIds();
+  assert.equal(ids.size, CATALOG.length);
+  assert.equal(ids.has('exit-manager'), true);
+
+  const ranked = await tools.rankProjects({ ids: ['exit-manager'] });
+  assert.deepEqual(ranked.projects.map((project) => project.id), ['exit-manager']);
+
+  await assert.rejects(
+    () => tools.rankProjects({ ids: ['candidate-hidden'] }),
+    (error: unknown) => error instanceof DMToolError && error.code === 'bad_project_id',
+  );
+}));
 
 test('DM stream refuses private/draft prompts before model execution', async () => {
   const db = await publishedProjectDb();
@@ -110,7 +128,27 @@ test('DM stream does not treat ordinary recruiter candidate wording as private d
   assert.ok(!events.some((event) => String(event.block?.text).includes('I can only discuss')));
 });
 
-test('DM stream emits AI SDK tool traces and DB-backed answer-block artifacts', async () => {
+for (const prompt of [
+  'Has Dylan built Slack integrations?',
+  'Has he worked on private repos before?',
+  'Any hidden gems in his portfolio?',
+]) {
+  test(`DM stream lets ordinary recruiter phrasing reach the model: ${prompt}`, async () => {
+    const db = await publishedProjectDb();
+    const events = await readNdjson(
+      createDMChatStream({ message: prompt }, TEST_CONFIG, {
+        db,
+        model: streamingModel('I can answer that from public portfolio context.'),
+      }),
+    );
+
+    assert.ok(events.some((event) => event.type === 'ready'));
+    assert.ok(events.some((event) => event.type === 'text-delta'));
+    assert.ok(!events.some((event) => String(event.block?.text).includes('I can only discuss')));
+  });
+}
+
+test('DM stream emits AI SDK tool traces and DB-backed answer-block artifacts', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
   const events = await readNdjson(
     createDMChatStream({ message: 'Search trading automation projects.' }, TEST_CONFIG, {
@@ -124,7 +162,7 @@ test('DM stream emits AI SDK tool traces and DB-backed answer-block artifacts', 
   assert.equal(projectBlock?.block?.items?.[0]?.id, 'agentic-trader');
   assert.equal(projectBlock?.block?.items?.[0]?.title, 'agentic-trader');
   assert.equal(projectBlock?.block?.items?.[0]?.href, '/projects/agentic-trader');
-});
+}));
 
 test('DM stream registers OpenAI file_search alongside structured tools when indexed public RAG exists', async () => {
   const db = await publishedProjectDb();
@@ -223,9 +261,9 @@ test('DM stream keeps accepted file_search citation but suppresses text after a 
   assert.ok(events.some((event) => event.type === 'done'));
 });
 
-test('DM stream ends after unpublished project notice without model text', async () => {
+test('DM stream accepts project context ids from the catalog fallback public source', async () => withoutPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
-  const modelText = 'I can still share what is already public.';
+  const modelText = 'The exit manager is public through the active catalog fallback.';
   const events = await readNdjson(
     createDMChatStream(
       { message: 'Tell me about this project.', context: { projectIds: ['exit-manager'] } },
@@ -235,26 +273,22 @@ test('DM stream ends after unpublished project notice without model text', async
   );
 
   assert.ok(events.some((event) => event.type === 'ready'));
-  const contextNotice = events.find(
-    (event) =>
-      event.type === 'block' &&
-      event.block?.kind === 'text' &&
-      /isn't in my published records yet/i.test(String(event.block?.text)),
-  );
-  assert.ok(contextNotice);
-  assert.ok(!events.some((event) => event.type === 'text-delta'));
+  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
+  const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
+  assert.equal(projectBlock?.block?.items?.[0]?.id, 'exit-manager');
+  assert.ok(!events.some((event) => /isn't in my published records yet/i.test(String(event.block?.text))));
   assert.ok(events.some((event) => event.type === 'done'));
   assert.ok(!events.some((event) => event.type === 'error'));
-});
+}));
 
-test('DM stream ends after unpublished project notice even when the message asks for contact details', async () => {
+test('DM stream ends after DB-gated unpublished project notice without model text', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
-  const modelText = 'You can reach Dylan at his published email.';
+  const model = throwingModel();
   const events = await readNdjson(
     createDMChatStream(
-      { message: "What's Dylan's email?", context: { projectIds: ['exit-manager'] } },
+      { message: 'Tell me about this project.', context: { projectIds: ['exit-manager'] } },
       TEST_CONFIG,
-      { db, model: streamingModel(modelText) },
+      { db, model },
     ),
   );
 
@@ -270,19 +304,17 @@ test('DM stream ends after unpublished project notice even when the message asks
   assert.ok(!events.some((event) => event.type === 'text-delta'));
   assert.ok(events.some((event) => event.type === 'done'));
   assert.ok(!events.some((event) => event.type === 'error'));
-});
+  assert.equal(model.doStreamCalls.length, 0);
+}));
 
-test('DM stream ends after unpublished project notice for mixed project and resume intent', async () => {
+test('DM stream ends after unknown project notice even when the message asks for contact details', async () => withoutPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
-  const modelText = 'Dylan has shipped several backend-heavy projects.';
+  const model = throwingModel();
   const events = await readNdjson(
     createDMChatStream(
-      {
-        message: "Tell me about tastytrade-exit-manager and Dylan's resume",
-        context: { projectIds: ['exit-manager'] },
-      },
+      { message: "What's Dylan's email?", context: { projectIds: ['not-a-public-project'] } },
       TEST_CONFIG,
-      { db, model: streamingModel(modelText) },
+      { db, model },
     ),
   );
 
@@ -298,37 +330,10 @@ test('DM stream ends after unpublished project notice for mixed project and resu
   assert.ok(!events.some((event) => event.type === 'text-delta'));
   assert.ok(events.some((event) => event.type === 'done'));
   assert.ok(!events.some((event) => event.type === 'error'));
-});
+  assert.equal(model.doStreamCalls.length, 0);
+}));
 
-test('DM stream ends after unpublished project notice even with alternate context grounding', async () => {
-  const db = await publishedProjectDb();
-  const modelText = 'Dylan worked across several resume tracks.';
-  const events = await readNdjson(
-    createDMChatStream(
-      {
-        message: 'Tell me about this project and the resume track.',
-        context: { projectIds: ['exit-manager'], resumeTrackIds: ['kroll'] },
-      },
-      TEST_CONFIG,
-      { db, model: streamingModel(modelText) },
-    ),
-  );
-
-  assert.ok(events.some((event) => event.type === 'ready'));
-  assert.ok(
-    events.some(
-      (event) =>
-        event.type === 'block' &&
-        event.block?.kind === 'text' &&
-        /isn't in my published records yet/i.test(String(event.block?.text)),
-    ),
-  );
-  assert.ok(!events.some((event) => event.type === 'text-delta'));
-  assert.ok(events.some((event) => event.type === 'done'));
-  assert.ok(!events.some((event) => event.type === 'error'));
-});
-
-test('DM stream fails safely when project-context validation cannot read the DB', async () => {
+test('DM stream uses catalog fallback when project-context validation cannot read the DB', async () => withoutPublicProjectDbGate(async () => {
   const failingDb = {
     async query() {
       throw new Error('select * from private_drafts using secret-token');
@@ -338,17 +343,16 @@ test('DM stream fails safely when project-context validation cannot read the DB'
     createDMChatStream(
       { message: 'Tell me about this.', context: { projectIds: ['exit-manager'] } },
       TEST_CONFIG,
-      { db: failingDb, model: streamingModel('This should not leak database failures.') },
+      { db: failingDb, model: streamingModel('The active public catalog has this project.') },
     ),
   );
 
-  assert.deepEqual(events, [
-    {
-      type: 'error',
-      message: 'DM could not read the public portfolio data needed for that answer.',
-    },
-  ]);
-});
+  assert.ok(events.some((event) => event.type === 'ready'));
+  assert.ok(events.some((event) => event.type === 'text-delta'));
+  const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
+  assert.equal(projectBlock?.block?.items?.[0]?.id, 'exit-manager');
+  assert.ok(!events.some((event) => event.type === 'error'));
+}));
 
 test('DM runtime config keeps provider and model env-configurable without secrets in code', () => {
   assert.deepEqual(
@@ -363,7 +367,7 @@ test('DM runtime config keeps provider and model env-configurable without secret
   );
 });
 
-test('DM route and stream mask setup and data failures safely', async () => {
+test('DM route masks setup failures and falls back to catalog on project DB failures', async () => withoutPublicProjectDbGate(async () => {
   const missingConfigPost = createDMPostHandler({ env: {} });
   const missingConfigResponse = await missingConfigPost({
     request: new Request('https://example.test/api/dm/chat', {
@@ -385,17 +389,15 @@ test('DM route and stream mask setup and data failures safely', async () => {
   const events = await readNdjson(
     createDMChatStream({ message: 'Which projects show backend work?' }, TEST_CONFIG, {
       db: failingDb,
-      model: streamingModel('This should not leak database failures.'),
+      model: streamingModel('I can still answer from public catalog records.'),
     }),
   );
 
-  assert.deepEqual(events, [
-    {
-      type: 'error',
-      message: 'DM could not read the public portfolio data needed for that answer.',
-    },
-  ]);
-});
+  assert.ok(events.some((event) => event.type === 'ready'));
+  assert.ok(events.some((event) => event.type === 'text-delta'));
+  assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'projects'));
+  assert.ok(!events.some((event) => event.type === 'error'));
+}));
 
 test('DM route keeps resume/contact answers available with DB project-read failures', async () => {
   const failingDb = {
@@ -547,7 +549,7 @@ test('evidence resolution drops stale ids without throwing', () => {
   }
 });
 
-test('streamed project artifacts satisfy DB-only project ids without catalog fallback', () => {
+test('streamed project artifacts satisfy active public-source ids absent from the client catalog', () => {
   const artifact: ProjectArtifact = {
     id: 'db-only-project',
     title: 'DB-only Project',
@@ -643,6 +645,39 @@ test('DM route validates fit-check pasted context safely', async () => {
   assert.ok(!events.some((event) => event.type === 'error'));
 });
 
+
+const PUBLIC_PROJECT_GATE_ENV_KEYS = ['PUBLIC_PROJECT_PAGES_FROM_DB', 'PORTFOLIO_PUBLIC_PROJECTS_FROM_DB'] as const;
+
+async function withPublicProjectDbGate<T>(run: () => T | Promise<T>): Promise<T> {
+  return withPublicProjectGate('true', run);
+}
+
+async function withoutPublicProjectDbGate<T>(run: () => T | Promise<T>): Promise<T> {
+  return withPublicProjectGate(undefined, run);
+}
+
+async function withPublicProjectGate<T>(value: string | undefined, run: () => T | Promise<T>): Promise<T> {
+  const previous = new Map(PUBLIC_PROJECT_GATE_ENV_KEYS.map((key) => [key, process.env[key]]));
+  resetPublicProjectDetailsLoadForTests();
+
+  if (value === undefined) {
+    for (const key of PUBLIC_PROJECT_GATE_ENV_KEYS) delete process.env[key];
+  } else {
+    process.env.PUBLIC_PROJECT_PAGES_FROM_DB = value;
+    delete process.env.PORTFOLIO_PUBLIC_PROJECTS_FROM_DB;
+  }
+
+  try {
+    return await run();
+  } finally {
+    for (const key of PUBLIC_PROJECT_GATE_ENV_KEYS) {
+      const previousValue = previous.get(key);
+      if (previousValue === undefined) delete process.env[key];
+      else process.env[key] = previousValue;
+    }
+    resetPublicProjectDetailsLoadForTests();
+  }
+}
 
 async function publishedProjectDb(): Promise<Queryable> {
   const db = new PGlite() as Queryable;
