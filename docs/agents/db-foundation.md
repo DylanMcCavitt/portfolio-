@@ -6,9 +6,11 @@ AGE-728 adds the Neon-on-Vercel foundation for future DM project records. AGE-73
 
 - Entry point: `loadPublicProjectDetails()` in `src/lib/public-projects.ts`.
 - Gate env flags (either truthy enables DB reads): `PUBLIC_PROJECT_PAGES_FROM_DB`, `PORTFOLIO_PUBLIC_PROJECTS_FROM_DB` (accepted values: `1`, `true`, `yes`, `on`).
+- Preview auto-gate: when `VERCEL_ENV=preview` and a database connection string is configured, published DB rows are read even without an explicit gate flag. Passing an explicit `db` client to `loadPublicProjectDetails()` also enables DB reads (DM tools, tests).
 - When enabled: queries `projects` where `lifecycle_state = 'published'` via `fetchPublicProjectDetails()` / `fetchPublicProjectCards()` in `src/lib/db/project-reads.ts`.
+- Pre-cutover overlay: published DB rows come first, then catalog projects not shadowed by a DB row with the same id or slug. A publish adds to the public site instead of collapsing it to DB-only rows. AGE-738 catalog cutover removes the overlay along with the catalog.
 - Fallback: when the gate is disabled, the DB is unavailable, no published rows exist, or the query throws, routes receive catalog-backed shadow read models from `buildCatalogShadowRecords(CATALOG)` in `src/data/catalog.ts`.
-- Consumers: `/library`, `/library/[filter]`, `/projects/[id]` static paths, sitemap, and OG image routes.
+- Live rendering: Astro ignores non-literal `export const prerender` values, so the `live-public-project-pages` hook in `astro.config.mjs` flips `/library`, `/library/[filter]`, `/projects/[id]`, and `/hiring` to on-demand rendering when the gate is active; newly published rows then appear without a redeploy. Sitemap and OG images stay build-time: a project published after deploy has a live page but no OG image until the next deploy.
 
 ## Environment story
 

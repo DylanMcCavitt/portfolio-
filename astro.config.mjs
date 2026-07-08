@@ -1,10 +1,56 @@
 // @ts-check
+import process from 'node:process';
 import { defineConfig } from 'astro/config';
 import vercel from '@astrojs/vercel';
+
+// Keep in sync with shouldUsePublicProjectDb in src/lib/public-projects.ts.
+// (astro.config cannot import that TS module: the `@/` path alias is not
+// resolved when Astro bundles the config file.)
+const PUBLIC_PROJECT_DB_FLAGS = ['PUBLIC_PROJECT_PAGES_FROM_DB', 'PORTFOLIO_PUBLIC_PROJECTS_FROM_DB'];
+const DATABASE_ENV_KEYS = ['DATABASE_URL', 'POSTGRES_URL', 'PORTFOLIO_DATABASE_URL', 'PORTFOLIO_POSTGRES_URL'];
+const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+
+function publicProjectPagesRenderLive() {
+  if (PUBLIC_PROJECT_DB_FLAGS.some((key) => TRUTHY_ENV_VALUES.has((process.env[key] ?? '').trim().toLowerCase()))) {
+    return true;
+  }
+  return (
+    process.env.VERCEL_ENV === 'preview' &&
+    DATABASE_ENV_KEYS.some((key) => (process.env[key] ?? '').trim() !== '')
+  );
+}
+
+const LIVE_PUBLIC_PROJECT_PAGES = [
+  'src/pages/projects/[id].astro',
+  'src/pages/library/index.astro',
+  'src/pages/library/[filter].astro',
+  'src/pages/hiring.astro',
+];
+
+/**
+ * Astro only honors statically analyzable `export const prerender` values, so
+ * the public-project pages cannot flip themselves to on-demand rendering with
+ * an env-dependent expression. When the DB-backed public project source is
+ * active, switch those routes to on-demand rendering here so a publish shows
+ * up without a redeploy.
+ */
+function livePublicProjectPages() {
+  return /** @type {import('astro').AstroIntegration} */ ({
+    name: 'live-public-project-pages',
+    hooks: {
+      'astro:route:setup': ({ route }) => {
+        if (publicProjectPagesRenderLive() && LIVE_PUBLIC_PROJECT_PAGES.some((page) => route.component.endsWith(page))) {
+          route.prerender = false;
+        }
+      },
+    },
+  });
+}
 
 // https://astro.build/config
 export default defineConfig({
   adapter: vercel(),
+  integrations: [livePublicProjectPages()],
   // Canonical origin — drives `Astro.site`, the `<link rel="canonical">` in the
   // layouts, and the absolute URLs in `src/pages/sitemap.xml.ts` (#25).
   site: 'https://dylanmccavitt.xyz',

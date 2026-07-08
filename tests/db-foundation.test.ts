@@ -517,6 +517,8 @@ test('DB read layer parses valid video media and drops invalid video entries', a
 test('public project DB gate falls back to catalog until explicitly enabled and populated', async () => {
   assert.equal(shouldUsePublicProjectDb({}), false);
   assert.equal(shouldUsePublicProjectDb({ PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }), true);
+  assert.equal(shouldUsePublicProjectDb({ VERCEL_ENV: 'preview', DATABASE_URL: 'postgres://preview' }), true);
+  assert.equal(shouldUsePublicProjectDb({ VERCEL_ENV: 'preview' }), false);
 
   resetPublicProjectDetailsLoadForTests();
   const disabled = await loadPublicProjectDetails({ env: {} });
@@ -542,13 +544,23 @@ test('public project DB gate falls back to catalog until explicitly enabled and 
   await insertProjectRecord(db, published);
 
   resetPublicProjectDetailsLoadForTests();
+  // Pre-cutover overlay: the published DB row leads and the rest of the
+  // catalog stays public; the published id shadows its catalog twin.
   const enabled = await loadPublicProjectDetails({ env: { PUBLIC_PROJECT_PAGES_FROM_DB: 'true' }, db });
   assert.equal(enabled.source, 'db');
-  assert.deepEqual(enabled.projects.map((project) => project.id), [published.id]);
-  assert.deepEqual(filterPublicProjectDetails(enabled.projects, 'all').map((project) => project.id), [published.id]);
+  assert.equal(enabled.projects[0]?.id, published.id);
+  assert.equal(enabled.projects.length, CATALOG.length);
+  assert.equal(new Set(enabled.projects.map((project) => project.id)).size, CATALOG.length);
+  assert.equal(filterPublicProjectDetails(enabled.projects, 'all').length, CATALOG.length);
+
+  resetPublicProjectDetailsLoadForTests();
+  const injectedDb = await loadPublicProjectDetails({ db });
+  assert.equal(injectedDb.source, 'db');
+  assert.equal(injectedDb.projects[0]?.id, published.id);
+  assert.equal(injectedDb.projects.length, CATALOG.length);
 });
 
-test('loadPublicProjectDetails keeps one source set per process after a DB failure', async () => {
+test('loadPublicProjectDetails retries live DB reads after a transient failure', async () => {
   resetPublicProjectDetailsLoadForTests();
 
   const db = createTestDb();
@@ -579,14 +591,19 @@ test('loadPublicProjectDetails keeps one source set per process after a DB failu
 
   shouldFail = false;
   const second = await loadPublicProjectDetails({ env, db: flakyDb });
-  assert.equal(second.source, 'catalog');
-  assert.equal(second.projects.length, CATALOG.length);
-  assert.equal(second, first);
+  assert.equal(second.source, 'db');
+  assert.equal(second.projects[0]?.id, published.id);
 
   resetPublicProjectDetailsLoadForTests();
   const gateOff = await loadPublicProjectDetails({ env: {} });
   assert.equal(gateOff.source, 'catalog');
   assert.equal(gateOff.reason, 'Public project DB gate is disabled.');
+
+  resetPublicProjectDetailsLoadForTests();
+  const cachedFirst = await loadPublicProjectDetails({ env: {} });
+  const cachedSecond = await loadPublicProjectDetails({ env: {} });
+  assert.equal(cachedFirst.source, 'catalog');
+  assert.equal(cachedSecond, cachedFirst);
 });
 
 test('shadow read helper reports unavailable instead of throwing on missing or failed DB', async () => {
