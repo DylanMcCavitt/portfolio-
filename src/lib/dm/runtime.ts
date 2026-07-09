@@ -2,6 +2,7 @@ import { gateway } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { isStepCount, streamText, tool, type LanguageModel, type ToolSet } from 'ai';
 import { z } from 'zod';
+import type { PersonalFact } from '@/data/personal';
 import type { ProjectReadQueryable } from '@/lib/db/project-reads';
 import {
   createPublicRagSearchConfig,
@@ -103,7 +104,6 @@ export function createDMChatStream(
 
       try {
         const { request: normalizedRequest, leadingBlocks, endTurnAfterNotice } = await validateContext(request, tools);
-        await assertPublicDataAvailable(tools, normalizedRequest);
         const refusal = privateDataRefusal(normalizedRequest.message);
         if (refusal) {
           emit({ type: 'block', index: blockIndex, block: refusal });
@@ -112,6 +112,39 @@ export function createDMChatStream(
           return;
         }
 
+        const personalTurn = resolvePersonalTurn(normalizedRequest.message, tools);
+        if (personalTurn) {
+          if (personalTurn.facts.length === 0) {
+            emit({ type: 'block', index: blockIndex, block: personalTurn.intro });
+            answer.push(personalTurn.intro);
+            emit({ type: 'done', answer, trace: trace(traceItems) });
+            return;
+          }
+
+          emit({
+            type: 'ready',
+            agent: AGENT_NAME,
+            provider: config.provider,
+            trace: trace(traceItems),
+          });
+          const item: ToolTraceItem = {
+            tool: 'readPersonal',
+            label: toolSummary('readPersonal'),
+            remote: false,
+          };
+          traceItems.push(item);
+          emit({ type: 'tool', name: item.tool, summary: item.label });
+          answer.push(personalTurn.intro);
+          emit({ type: 'block', index: blockIndex, block: personalTurn.intro });
+          blockIndex += 1;
+          const personalBlock: AnswerBlock = { kind: 'personal', items: personalTurn.facts };
+          answer.push(personalBlock);
+          emit({ type: 'block', index: blockIndex, block: personalBlock });
+          emit({ type: 'done', answer, trace: trace(traceItems) });
+          return;
+        }
+
+        await assertPublicDataAvailable(tools, normalizedRequest);
         const system = await buildSystemPrompt(tools).catch((error: unknown) => {
           console.warn('[dm] system prompt digest failed, using minimal prompt', safeLogError(error));
           return minimalSystemPrompt();
@@ -252,6 +285,14 @@ function aiTools(tools: PublicDMDataTools, ragConfig: PublicRagSearchConfig | nu
         trackIds: z.array(z.string().min(1).max(80)).max(8).optional(),
       }),
       execute: wrapTool((input) => tools.readResume(input)),
+    }),
+    readPersonal: tool({
+      description:
+        'Read owner-approved personal interests and fun facts from src/data/personal.ts. An empty result means the topic is not public and must be declined.',
+      inputSchema: z.object({
+        query: z.string().min(1).max(200).optional(),
+      }),
+      execute: wrapTool((input) => Promise.resolve(tools.readPersonal(input))),
     }),
     getContact: tool({
       description: 'Read public contact data from the static resume source.',
@@ -401,17 +442,21 @@ async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
   ]);
   const projects = projectResult.projects;
   const tracks = resumeResult.tracks.map((track) => ({ id: track.id, title: track.title, role: track.role, when: track.when }));
+  const personalFacts = tools.readPersonal().facts;
 
   const projectLines = projects.map(
     (project) => `- ${project.id}: ${project.title} (${project.area}, ${project.status[1] ?? project.status[0]}, ${project.year}) — ${project.line}`,
   );
   const trackLines = tracks.map((track) => `- ${track.id}: ${track.title} (${track.role}, ${track.when})`);
+  const personalLines = personalFacts.map((fact) => `- ${fact.id}: ${fact.title}`);
 
   return [
     "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
-    'You answer only from tool results over published portfolio project records, approved public RAG source citations, and static public resume/contact data.',
+    'You answer only from tool results over published portfolio project records, approved public RAG source citations, static public resume/contact data, and curated personal facts from src/data/personal.ts.',
     'Never claim access to drafts, candidate records, private repos, Slack/admin notes, visitor chats, database metadata, or hidden plans.',
-    'If asked for private or unsupported facts, refuse briefly and redirect to public projects, resume, or contact details.',
+    'Personal questions must use readPersonal and may use only the facts it returns. Never infer personal facts from projects, resume, RAG, or conversation history.',
+    'If readPersonal returns no facts, decline briefly. This source is a public allowlist, not persistent memory or personalization.',
+    'If asked for private or unsupported facts, refuse briefly and redirect to curated personal facts, public projects, resume, or contact details.',
     '',
     'Published projects you can discuss:',
     ...projectLines,
@@ -419,11 +464,15 @@ async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
     'Resume tracks you can reference:',
     ...trackLines,
     '',
+    'Curated personal facts available through readPersonal:',
+    ...personalLines,
+    '',
     'Tool selection rules:',
     "- Questions about status/area (e.g., 'live projects', 'iOS apps') -> use filterProjects.",
     "- 'Best', 'most impressive', 'strongest' -> use rankProjects with an intent query, do not guess project ids.",
     '- Topic or keyword questions -> use searchProjects.',
     '- Resume/background/career/education -> use readResume.',
+    '- Hobbies/interests/outside-work/fun-fact questions -> use readPersonal. If it returns no facts, decline rather than guessing.',
     '- Contact/hiring/reach -> use getContact.',
     '- For cited evidence from approved public sources -> use searchSources.',
     'When you have project data, answer concretely: name the project, what it does, its status, and a real outcome or metric from the tool result.',
@@ -435,10 +484,11 @@ async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
 function minimalSystemPrompt(): string {
   return [
     "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
-    'Answer only from tool results over published portfolio project records, approved public RAG sources, and static public resume/contact data.',
+    'Answer only from tool results over published portfolio project records, approved public RAG sources, static public resume/contact data, and curated personal facts from src/data/personal.ts.',
     'Never claim access to private drafts, candidate records, hidden repos, or admin notes.',
+    'Personal questions must use readPersonal only; decline when it returns no facts, and never infer personal details from another source or conversation history.',
     'When you have project data, answer concretely with project name, status, and a real outcome or metric.',
-    "- status/area questions -> filterProjects; 'best/most impressive' -> rankProjects with intent; topics -> searchProjects; resume -> readResume; contact -> getContact; evidence -> searchSources.",
+    "- status/area questions -> filterProjects; 'best/most impressive' -> rankProjects with intent; topics -> searchProjects; resume -> readResume; personal -> readPersonal; contact -> getContact; evidence -> searchSources.",
   ].join(' ');
 }
 
@@ -457,9 +507,49 @@ function privateDataRefusal(message: string): AnswerBlock | null {
   }
   return {
     kind: 'text',
-    text: 'I can only discuss Dylan’s published portfolio projects, public resume facts, and contact details. Ask about shipped work, current strengths, or how to reach him.',
+    text: 'I can only discuss Dylan’s curated public personal facts, published portfolio projects, public resume facts, and contact details. Ask what he does outside work, about shipped work, or how to reach him.',
   };
 }
+
+function resolvePersonalTurn(
+  message: string,
+  tools: PublicDMDataTools,
+): { intro: AnswerBlock; facts: PersonalFact[] } | null {
+  if (!PERSONAL_QUESTION_PATTERNS.some((pattern) => pattern.test(message.toLowerCase()))) return null;
+
+  const facts = tools.readPersonal({ query: message }).facts;
+  if (facts.length === 0) {
+    return {
+      intro: {
+        kind: 'text',
+        text: 'I don’t have an owner-approved public fact about that. I can only answer personal questions covered by Dylan’s curated public facts; ask what he does outside work, or ask about his published projects, resume, or contact details.',
+      },
+      facts,
+    };
+  }
+
+  return {
+    intro: {
+      kind: 'text',
+      text: 'Here are the outside-of-work interests and fun facts Dylan has chosen to make public.',
+    },
+    facts,
+  };
+}
+
+const PERSONAL_QUESTION_PATTERNS = [
+  /\boutside (?:of )?work\b/,
+  /\b(?:free|spare) time\b/,
+  /\boff hours?\b/,
+  /\bhobb(?:y|ies)\b/,
+  /\binterests?\b/,
+  /\bfun facts?\b/,
+  /\beaster eggs?\b/,
+  /\bpersonal life\b/,
+  /\bfavou?rite (?:book|film|movie|music|song|sport|team|game|food|place)\b/,
+  /\bdoes dylan (?:like|enjoy|play|watch|read)\b/,
+  /\b(?:married|relationship|children|kids|family|birthday|age|politics|religion|health|salary|home address)\b/,
+];
 
 const PRIVATE_DATA_REQUEST_PATTERNS = [
   /\bcandidate\s+(?:records?|notes?)\b/,
@@ -490,6 +580,10 @@ function blocksFromToolResult(output: unknown, toolName?: string): AnswerBlock[]
   if (Array.isArray(output.tracks)) {
     const trackIds = output.tracks.filter(isTrackLike).map((track) => track.id);
     if (trackIds.length > 0) blocks.push({ kind: 'resume', trackIds }, { kind: 'evidence', resumeTrackIds: trackIds });
+  }
+  if (Array.isArray(output.facts)) {
+    const facts = output.facts.filter(isPersonalFact);
+    if (facts.length > 0) blocks.push({ kind: 'personal', items: facts });
   }
   if (output.kind === 'contact') blocks.push(toAnswerContact(output));
   if (toolName === 'searchSources' && Array.isArray(output.citations)) {
@@ -570,6 +664,8 @@ function toolSummary(toolName: string): string {
       return 'Ranked published project records.';
     case 'readResume':
       return 'Read static resume data.';
+    case 'readPersonal':
+      return 'Read curated public personal facts.';
     case 'getContact':
       return 'Read public contact data.';
     case 'searchSources':
@@ -597,6 +693,19 @@ function isProjectSummary(value: unknown): value is ProjectSummary {
 
 function isTrackLike(value: unknown): value is { id: string } {
   return isRecord(value) && typeof value.id === 'string';
+}
+
+function isPersonalFact(value: unknown): value is PersonalFact {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    (value.category === 'outside-work' || value.category === 'interest' || value.category === 'easter-egg') &&
+    typeof value.title === 'string' &&
+    typeof value.summary === 'string' &&
+    Array.isArray(value.tags) &&
+    value.tags.every((tag) => typeof tag === 'string') &&
+    (value.href === undefined || typeof value.href === 'string')
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

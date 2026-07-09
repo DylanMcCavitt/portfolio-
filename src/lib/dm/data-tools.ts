@@ -1,3 +1,4 @@
+import { findPersonalFacts, type PersonalFact } from '@/data/personal';
 import { RESUME, getResumeTrackById, type ResumeTrack } from '@/data/resume';
 import type { ProjectDetailReadModel, ProjectReadQueryable } from '@/lib/db/project-reads';
 import { loadPublicProjectDetails } from '@/lib/public-projects';
@@ -55,11 +56,20 @@ export interface ReadResumeInput {
   trackIds?: string[];
 }
 
+export interface ReadPersonalInput {
+  query?: string;
+}
+
+export interface ReadPersonalOutput {
+  facts: PersonalFact[];
+}
+
 export interface PublicDMDataTools {
   searchProjects(input: SearchProjectsInput): Promise<SearchProjectsOutput>;
   filterProjects(input?: FilterProjectsInput): Promise<FilterProjectsOutput>;
   rankProjects(input?: RankProjectsInput): Promise<RankProjectsOutput>;
   readResume(input?: ReadResumeInput): Promise<{ tracks: ResumeTrackSummary[] }>;
+  readPersonal(input?: ReadPersonalInput): ReadPersonalOutput;
   getContact(): ContactBlock;
   assertProjectIds(ids: string[]): Promise<void>;
   assertResumeTrackIds(ids: string[]): void;
@@ -170,6 +180,10 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
         : RESUME.tracks
       ).map((track) => summarizeResumeTrack(track, ids));
       return { tracks };
+    },
+
+    readPersonal(input = {}) {
+      return { facts: findPersonalFacts(input.query) };
     },
 
     getContact,

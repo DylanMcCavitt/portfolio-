@@ -1,4 +1,5 @@
 import type { Project } from '@/data/catalog';
+import type { PersonalFact } from '@/data/personal';
 import type { ResumeTrack } from '@/data/resume';
 
 export const AGENT_NAME = 'DM';
@@ -7,6 +8,7 @@ export type AnswerBlock =
   | { kind: 'text'; text: string }
   | { kind: 'projects'; ids: string[]; items?: ProjectSummary[] }
   | { kind: 'resume'; trackIds: string[] }
+  | { kind: 'personal'; items: PersonalFact[] }
   | { kind: 'evidence'; projectIds?: string[]; projects?: ProjectSummary[]; resumeTrackIds?: string[]; ragSources?: PublicRagCitation[] }
   | { kind: 'contact'; email?: string; github?: string; resume?: string; location?: string; status?: string }
   | { kind: 'links'; items: [label: string, href: string][] };

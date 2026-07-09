@@ -18,6 +18,7 @@
  */
 
 import { CATALOG, type Project } from '@/data/catalog';
+import type { PersonalFact } from '@/data/personal';
 import { RESUME, type ResumeTrack } from '@/data/resume';
 export {
   FIT_CHECK_CONTEXT_LIMIT,
@@ -111,6 +112,10 @@ export interface ResumeBlock {
   kind: 'resume';
   trackIds: string[];
 }
+export interface PersonalBlock {
+  kind: 'personal';
+  items: PersonalFact[];
+}
 export interface RagSourceEvidence {
   ragSourceId: string;
   projectId: string;
@@ -146,12 +151,13 @@ export type AnswerBlock =
   | TextBlock
   | ProjectsBlock
   | ResumeBlock
+  | PersonalBlock
   | EvidenceBlock
   | ContactBlock
   | LinksBlock;
 
 /** The answer-block kinds the surface knows how to render. */
-const BLOCK_KINDS = new Set(['text', 'projects', 'resume', 'evidence', 'contact', 'links']);
+const BLOCK_KINDS = new Set(['text', 'projects', 'resume', 'personal', 'evidence', 'contact', 'links']);
 const MAX_EVIDENCE_PROJECTS = 4;
 const MAX_EVIDENCE_TRACKS = 3;
 const MAX_RAG_SOURCES = 3;
@@ -220,6 +226,13 @@ export function validateBlock(value: unknown): AnswerBlock | null {
         value.trackIds.every((id) => typeof id === 'string')
         ? { kind: 'resume', trackIds: value.trackIds as string[] }
         : null;
+    case 'personal': {
+      if (!Array.isArray(value.items)) return null;
+      const items = value.items.map(parsePersonalFact);
+      return items.length > 0 && items.every((item): item is PersonalFact => Boolean(item))
+        ? { kind: 'personal', items }
+        : null;
+    }
     case 'evidence': {
       const projectIds = parseOptionalStringArray(value.projectIds);
       const projects = parseOptionalProjectArtifacts(value.projects);
@@ -336,6 +349,31 @@ function parseOptionalRagSources(value: unknown): RagSourceEvidence[] | null | u
   if (!Array.isArray(value)) return null;
   const sources = value.map(parseRagSourceEvidence);
   return sources.every((source): source is RagSourceEvidence => Boolean(source)) ? sources : null;
+}
+
+function parsePersonalFact(value: unknown): PersonalFact | null {
+  if (
+    !isObject(value) ||
+    typeof value.id !== 'string' ||
+    (value.category !== 'outside-work' && value.category !== 'interest' && value.category !== 'easter-egg') ||
+    typeof value.title !== 'string' ||
+    typeof value.summary !== 'string' ||
+    !Array.isArray(value.tags) ||
+    !value.tags.every((tag) => typeof tag === 'string') ||
+    (value.href !== undefined &&
+      (typeof value.href !== 'string' || !value.href.startsWith('/') || value.href.startsWith('//')))
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    category: value.category,
+    title: value.title,
+    summary: value.summary,
+    tags: value.tags,
+    ...(typeof value.href === 'string' ? { href: value.href } : {}),
+  };
 }
 
 function parseRagSourceEvidence(value: unknown): RagSourceEvidence | null {

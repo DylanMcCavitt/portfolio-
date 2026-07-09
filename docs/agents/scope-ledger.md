@@ -4,11 +4,11 @@ Use this file to keep product intent alive after work is sliced into issues. V1 
 
 ## Product north star
 
-The portfolio becomes agent-first: visitors land on DM, a public agent that answers questions about Dylan and his work, backed by published project records, approved public sources, résumé data, and contact data. The experience stays recruiter-friendly, jargon-light, and static-first outside the deliberate chat island.
+The portfolio becomes agent-first: visitors land on DM, a public agent that answers questions about Dylan and his work, backed by published project records, approved public sources, résumé data, contact data, and owner-curated personal facts. The experience stays recruiter-friendly, jargon-light, and static-first outside the deliberate chat island.
 
 DM supersedes Eve for new product architecture. Eve runtime paths (`src/lib/eve/`, `/api/eve/chat`) were retired in AGE-818; do not resurrect Eve-specific product seams. The old root `agent/` Eve app was retired by AGE-739 when the public DM Vercel AI SDK seam replaced the remote Eve app dependency.
 
-Public DM answers may use only published DB project records, approved public RAG sources, and static résumé/contact data from `src/data/resume.ts`. Hidden drafts, private docs, Slack/admin notes, candidate evidence, visitor chats, and unsupported/generated claims stay out of public answers.
+Public DM answers may use only published DB project records, approved public RAG sources, static résumé/contact data from `src/data/resume.ts`, and curated personal facts from `src/data/personal.ts`. Hidden drafts, private docs, Slack/admin notes, candidate evidence, visitor chats, and unsupported/generated claims stay out of public answers.
 
 ## PRD continuity
 
@@ -27,7 +27,7 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
 - Build the DM implementation graph on preview branch `preview/agent-first-redesign`.
 - DM is the sole live runtime (`src/lib/dm/`, `/api/dm/chat`, `src/scripts/dm.ts`).
 - Use Neon on Vercel for the DB foundation; keep secrets out of tracked files.
-- Keep `src/data/catalog.ts` as a shadow/fallback public project source until parity plus one-publish proof; keep `src/data/resume.ts` as the v1 résumé/contact source.
+- Keep `src/data/catalog.ts` as a shadow/fallback public project source until parity plus one-publish proof; keep `src/data/resume.ts` as the v1 résumé/contact source; keep `src/data/personal.ts` as the v1 curated personal-facts allowlist for hobbies, interests, and easter-egg answers.
 
 ## Next
 
@@ -50,9 +50,9 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   - Where tracked: Public DM service issue.
   - Constraint imposed on Now: Runtime code must keep model/provider configurable without committing secrets.
 - Capability: Persistent agent memory or personalization.
-  - Why deferred: The first slice only needs streamed answers over approved public sources.
+  - Why deferred: The first slice only needs streamed answers over approved public sources; `src/data/personal.ts` is a static owner-curated allowlist, not visitor memory or multi-turn personalization.
   - Where tracked: Future issue candidates below.
-  - Constraint imposed on Now: Do not bake UI or API assumptions that prevent later conversation state.
+  - Constraint imposed on Now: Do not bake UI or API assumptions that prevent later conversation state; personal answers must stay limited to `readPersonal` facts and decline unlisted topics.
 - Capability: Resume/contact DB migration.
   - Why deferred: V1 keeps résumé/contact in `src/data/resume.ts` while project records move first.
   - Where tracked: Future issue candidates below.
@@ -89,9 +89,9 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
 - Constraint: UI implementation routes to Claude or GLM; non-UI runtime/data/plumbing routes to Codex.
   - Deferred capability protected: Correct agent specialization.
   - Verification evidence: Owner engine field on every issue.
-- Constraint: DM public answers use only published DB project records, approved public RAG sources, and static résumé/contact data.
-  - Deferred capability protected: Privacy-safe RAG and publish flow.
-  - Verification evidence: Runtime/eval fixtures or PR review evidence prove drafts/private/candidate data stay excluded.
+- Constraint: DM public answers use only published DB project records, approved public RAG sources, static résumé/contact data, and curated personal facts from `src/data/personal.ts`.
+  - Deferred capability protected: Privacy-safe RAG and publish flow; persistent memory/personalization stays separate from the static personal-facts allowlist.
+  - Verification evidence: Runtime/eval fixtures or PR review evidence prove drafts/private/candidate data stay excluded and unlisted personal topics are declined.
 - Constraint: Do not resurrect Eve-specific runtime paths retired in AGE-818.
   - Deferred capability protected: DM remains the sole live agent runtime seam.
   - Verification evidence: Live stack uses `src/lib/dm/` and `/api/dm/chat`; Eve paths removed in AGE-818; root `agent/` removal is recorded in AGE-739.

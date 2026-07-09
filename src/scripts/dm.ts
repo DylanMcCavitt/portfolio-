@@ -24,6 +24,7 @@ import {
   type StreamEvent,
 } from '@/lib/dm/client';
 import type { Project } from '@/data/catalog';
+import type { PersonalFact } from '@/data/personal';
 import type { ResumeTrack } from '@/data/resume';
 
 type RenderProject = Project | ProjectArtifact;
@@ -253,6 +254,20 @@ class Turn {
         this.canvas().append(wrap);
         break;
       }
+      case 'personal': {
+        const wrap = make('section', { class: 'dm-evidence', 'aria-label': 'Curated personal facts' }, [
+          make('div', { class: 'dm-evidence-head' }, [
+            make('span', { class: 'dm-evidence-kicker', text: 'outside work' }),
+            make('span', {
+              class: 'dm-evidence-count',
+              text: `${block.items.length} public fact${block.items.length === 1 ? '' : 's'}`,
+            }),
+          ]),
+        ]);
+        for (const fact of block.items) wrap.append(this.personalFact(fact));
+        this.canvas().append(wrap);
+        break;
+      }
       case 'evidence': {
         const resolved = resolveEvidence(block);
         const projects = mergeProjectArtifacts(block.projects, resolved.projects);
@@ -320,7 +335,28 @@ class Turn {
         );
         break;
       }
+      default: {
+        const unhandled: never = block;
+        return unhandled;
+      }
     }
+  }
+
+  private personalFact(fact: PersonalFact): HTMLElement {
+    const children = [
+      make('span', { class: 'dm-evidence-rule', 'aria-hidden': 'true' }),
+      make('span', { class: 'dm-evidence-top' }, [
+        make('span', { class: 'dm-evidence-type', text: fact.category.replace('-', ' ') }),
+        make('span', { class: 'badge done', text: 'Public' }),
+      ]),
+      make('h3', { class: 'dm-evidence-title', text: fact.title }),
+      make('p', { class: 'dm-evidence-line', text: fact.summary }),
+      fact.href ? make('span', { class: 'dm-evidence-route', text: 'See public evidence →' }) : null,
+    ];
+
+    return fact.href
+      ? make('a', { class: 'dm-evidence-item', href: fact.href }, children)
+      : make('article', { class: 'dm-evidence-item' }, children);
   }
 
   private projectEvidence(project: RenderProject): HTMLElement {

@@ -5,6 +5,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { simulateReadableStream } from 'ai';
 import { applyMigrations, type Queryable } from '../scripts/db';
 import { CATALOG } from '@/data/catalog';
+import { PERSONAL_FACTS } from '@/data/personal';
 import { buildCatalogShadowRecords, type CatalogShadowRecord } from '@/lib/db/catalog-shadow';
 import { createPublicDMDataTools, DMToolError } from '@/lib/dm/data-tools';
 import { resetPublicProjectDetailsLoadForTests } from '@/lib/public-projects';
@@ -77,6 +78,10 @@ test('DM data tools expose DB-gated public records and static resume/contact onl
   assert.deepEqual(resume.tracks.map((track) => track.id), ['now']);
   assert.deepEqual(resume.tracks[0]?.era, ['evalgate', 'bellas-beads', 'slurmlet', 'agentic-trader']);
 
+  const personal = tools.readPersonal({ query: 'What does Dylan do outside of work?' });
+  assert.deepEqual(personal.facts, PERSONAL_FACTS);
+  assert.deepEqual(tools.readPersonal({ query: "What is Dylan's favorite movie?" }).facts, []);
+
   const contact = tools.getContact();
   assert.equal(contact.email, 'dylanmccavitt@outlook.com');
   assert.equal(contact.resume, '/resume.pdf');
@@ -132,6 +137,41 @@ test('DM stream does not treat ordinary recruiter candidate wording as private d
 
   assert.ok(events.some((event) => event.type === 'text-delta'));
   assert.ok(!events.some((event) => String(event.block?.text).includes('I can only discuss')));
+});
+
+test('DM stream answers outside-work questions only from curated personal facts', async () => {
+  const db = await publishedProjectDb();
+  const model = throwingModel();
+  const events = await readNdjson(
+    createDMChatStream({ message: 'What does Dylan do outside of work?' }, TEST_CONFIG, { db, model }),
+  );
+
+  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'readPersonal'));
+  const personalBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'personal');
+  assert.deepEqual(personalBlock?.block?.items, PERSONAL_FACTS);
+  assert.equal(model.doStreamCalls.length, 0);
+  assert.ok(events.some((event) => event.type === 'done'));
+  assert.ok(!events.some((event) => event.type === 'error'));
+});
+
+test('DM stream honestly declines unlisted personal topics without calling the model', async () => {
+  const db = await publishedProjectDb();
+  const model = throwingModel();
+  const events = await readNdjson(
+    createDMChatStream({ message: "What is Dylan's favorite movie?" }, TEST_CONFIG, { db, model }),
+  );
+
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'block' &&
+        event.block?.kind === 'text' &&
+        /owner-approved public fact/.test(String(event.block.text)),
+    ),
+  );
+  assert.equal(model.doStreamCalls.length, 0);
+  assert.ok(!events.some((event) => event.type === 'tool' || event.type === 'text-delta'));
+  assert.ok(events.some((event) => event.type === 'done'));
 });
 
 for (const prompt of [
@@ -501,6 +541,28 @@ test('evidence block validation accepts canonical ids and rejects unsafe shapes'
   });
   assert.equal(
     parseStreamLine(JSON.stringify({ type: 'block', block: { kind: 'evidence', projectIds: [42] } })),
+    null,
+  );
+});
+
+test('personal block validation accepts curated facts and rejects malformed or unsafe items', () => {
+  assert.deepEqual(validateBlock({ kind: 'personal', items: PERSONAL_FACTS }), {
+    kind: 'personal',
+    items: PERSONAL_FACTS,
+  });
+  assert.equal(validateBlock({ kind: 'personal', items: [] }), null);
+  assert.equal(
+    validateBlock({
+      kind: 'personal',
+      items: [{ ...PERSONAL_FACTS[0], href: 'javascript:alert(1)' }],
+    }),
+    null,
+  );
+  assert.equal(
+    validateBlock({
+      kind: 'personal',
+      items: [{ ...PERSONAL_FACTS[0], category: 'private' }],
+    }),
     null,
   );
 });

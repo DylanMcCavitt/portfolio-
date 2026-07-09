@@ -264,6 +264,8 @@ function describeBlock(block: AnswerBlock): string {
       return `projects:${block.ids.join('+')}`;
     case 'resume':
       return `resume:${block.trackIds.join('+')}`;
+    case 'personal':
+      return `personal:${block.items.map((item) => item.id).join('+')}`;
     case 'evidence':
       return 'evidence';
     case 'contact':
