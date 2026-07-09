@@ -1,14 +1,6 @@
 import type { DMRuntimeConfig } from './runtime';
 
-/**
- * A resolved model target for eval/benchmark scripts.
- *
- * `model` is always the full `<creator>/<model>` id. The DM runtime strips the
- * `openai/` prefix itself when the direct OpenAI provider is selected, and the
- * Vercel AI Gateway requires the full prefixed id — so the id is never stripped
- * here (stripping it broke gateway runs: `gateway('claude-sonnet-4.5')` is not
- * a valid gateway model id).
- */
+/** Resolved model target for eval/benchmark scripts. `model` is always a full `<creator>/<model>` id. */
 export interface DMModelSpec {
   provider: DMRuntimeConfig['provider'];
   model: string;
@@ -31,13 +23,7 @@ export function readModelKeyAvailability(
 
 /**
  * Resolve one model id to a provider route.
- *
- * - With `AI_GATEWAY_API_KEY`: every model (including `openai/*`) routes
- *   through the gateway, so one key benchmarks any creator's models.
- * - With only `OPENAI_API_KEY`: `openai/*` models route directly; other
- *   creators fail fast with an actionable message.
- * - With no keys (dry mode): ids parse for plumbing checks; non-OpenAI
- *   creators are labeled as gateway routes.
+ * Gateway key → all models via gateway; OpenAI key only → openai/* direct; no keys → dry-mode parse.
  */
 export function parseDMModelSpec(value: string, keys: DMModelKeyAvailability): DMModelSpec {
   const trimmed = value.trim();

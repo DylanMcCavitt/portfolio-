@@ -1,23 +1,3 @@
-/**
- * DM eval runner.
- *
- * Default (offline) mode replays the shared fixtures against deterministic
- * model stubs — a fast, secret-free regression gate for the runtime pipeline
- * (tool routing, deterministic blocks, refusals). It cannot measure answer
- * quality because the "model" is a stub.
- *
- * Live mode (`--live`) runs the same fixtures against real models through the
- * configured provider (Vercel AI Gateway when AI_GATEWAY_API_KEY is set), so
- * fixture expectations exercise real tool selection and real answers. Add
- * `--judge <creator>/<model>` to also score each live answer with an
- * LLM-as-judge rubric (grounded / honest / useful, 0-5 each).
- *
- * Examples:
- *   npm run dm:eval                                            # offline gate
- *   npm run dm:eval -- --live                                  # live, DM_MODEL
- *   npm run dm:eval -- --live --models anthropic/claude-sonnet-4.6,openai/gpt-4.1
- *   npm run dm:eval -- --live --judge openai/gpt-4.1 --json-path ./.tmp/dm-eval.json
- */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -69,11 +49,11 @@ async function main(): Promise<void> {
     throw new Error('Live eval needs AI_GATEWAY_API_KEY (or OPENAI_API_KEY for openai/* models).');
   }
 
-  const modelSpecs: Array<DMModelSpec | null> = options.live
+  const modelSpecs = options.live
     ? parseDMModelSpecs(options.modelsArg ?? process.env.DM_BENCH_MODELS, keys, [
         process.env.DM_MODEL?.trim() || 'openai/gpt-4.1',
       ])
-    : [null];
+    : null;
   const judgeSpec = options.judgeArg ? parseDMModelSpec(options.judgeArg, keys) : null;
   if (judgeSpec && !options.live) {
     throw new Error('--judge only applies to --live runs; offline answers come from stubs.');
@@ -81,14 +61,15 @@ async function main(): Promise<void> {
 
   const db = await createEvalProjectDb();
   const records: EvalRunRecord[] = [];
+  const targets: Array<DMModelSpec | undefined> = modelSpecs ?? [undefined];
 
   console.log(`[dm:eval] mode=${options.live ? 'live' : 'offline (stubbed models)'} cases=${DM_EVAL_CASES.length}`);
-  if (options.live) {
-    console.log(`[dm:eval] models=${modelSpecs.map((spec) => `${spec?.label} via ${spec?.provider}`).join(', ')}`);
+  if (modelSpecs) {
+    console.log(`[dm:eval] models=${modelSpecs.map((spec) => `${spec.label} via ${spec.provider}`).join(', ')}`);
     if (judgeSpec) console.log(`[dm:eval] judge=${judgeSpec.label} via ${judgeSpec.provider}`);
   }
 
-  for (const spec of modelSpecs) {
+  for (const spec of targets) {
     const modelLabel = spec?.label ?? 'offline-stub';
     for (const testCase of DM_EVAL_CASES) {
       const started = performance.now();
@@ -101,14 +82,13 @@ async function main(): Promise<void> {
       );
       const elapsedMs = Math.round(performance.now() - started);
       const failure = testCase.expect(events);
-      const answerText = collectAnswerText(events);
       const record: EvalRunRecord = {
         model: modelLabel,
         caseName: testCase.name,
         passed: failure === null,
         failure,
         elapsedMs,
-        answerText,
+        answerText: collectAnswerText(events),
         blockKinds: collectBlockKinds(events),
       };
 
@@ -163,9 +143,11 @@ function summarize(records: EvalRunRecord[]): string[] {
   return models.map((model) => {
     const runs = records.filter((record) => record.model === model);
     const passed = runs.filter((record) => record.passed).length;
-    const scored = runs
-      .map((record) => record.judge)
-      .filter((judge): judge is JudgeScore => Boolean(judge) && !('error' in (judge as object)));
+    const scored = runs.flatMap((record) => {
+      const judge = record.judge;
+      if (!judge || 'error' in judge) return [];
+      return [judge];
+    });
     const judgePart = scored.length
       ? ` | judge mean g/h/u=${mean(scored.map((s) => s.grounded))}/${mean(scored.map((s) => s.honest))}/${mean(
           scored.map((s) => s.useful),

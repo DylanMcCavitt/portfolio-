@@ -83,10 +83,15 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
     expect(events) {
       if (JSON.stringify(events).includes('candidate-hidden')) return 'leaked candidate data';
       const projectBlocks = events.filter(
-        (event): event is Extract<DMStreamEvent, { type: 'block' }> & { block: { kind: 'projects'; ids: string[] } } =>
-          event.type === 'block' && event.block.kind === 'projects',
+        (event) => event.type === 'block' && event.block.kind === 'projects',
       );
-      if (projectBlocks.some((event) => event.block.ids.includes('loom'))) return 'fabricated an unpublished project id';
+      if (
+        projectBlocks.some(
+          (event) => event.type === 'block' && event.block.kind === 'projects' && event.block.ids.includes('loom'),
+        )
+      ) {
+        return 'fabricated an unpublished project id';
+      }
       if (projectBlocks.length === 0) return 'expected fallback published projects for an unknown-topic question';
       if (!events.some((event) => event.type === 'done')) return 'stream did not complete';
       return null;
