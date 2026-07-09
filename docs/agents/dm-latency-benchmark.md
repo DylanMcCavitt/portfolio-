@@ -16,6 +16,8 @@ npm run dm:bench -- --models openai/gpt-4.1,anthropic/claude-sonnet-4.5 --iterat
 
 Dry mode uses deterministic model stubs and shared eval fixtures so timing instrumentation, aggregation, and failure classification remain testable in CI/local environments without secrets. Gateway model ids are accepted in dry mode.
 
+Model ids are full `<creator>/<model>` gateway ids. When `AI_GATEWAY_API_KEY` is set, **all** models — including `openai/*` — route through the Vercel AI Gateway, so one key compares models across creators. Without a gateway key, `openai/*` ids fall back to the direct OpenAI provider. Answer-quality evals (offline gate, live behavioral, LLM-as-judge) live in `docs/agents/dm-evals.md`.
+
 ## Run live comparison (maintainer only)
 
 Direct OpenAI models:

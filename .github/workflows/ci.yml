@@ -43,3 +43,6 @@ jobs:
 
       - name: Test
         run: npm run test:db && npm run test:discovery && npm run test:slack && npm run test:admin && npm run test:dm && npm run test:metrics && npm run test:rag && npm run test:benchmark && npm run test:proof
+
+      - name: DM offline eval gate
+        run: npm run dm:eval
