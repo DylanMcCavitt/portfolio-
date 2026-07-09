@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { DraftLifecycleState, JsonRecord, JsonValue, PrivacyState, ReviewEventRecord } from '@/lib/db/schema';
 
 export interface AdminPublishQueryable {
@@ -14,13 +15,28 @@ export const EDITABLE_PUBLIC_FIELDS = [
   'links',
   'media',
 ] as const;
+export const STAGED_FIELD_DIFF_KEY = 'stagedFieldDiff';
 
 type RequiredPublicField = (typeof REQUIRED_PUBLIC_FIELDS)[number];
-type EditablePublicField = (typeof EDITABLE_PUBLIC_FIELDS)[number];
+export type EditablePublicField = (typeof EDITABLE_PUBLIC_FIELDS)[number];
 type PublicArrayField = 'details' | 'metrics' | 'links' | 'media';
 type AdminPublishFailure = { ok: false; status: number; code: string; message: string; [key: string]: unknown };
 type AdminPublishSuccess = { ok: true; status: number; code: string; message: string; [key: string]: unknown };
 export type AdminPublishResult = AdminPublishFailure | AdminPublishSuccess;
+export type StagedFieldChange = { before: JsonValue; after: JsonValue };
+export type StagedFieldDiff = Partial<Record<EditablePublicField, StagedFieldChange>>;
+export interface AdminPublishHookContext {
+  projectId: string;
+  draftId: string;
+  candidateId: string | null;
+  actor: string;
+  operation: 'created' | 'updated';
+  changedFields: EditablePublicField[];
+}
+export type AdminPublishHook = (context: AdminPublishHookContext) => Promise<void>;
+export interface AdminPublishOptions {
+  afterPublish?: AdminPublishHook;
+}
 
 type DraftRow = {
   id: string;
@@ -46,8 +62,22 @@ type DraftListRow = Pick<
 
 type EvidencePrivacyRow = { privacy_state: PrivacyState; count: string | number };
 type ReviewEventRow = ReviewEventRecord;
-type ValidationIssue = { field: string; message: string };
-type ValidationResult = { ok: true; value: JsonValue } | { ok: false; issue: ValidationIssue };
+export type ValidationIssue = { field: string; message: string };
+export type PublicFieldValidationResult = { ok: true; value: JsonValue } | { ok: false; issue: ValidationIssue };
+
+type PublicProjectFields = {
+  slug: string;
+  title: string;
+  tagline: string;
+  area: string;
+  year: number;
+  summary: string;
+  activity: string;
+  details: JsonValue[];
+  metrics: JsonValue[];
+  links: JsonValue[];
+  media: JsonValue[];
+};
 
 const EDITABLE_FIELDS: Record<EditablePublicField, true> = {
   slug: true,
@@ -161,6 +191,26 @@ export async function updateAdminDraftFields(
   const beforeState = draft.lifecycle_state;
   const afterState: DraftLifecycleState = beforeState === 'approved_for_publish' ? 'needs_review' : beforeState;
   const proposedFields = { ...draft.proposed_fields, ...validated };
+  const stagedDiff = readStagedFieldDiff(draft.proposed_fields);
+  if (draft.proposed_project_id && Object.keys(stagedDiff).length > 0) {
+    const project = await fetchPublicProjectFields(db, draft.proposed_project_id);
+    if (!project) {
+      return {
+        ok: false,
+        status: 409,
+        code: 'staged_project_missing',
+        message: 'The published project for this staged update no longer exists.',
+        draftId,
+      };
+    }
+    for (const key of keys) {
+      stagedDiff[key] = {
+        before: stagedDiff[key]?.before ?? project[key],
+        after: validated[key] as JsonValue,
+      };
+    }
+    proposedFields[STAGED_FIELD_DIFF_KEY] = stagedDiff;
+  }
 
   await db.query(
     `UPDATE project_drafts
@@ -244,6 +294,7 @@ export async function publishAdminDraft(
   draftId: string,
   actor: string,
   input: { confirmProvenance?: boolean; confirmPrivacy?: boolean },
+  options: AdminPublishOptions = {},
 ): Promise<AdminPublishResult> {
   const draft = await fetchDraft(db, draftId);
   if (!draft) return draftNotFound(draftId);
@@ -316,49 +367,42 @@ export async function publishAdminDraft(
   }
 
   const publicFields = publicProjectFields(draft.proposed_fields);
-  const projectId = await resolvePublishProjectId(db, draft, publicFields.slug);
+  const stagedDiff = readStagedFieldDiff(draft.proposed_fields);
+  const stagedFields = editableFieldsInDiff(stagedDiff);
+  const isStagedUpdate = Boolean(draft.proposed_project_id && stagedFields.length > 0);
+  const projectId = draft.proposed_project_id ?? projectIdFromDraftId(draft.id);
+  let operation: AdminPublishHookContext['operation'] = 'created';
+  let changedFields: EditablePublicField[] = [...EDITABLE_PUBLIC_FIELDS];
 
   try {
-    await db.query(
-      `INSERT INTO projects (
-         id, slug, title, tagline, area, year, summary, activity, details, metrics, links, media,
-         lifecycle_state, published_at, source, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb,
-         'published', now(), $13, now()
-       )
-       ON CONFLICT (id) DO UPDATE SET
-         slug = EXCLUDED.slug,
-         title = EXCLUDED.title,
-         tagline = EXCLUDED.tagline,
-         area = EXCLUDED.area,
-         year = EXCLUDED.year,
-         summary = EXCLUDED.summary,
-         activity = EXCLUDED.activity,
-         details = EXCLUDED.details,
-         metrics = EXCLUDED.metrics,
-         links = EXCLUDED.links,
-         media = EXCLUDED.media,
-         lifecycle_state = 'published',
-         published_at = COALESCE(projects.published_at, now()),
-         source = EXCLUDED.source,
-         updated_at = now()`,
-      [
-        projectId,
-        publicFields.slug,
-        publicFields.title,
-        publicFields.tagline,
-        publicFields.area,
-        publicFields.year,
-        publicFields.summary,
-        publicFields.activity,
-        JSON.stringify(publicFields.details),
-        JSON.stringify(publicFields.metrics),
-        JSON.stringify(publicFields.links),
-        JSON.stringify(publicFields.media),
-        draft.candidate_id ? 'github_discovery' : 'manual',
-      ],
-    );
+    if (isStagedUpdate) {
+      const existing = await fetchPublicProjectFields(db, projectId);
+      if (!existing) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'staged_project_missing',
+          message: 'The published project for this staged update no longer exists.',
+          draftId,
+        };
+      }
+      const staleFields = stagedFields.filter((field) => !isDeepStrictEqual(existing[field], stagedDiff[field]?.before));
+      if (staleFields.length > 0) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'staged_diff_stale',
+          message: 'Published fields changed after this update was staged. Restage the conflicting fields before publishing.',
+          draftId,
+          fields: staleFields,
+        };
+      }
+      await applyStagedProjectFields(db, projectId, publicFields, stagedFields);
+      operation = 'updated';
+      changedFields = stagedFields;
+    } else {
+      await upsertNewProject(db, projectId, publicFields, draft.candidate_id ? 'github_discovery' : 'manual');
+    }
   } catch (error) {
     if (isPgErrorCode(error, '23505')) {
       return { ok: false, status: 409, code: 'slug_conflict', message: 'Project slug already exists.', draftId };
@@ -387,11 +431,37 @@ export async function publishAdminDraft(
       draft.candidate_id,
       actor,
       'Admin published draft to public project record.',
-      JSON.stringify({ source: 'admin_publish', confirmProvenance: true, confirmPrivacy: true, projectId }),
+      JSON.stringify({
+        source: 'admin_publish',
+        confirmProvenance: true,
+        confirmPrivacy: true,
+        projectId,
+        operation,
+        changedFields,
+        ...(isStagedUpdate ? { stagedFieldDiff: stagedDiff } : {}),
+      }),
     ],
   );
 
-  return { ok: true, status: 200, code: 'published', projectId, draftId: draft.id, message: 'Draft published.' };
+  await options.afterPublish?.({
+    projectId,
+    draftId: draft.id,
+    candidateId: draft.candidate_id,
+    actor,
+    operation,
+    changedFields,
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    code: 'published',
+    projectId,
+    draftId: draft.id,
+    operation,
+    changedFields,
+    message: 'Draft published.',
+  };
 }
 
 async function fetchDraft(db: AdminPublishQueryable, draftId: string): Promise<DraftRow | null> {
@@ -449,18 +519,6 @@ function projectIdFromDraftId(draftId: string): string {
   return draftId.startsWith('draft_') ? `proj_${draftId.slice(6)}` : `proj_${draftId}`;
 }
 
-async function resolvePublishProjectId(
-  db: AdminPublishQueryable,
-  draft: DraftRow,
-  slug: string,
-): Promise<string> {
-  const derivedId = draft.proposed_project_id ?? projectIdFromDraftId(draft.id);
-  const existing = normalizeRows(
-    await db.query<{ id: string }>(`SELECT id FROM projects WHERE slug = $1`, [slug]),
-  )[0];
-  return existing?.id ?? derivedId;
-}
-
 function validateRequiredFields(fields: JsonRecord): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const field of REQUIRED_PUBLIC_FIELDS) {
@@ -470,7 +528,7 @@ function validateRequiredFields(fields: JsonRecord): ValidationIssue[] {
   return issues;
 }
 
-function validateEditableField(field: EditablePublicField, value: unknown): ValidationResult {
+export function validatePublicFieldUpdate(field: EditablePublicField, value: unknown): PublicFieldValidationResult {
   if (field === 'slug') return validateSlug(value);
   if (field === 'year') return validateYear(value);
   if (field === 'activity') return validateOptionalString(field, value);
@@ -478,7 +536,11 @@ function validateEditableField(field: EditablePublicField, value: unknown): Vali
   return validateRequiredString(field, value);
 }
 
-function validateSlug(value: unknown): ValidationResult {
+function validateEditableField(field: EditablePublicField, value: unknown): PublicFieldValidationResult {
+  return validatePublicFieldUpdate(field, value);
+}
+
+function validateSlug(value: unknown): PublicFieldValidationResult {
   if (typeof value !== 'string') return invalid('slug', 'Slug must be a string.');
   const slug = value.trim();
   if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(slug)) {
@@ -487,31 +549,31 @@ function validateSlug(value: unknown): ValidationResult {
   return { ok: true, value: slug };
 }
 
-function validateYear(value: unknown): ValidationResult {
+function validateYear(value: unknown): PublicFieldValidationResult {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 2000 || value > 2100) {
     return invalid('year', 'Year must be an integer from 2000 through 2100.');
   }
   return { ok: true, value };
 }
 
-function validateRequiredString(field: RequiredPublicField, value: unknown): ValidationResult {
+function validateRequiredString(field: RequiredPublicField, value: unknown): PublicFieldValidationResult {
   if (typeof value !== 'string') return invalid(field, `${field} must be a string.`);
   const trimmed = value.trim();
   if (!trimmed) return invalid(field, `${field} is required.`);
   return { ok: true, value: trimmed };
 }
 
-function validateOptionalString(field: 'activity', value: unknown): ValidationResult {
+function validateOptionalString(field: 'activity', value: unknown): PublicFieldValidationResult {
   if (typeof value !== 'string') return invalid(field, 'activity must be a string.');
   return { ok: true, value: value.trim() };
 }
 
-function validateArray(field: PublicArrayField, value: unknown): ValidationResult {
+function validateArray(field: PublicArrayField, value: unknown): PublicFieldValidationResult {
   if (!Array.isArray(value)) return invalid(field, `${field} must be a JSON array.`);
   return { ok: true, value: value as JsonValue[] };
 }
 
-function invalid(field: string, message: string): ValidationResult {
+function invalid(field: string, message: string): PublicFieldValidationResult {
   return { ok: false, issue: { field, message } };
 }
 
@@ -526,19 +588,7 @@ function fieldsIncomplete(issues: ValidationIssue[]): AdminPublishFailure {
   };
 }
 
-function publicProjectFields(fields: JsonRecord): {
-  slug: string;
-  title: string;
-  tagline: string;
-  area: string;
-  year: number;
-  summary: string;
-  activity: string;
-  details: JsonValue[];
-  metrics: JsonValue[];
-  links: JsonValue[];
-  media: JsonValue[];
-} {
+function publicProjectFields(fields: JsonRecord): PublicProjectFields {
   const slug = fields.slug;
   const title = fields.title;
   const tagline = fields.tagline;
@@ -569,8 +619,12 @@ function hasPublicProvenance(value: JsonRecord): boolean {
   return isPlainRecord(value) && Object.keys(value).length > 0;
 }
 
-function isEditableField(field: string): field is EditablePublicField {
+export function isEditablePublicField(field: string): field is EditablePublicField {
   return field in EDITABLE_FIELDS;
+}
+
+function isEditableField(field: string): field is EditablePublicField {
+  return isEditablePublicField(field);
 }
 
 function isArrayField(field: EditablePublicField): field is PublicArrayField {
@@ -579,6 +633,112 @@ function isArrayField(field: EditablePublicField): field is PublicArrayField {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readStagedFieldDiff(fields: JsonRecord): StagedFieldDiff {
+  const value = fields[STAGED_FIELD_DIFF_KEY];
+  if (!isPlainRecord(value)) return {};
+
+  const diff: StagedFieldDiff = {};
+  for (const [field, change] of Object.entries(value)) {
+    if (!isEditableField(field) || !isPlainRecord(change)) continue;
+    if (!isJsonValue(change.before) || !isJsonValue(change.after)) continue;
+    diff[field] = { before: change.before, after: change.after };
+  }
+  return diff;
+}
+
+function editableFieldsInDiff(diff: StagedFieldDiff): EditablePublicField[] {
+  return EDITABLE_PUBLIC_FIELDS.filter((field) => diff[field] !== undefined);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isPlainRecord(value) && Object.values(value).every(isJsonValue);
+}
+
+async function fetchPublicProjectFields(
+  db: AdminPublishQueryable,
+  projectId: string,
+): Promise<PublicProjectFields | null> {
+  const row = normalizeRows(
+    await db.query<PublicProjectFields & { lifecycle_state: string }>(
+      `SELECT slug, title, tagline, area, year, summary, activity, details, metrics, links, media, lifecycle_state
+       FROM projects
+       WHERE id = $1`,
+      [projectId],
+    ),
+  )[0];
+  if (!row || row.lifecycle_state !== 'published') return null;
+  return row;
+}
+
+async function upsertNewProject(
+  db: AdminPublishQueryable,
+  projectId: string,
+  fields: PublicProjectFields,
+  source: 'github_discovery' | 'manual',
+): Promise<void> {
+  await db.query(
+    `INSERT INTO projects (
+       id, slug, title, tagline, area, year, summary, activity, details, metrics, links, media,
+       lifecycle_state, published_at, source, updated_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb,
+       'published', now(), $13, now()
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       slug = EXCLUDED.slug,
+       title = EXCLUDED.title,
+       tagline = EXCLUDED.tagline,
+       area = EXCLUDED.area,
+       year = EXCLUDED.year,
+       summary = EXCLUDED.summary,
+       activity = EXCLUDED.activity,
+       details = EXCLUDED.details,
+       metrics = EXCLUDED.metrics,
+       links = EXCLUDED.links,
+       media = EXCLUDED.media,
+       lifecycle_state = 'published',
+       published_at = COALESCE(projects.published_at, now()),
+       source = EXCLUDED.source,
+       updated_at = now()`,
+    [
+      projectId,
+      fields.slug,
+      fields.title,
+      fields.tagline,
+      fields.area,
+      fields.year,
+      fields.summary,
+      fields.activity,
+      JSON.stringify(fields.details),
+      JSON.stringify(fields.metrics),
+      JSON.stringify(fields.links),
+      JSON.stringify(fields.media),
+      source,
+    ],
+  );
+}
+
+async function applyStagedProjectFields(
+  db: AdminPublishQueryable,
+  projectId: string,
+  fields: PublicProjectFields,
+  changedFields: EditablePublicField[],
+): Promise<void> {
+  const params: unknown[] = [projectId];
+  const assignments = changedFields.map((field) => {
+    params.push(isArrayField(field) ? JSON.stringify(fields[field]) : fields[field]);
+    return `${field} = $${params.length}${isArrayField(field) ? '::jsonb' : ''}`;
+  });
+  await db.query(
+    `UPDATE projects
+     SET ${assignments.join(', ')}, updated_at = now()
+     WHERE id = $1 AND lifecycle_state = 'published'`,
+    params,
+  );
 }
 
 function isPgErrorCode(error: unknown, code: string): boolean {

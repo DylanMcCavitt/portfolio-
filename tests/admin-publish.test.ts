@@ -3,6 +3,7 @@ import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { applyMigrations, type Queryable } from '../scripts/db';
 import { createAdminSessionCookie, type AdminAuthConfig, type AdminSessionResult } from '@/lib/admin/auth';
+import type { AdminPublishHook } from '@/lib/admin/publish';
 import { createAdminDraftsGetHandler } from '@/pages/api/admin/drafts';
 import { createAdminDraftDetailGetHandler, createAdminDraftDetailPatchHandler } from '@/pages/api/admin/drafts/[id]';
 import { createAdminDraftApprovePostHandler } from '@/pages/api/admin/drafts/[id]/approve';
@@ -139,8 +140,13 @@ async function approveDraft(db: Queryable, draftId: string): Promise<Response> {
   return POST({ request: jsonRequest(`https://example.test/api/admin/drafts/${draftId}/approve`), params: { id: draftId } } as never);
 }
 
-async function publishDraft(db: Queryable, draftId: string, body: JsonBody): Promise<Response> {
-  const POST = createAdminDraftPublishPostHandler({ db, session: AUTHORIZED_SESSION });
+async function publishDraft(
+  db: Queryable,
+  draftId: string,
+  body: JsonBody,
+  afterPublish?: AdminPublishHook,
+): Promise<Response> {
+  const POST = createAdminDraftPublishPostHandler({ db, session: AUTHORIZED_SESSION, afterPublish });
   return POST({ request: jsonRequest(`https://example.test/api/admin/drafts/${draftId}/publish`, body), params: { id: draftId } } as never);
 }
 
@@ -433,7 +439,7 @@ test('happy path publishes public project fields only and republish updates the 
   assert.equal(countRows.rows[0].title, 'Updated Project Title');
 });
 
-test('new draft with an existing published slug refreshes the same project record', async () => {
+test('staged diff refreshes only named fields on an existing published project', async () => {
   const db = await createMigratedDb();
   const candidateId = await insertCandidate(db, 'candidate_loom_refresh');
   const originalDraftId = 'draft_loom_original';
@@ -460,12 +466,21 @@ test('new draft with an existing published slug refreshes the same project recor
   await insertDraft(db, {
     id: refreshDraftId,
     candidateId,
+    projectId: originalProjectId,
     fields: {
       ...VALID_FIELDS,
       title: 'Loom refresh title',
+      summary: 'Raw GitHub text must not replace curated summary.',
       media: [{ video: '/demos/loom-install.mp4', cap: 'Installing Loom' }],
+      stagedFieldDiff: {
+        title: { before: VALID_FIELDS.title, after: 'Loom refresh title' },
+        media: {
+          before: VALID_FIELDS.media,
+          after: [{ video: '/demos/loom-install.mp4', cap: 'Installing Loom' }],
+        },
+      },
     },
-    provenance: { repo: 'loom' },
+    provenance: { workflow: 'published_project_update', projectId: originalProjectId },
     lifecycle: 'hidden',
   });
   await insertEvidence(db, { id: 'evidence_loom_refresh', draftId: refreshDraftId, privacy: 'safe_public' });
@@ -483,6 +498,8 @@ test('new draft with an existing published slug refreshes the same project recor
   assert.equal(refreshPublish.status, 200);
   assert.equal(refreshJson.code, 'published');
   assert.equal(refreshJson.projectId, originalProjectId);
+  assert.equal(refreshJson.operation, 'updated');
+  assert.deepEqual(refreshJson.changedFields, ['title', 'media']);
 
   const projectRows = await db.query<{ count: string; title: string; media: JsonBody[] }>(
     `SELECT count(*) OVER () AS count, title, media FROM projects WHERE slug = $1 LIMIT 1`,
@@ -491,12 +508,104 @@ test('new draft with an existing published slug refreshes the same project recor
   assert.equal(Number(projectRows.rows[0].count), 1);
   assert.equal(projectRows.rows[0].title, 'Loom refresh title');
   assert.deepEqual(projectRows.rows[0].media, [{ video: '/demos/loom-install.mp4', cap: 'Installing Loom' }]);
+  const unchangedRows = await db.query<{ summary: string; tagline: string }>(
+    `SELECT summary, tagline FROM projects WHERE id = $1`,
+    [originalProjectId],
+  );
+  assert.deepEqual(unchangedRows.rows[0], {
+    summary: VALID_FIELDS.summary,
+    tagline: VALID_FIELDS.tagline,
+  });
 
   const refreshDraftRows = await db.query<{ proposed_project_id: string }>(
     `SELECT proposed_project_id FROM project_drafts WHERE id = $1`,
     [refreshDraftId],
   );
   assert.equal(refreshDraftRows.rows[0].proposed_project_id, originalProjectId);
+
+  const eventRows = await db.query<{ metadata: JsonBody }>(
+    `SELECT metadata FROM review_events WHERE draft_id = $1 AND action = 'published'`,
+    [refreshDraftId],
+  );
+  assert.equal(eventRows.rows[0]?.metadata.operation, 'updated');
+  assert.deepEqual(eventRows.rows[0]?.metadata.changedFields, ['title', 'media']);
+});
+
+test('publish invokes the downstream cascade hook after the durable audit event', async () => {
+  const db = await createMigratedDb();
+  const candidateId = await insertCandidate(db, 'candidate_hook');
+  await insertDraft(db, {
+    id: 'draft_hook',
+    candidateId,
+    fields: { ...VALID_FIELDS, slug: 'hook-project' },
+    provenance: { repo: 'hook-project' },
+    lifecycle: 'approved_for_publish',
+  });
+  await insertReviewEvent(db, {
+    draftId: 'draft_hook',
+    candidateId,
+    action: 'approved_for_publish',
+    metadata: { source: 'admin_publish' },
+  });
+
+  const calls: Parameters<AdminPublishHook>[0][] = [];
+  const response = await publishDraft(
+    db,
+    'draft_hook',
+    { confirmProvenance: true, confirmPrivacy: true },
+    async (context) => {
+      const events = await db.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM review_events
+         WHERE draft_id = $1 AND action = 'published'`,
+        [context.draftId],
+      );
+      assert.equal(events.rows[0]?.count, '1');
+      calls.push(context);
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [{
+    projectId: 'proj_hook',
+    draftId: 'draft_hook',
+    candidateId,
+    actor: ACTOR,
+    operation: 'created',
+    changedFields: ['slug', 'title', 'tagline', 'area', 'year', 'summary', 'activity', 'details', 'metrics', 'links', 'media'],
+  }]);
+});
+
+test('a new draft cannot overwrite an existing project by reusing its slug', async () => {
+  const db = await createMigratedDb();
+  await db.query(
+    `INSERT INTO projects (
+       id, slug, title, tagline, area, year, summary, lifecycle_state, published_at
+     ) VALUES ('proj_curated', $1, 'Curated', 'Curated tagline', 'Automation', 2026, 'Curated summary', 'published', now())`,
+    [VALID_FIELDS.slug],
+  );
+  await insertDraft(db, {
+    id: 'draft_slug_collision',
+    fields: { ...VALID_FIELDS, title: 'Raw replacement' },
+    provenance: { repo: true },
+    lifecycle: 'approved_for_publish',
+  });
+  await insertReviewEvent(db, {
+    draftId: 'draft_slug_collision',
+    action: 'approved_for_publish',
+    metadata: { source: 'admin_publish' },
+  });
+
+  const response = await publishDraft(db, 'draft_slug_collision', {
+    confirmProvenance: true,
+    confirmPrivacy: true,
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await responseJson(response)).code, 'slug_conflict');
+
+  const project = await db.query<{ title: string; summary: string }>(
+    `SELECT title, summary FROM projects WHERE id = 'proj_curated'`,
+  );
+  assert.deepEqual(project.rows[0], { title: 'Curated', summary: 'Curated summary' });
 });
 
 test('PATCH rejects invalid fields without changing proposed fields after each rejection', async () => {

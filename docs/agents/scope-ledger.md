@@ -40,7 +40,7 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
 
 - Blog/log expansion remains optional.
 - Richer artifact types can be added after the answer-block contract proves stable.
-- Existing published project refresh follows first-publish proof and audit trails.
+- Existing published project refresh is staged in Slack and applied on admin Publish (AGE-843).
 - Resume/contact DB migration follows the project DB cutover.
 
 ## Explicitly deferred
@@ -61,10 +61,6 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   - Why deferred: Public project pages and DM artifacts should use real screenshots/demos only when available.
   - Where tracked: Future issue candidates below.
   - Constraint imposed on Now: Do not claim generated visuals as proof or public evidence.
-- Capability: Existing-project refresh.
-  - Why deferred: First-publish proof must land before update loops touch published records.
-  - Where tracked: Future issue candidates below.
-  - Constraint imposed on Now: Discovery/admin schemas must not assume only brand-new projects.
 - Capability: OpenAI Agents SDK orchestration.
   - Why deferred: V1 public DM route defaults to Vercel AI SDK and typed services.
   - Where tracked: Future issue candidates below or a later issue that names the orchestration need.
@@ -134,10 +130,6 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   - Type: AFK
   - Depends on: Project DB cutover
   - Preserves: Unified content management without blocking v1
-- Title: Add existing-project refresh workflow
-  - Type: AFK
-  - Depends on: One-project publish proof and admin audit trail
-  - Preserves: Safe updates to already-published records
 - Title: Evaluate Agents SDK orchestration
   - Type: AFK
   - Depends on: A workflow with concrete handoff/guardrail/tracing/sandbox needs

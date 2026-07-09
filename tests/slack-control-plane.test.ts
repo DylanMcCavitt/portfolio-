@@ -611,6 +611,51 @@ test('Slack scan shorthand uses live GitHub metadata when no topics are explicit
   assert.equal(scanRuns.rows[0]?.result_counts.audit?.scannerMode, 'live-github');
 });
 
+test('Slack live scan draft fills every required field from metadata and README fallbacks', async () => {
+  const db = await createMigratedDb();
+  const config: SlackControlPlaneConfig = {
+    ...CONFIG,
+    githubFetcher: async () => ({
+      ...LIVE_REPO,
+      description: null,
+      language: null,
+      topics: [PORTFOLIO_CANDIDATE_TOPIC, 'workflow-automation'],
+      readmeMarkdown: '# Candidate app\n\nAutomates a recurring review workflow for small teams.',
+    }),
+  };
+
+  const scan = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    formBody({ user_id: DYLAN_SLACK_USER, command: '/dm-scan', text: 'DylanMcCavitt/portfolio-candidate-app' }),
+  );
+  assert.equal(scan.code, 'scan_qualified');
+  assert.ok(scan.candidateId);
+
+  const drafted = await handleSlackFormEncodedRequest(
+    db,
+    config,
+    interactionBody('dm_candidate_draft', String(scan.candidateId)),
+  );
+  assert.equal(drafted.code, 'hidden_draft_requested');
+
+  const rows = await db.query<{ proposed_fields: Record<string, unknown> }>(
+    `SELECT proposed_fields FROM project_drafts WHERE id = $1`,
+    [drafted.draftId],
+  );
+  const fields = rows.rows[0]?.proposed_fields;
+  assert.equal(fields.slug, 'portfolio-candidate-app');
+  assert.equal(fields.title, 'Portfolio Candidate App');
+  assert.equal(fields.tagline, 'Candidate app');
+  assert.equal(fields.area, 'Workflow Automation');
+  assert.equal(fields.year, 2026);
+  assert.equal(fields.summary, 'Candidate app');
+  for (const field of ['slug', 'title', 'tagline', 'area', 'year', 'summary']) {
+    assert.notEqual(fields[field], '', `${field} must be prefilled`);
+    assert.notEqual(fields[field], null, `${field} must be prefilled`);
+  }
+});
+
 test('Slack scan shorthand live metadata without the allowlist topic is rejected without candidates', async () => {
   const db = await createMigratedDb();
   const config: SlackControlPlaneConfig = {
@@ -825,6 +870,113 @@ test('Slack draft action seeds private candidates without publishable links', as
   assert.equal(drafts.rows[0]?.proposed_fields.summary, 'Private automation for managing trading exits. Internal notes stay hidden.');
   assert.equal(drafts.rows[0]?.proposed_fields.year, 2026);
   assert.deepEqual(drafts.rows[0]?.proposed_fields.links, []);
+});
+
+test('allowlisted Slack user can correct a hidden draft field without publishing', async () => {
+  const db = await createMigratedDb();
+  const candidateId = await insertCandidate(db, 'candidate_correction');
+  const drafted = await handleSlackFormEncodedRequest(
+    db,
+    CONFIG,
+    interactionBody('dm_candidate_draft', candidateId),
+  );
+  assert.ok(drafted.draftId);
+
+  const corrected = await handleSlackFormEncodedRequest(
+    db,
+    CONFIG,
+    formBody({
+      user_id: DYLAN_SLACK_USER,
+      command: '/dm-update',
+      text: `${drafted.draftId} title Owner Corrected Title`,
+    }),
+  );
+  assert.equal(corrected.code, 'draft_field_updated');
+
+  const draftRows = await db.query<{ proposed_fields: Record<string, unknown>; lifecycle_state: string }>(
+    `SELECT proposed_fields, lifecycle_state FROM project_drafts WHERE id = $1`,
+    [drafted.draftId],
+  );
+  assert.equal(draftRows.rows[0]?.proposed_fields.title, 'Owner Corrected Title');
+  assert.equal(draftRows.rows[0]?.lifecycle_state, 'needs_review');
+
+  const events = await db.query<{ actor: string; metadata: Record<string, unknown> }>(
+    `SELECT actor, metadata FROM review_events
+     WHERE draft_id = $1 AND metadata->>'kind' = 'draft_field_updated'`,
+    [drafted.draftId],
+  );
+  assert.equal(events.rows[0]?.actor, `slack:${DYLAN_SLACK_USER}`);
+  assert.deepEqual(events.rows[0]?.metadata.fieldsUpdated, ['title']);
+
+  const projects = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM projects`);
+  assert.equal(projects.rows[0]?.count, '0');
+});
+
+test('Slack published-project prompt stages a reviewable field diff and leaves public data unchanged', async () => {
+  const db = await createMigratedDb();
+  await db.query(
+    `INSERT INTO projects (
+       id, slug, title, tagline, area, year, summary, activity, details, metrics, links, media,
+       lifecycle_state, published_at, source
+     ) VALUES (
+       'proj_existing', 'existing-project', 'Existing Project', 'Curated tagline', 'Automation', 2026,
+       'Curated summary', 'Active', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+       'published', now(), 'manual'
+     )`,
+  );
+
+  const staged = await handleSlackFormEncodedRequest(
+    db,
+    CONFIG,
+    formBody({
+      user_id: DYLAN_SLACK_USER,
+      command: '/dm-update',
+      text: 'existing-project activity Shipped',
+    }),
+  );
+  assert.equal(staged.code, 'published_project_update_staged');
+  assert.ok(staged.draftId);
+
+  const project = await db.query<{ activity: string; summary: string }>(
+    `SELECT activity, summary FROM projects WHERE id = 'proj_existing'`,
+  );
+  assert.deepEqual(project.rows[0], { activity: 'Active', summary: 'Curated summary' });
+
+  const drafts = await db.query<{
+    proposed_project_id: string;
+    proposed_fields: Record<string, unknown>;
+    lifecycle_state: string;
+  }>(`SELECT proposed_project_id, proposed_fields, lifecycle_state FROM project_drafts WHERE id = $1`, [staged.draftId]);
+  assert.equal(drafts.rows[0]?.proposed_project_id, 'proj_existing');
+  assert.equal(drafts.rows[0]?.proposed_fields.activity, 'Shipped');
+  assert.deepEqual(drafts.rows[0]?.proposed_fields.stagedFieldDiff, {
+    activity: { before: 'Active', after: 'Shipped' },
+  });
+  assert.equal(drafts.rows[0]?.lifecycle_state, 'needs_review');
+
+  const events = await db.query<{ actor: string; action: string; metadata: Record<string, unknown> }>(
+    `SELECT actor, action, metadata FROM review_events WHERE draft_id = $1`,
+    [staged.draftId],
+  );
+  assert.equal(events.rows[0]?.actor, `slack:${DYLAN_SLACK_USER}`);
+  assert.equal(events.rows[0]?.action, 'note');
+  assert.equal(events.rows[0]?.metadata.kind, 'published_project_update_staged');
+});
+
+test('non-allowlisted Slack user cannot stage a published-project update', async () => {
+  const db = await createMigratedDb();
+  const result = await handleSlackFormEncodedRequest(
+    db,
+    CONFIG,
+    formBody({
+      user_id: 'U_INTRUDER',
+      command: '/dm-update',
+      text: 'existing-project activity Shipped',
+    }),
+  );
+  assert.equal(result.code, 'slack_user_forbidden');
+  const drafts = await db.query<{ count: string }>(`SELECT count(*)::text AS count FROM project_drafts`);
+  assert.equal(drafts.rows[0]?.count, '0');
 });
 
 test('Slack draft interaction posts ephemeral response_url ack without changing HTTP result', async () => {

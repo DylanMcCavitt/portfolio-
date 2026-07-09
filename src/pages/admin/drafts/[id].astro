@@ -14,7 +14,7 @@
  */
 import Admin from '@/layouts/Admin.astro';
 import { authenticateAdminPage, createAdminPageDb } from '@/lib/admin/page';
-import { getAdminDraft } from '@/lib/admin/publish';
+import { EDITABLE_PUBLIC_FIELDS, STAGED_FIELD_DIFF_KEY, getAdminDraft } from '@/lib/admin/publish';
 import type { DraftLifecycleState } from '@/lib/db/schema';
 
 export const prerender = false;
@@ -87,6 +87,11 @@ function asJsonText(value: unknown): string {
   return Array.isArray(value) ? JSON.stringify(value, null, 2) : '';
 }
 
+function displayDiffValue(value: unknown): string {
+  if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value);
+  return asText(value) || '—';
+}
+
 function fallbackWhen(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -102,6 +107,16 @@ function fallbackWhen(value: string): string {
 }
 
 const fields = draft?.proposed_fields ?? {};
+const rawDiff = fields[STAGED_FIELD_DIFF_KEY];
+const stagedDiff =
+  rawDiff && typeof rawDiff === 'object' && !Array.isArray(rawDiff)
+    ? EDITABLE_PUBLIC_FIELDS.flatMap((field) => {
+        const change = (rawDiff as Record<string, unknown>)[field];
+        if (!change || typeof change !== 'object' || Array.isArray(change)) return [];
+        const values = change as Record<string, unknown>;
+        return [{ field, before: values.before, after: values.after }];
+      })
+    : [];
 ---
 
 <Admin title={`Admin · ${asText(fields.title) || draftId}`}>
@@ -190,6 +205,21 @@ const fields = draft?.proposed_fields ?? {};
               <p class="admin-empty">No review activity yet.</p>
             )}
           </section>
+
+          {stagedDiff.length > 0 && (
+            <section class="admin-section">
+              <h2>Staged field changes</h2>
+              <ul class="admin-events">
+                {stagedDiff.map((change) => (
+                  <li>
+                    <span class="mono">{change.field}</span>
+                    <span>{displayDiffValue(change.before)} → {displayDiffValue(change.after)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p class="admin-empty">Only these fields will change when this update is published.</p>
+            </section>
+          )}
 
           <form class="admin-form" data-admin-form novalidate>
             <div class="admin-field">

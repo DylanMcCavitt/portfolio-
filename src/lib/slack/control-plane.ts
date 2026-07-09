@@ -1,10 +1,18 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
+  EDITABLE_PUBLIC_FIELDS,
+  STAGED_FIELD_DIFF_KEY,
+  isEditablePublicField,
+  validatePublicFieldUpdate,
+  type EditablePublicField,
+  type StagedFieldDiff,
+} from '@/lib/admin/publish';
+import {
   scanGithubRepositoryCandidate,
   type GithubDiscoveryScanResult,
   type GithubRepositorySnapshot,
 } from '@/lib/db/github-discovery';
-import type { JsonRecord, RepoVisibility } from '@/lib/db/schema';
+import type { JsonRecord, JsonValue, RepoVisibility } from '@/lib/db/schema';
 import { GithubSnapshotFetchError, type GithubSnapshotFetcher } from './github-fetch';
 
 export const SLACK_SIGNATURE_VERSION = 'v0';
@@ -77,10 +85,41 @@ interface CandidateRow {
 
 interface DraftRow {
   id: string;
+  candidate_id: string | null;
+  proposed_project_id: string | null;
+  proposed_fields: JsonRecord;
+  lifecycle_state: string;
 }
 
-interface RepoEvidenceRow {
+interface CandidateEvidenceRow {
+  source_type: 'repo' | 'readme';
   extracted_text: string | null;
+}
+
+interface CandidateDraftSource {
+  description: string;
+  readme: string;
+}
+
+interface PublishedProjectRow {
+  id: string;
+  slug: string;
+  title: string;
+  tagline: string;
+  area: string;
+  year: number;
+  summary: string;
+  activity: string;
+  details: JsonValue[];
+  metrics: JsonValue[];
+  links: JsonValue[];
+  media: JsonValue[];
+}
+
+interface SlackFieldUpdateInput {
+  target: string;
+  field: EditablePublicField;
+  value: JsonValue;
 }
 
 interface ParsedSlackRepoSnapshotInput {
@@ -172,6 +211,11 @@ export async function handleSlackCommand(
 ): Promise<SlackControlPlaneResult> {
   const auth = authorizeSlackUser(config, payload.userId);
   if (!auth.ok) return auth;
+
+  const update = parseSlackFieldUpdate(payload);
+  if (update) {
+    return stageSlackFieldUpdate(db, update, `slack:${payload.userId}`);
+  }
 
   const parsed = parseSlackRepoSnapshotInput(payload.text);
   const { repo, scannerMode } = await resolveSlackRepoSnapshot(config, parsed);
@@ -471,6 +515,294 @@ function mergeTopics(fetched: string[], explicit: string[]): string[] {
   return [...new Set([...fetched, ...explicit])];
 }
 
+function parseSlackFieldUpdate(payload: SlackCommandPayload): SlackFieldUpdateInput | null {
+  const command = payload.command.trim().toLowerCase();
+  const updateCommand = command === '/dm-update';
+  const text = updateCommand ? payload.text.trim() : payload.text.trim().replace(/^update\s+/i, '');
+  if (!updateCommand && text === payload.text.trim()) return null;
+
+  const match = text.match(/^(\S+)\s+(\S+)\s+([\s\S]+)$/);
+  if (!match) {
+    throw userFacingError(
+      'update_input_invalid',
+      'Use `/dm-update <project-or-draft> <field> <value>`; JSON arrays are accepted for array fields.',
+    );
+  }
+  const [, target, rawField, rawValue] = match;
+  if (!target || !rawField || rawValue === undefined || !isEditablePublicField(rawField)) {
+    throw userFacingError(
+      'update_field_invalid',
+      `Update field must be one of: ${EDITABLE_PUBLIC_FIELDS.join(', ')}.`,
+    );
+  }
+
+  const value = parseSlackFieldValue(rawField, rawValue);
+  const validation = validatePublicFieldUpdate(rawField, value);
+  if (!validation.ok) throw userFacingError('update_value_invalid', validation.issue.message);
+  return { target, field: rawField, value: validation.value };
+}
+
+function parseSlackFieldValue(field: EditablePublicField, rawValue: string): unknown {
+  const trimmed = rawValue.trim();
+  if (field === 'year') {
+    const year = Number(trimmed);
+    return Number.isInteger(year) ? year : trimmed;
+  }
+  if (field === 'details' || field === 'metrics' || field === 'links' || field === 'media') {
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      throw userFacingError('update_value_invalid', `${field} must be a valid JSON array.`);
+    }
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return typeof parsed === 'string' ? parsed : trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+async function stageSlackFieldUpdate(
+  db: SlackControlPlaneQueryable,
+  input: SlackFieldUpdateInput,
+  actor: string,
+): Promise<SlackControlPlaneResult> {
+  if (input.target.startsWith('draft_')) {
+    const draft = await fetchDraftById(db, input.target);
+    if (!draft) {
+      return {
+        ok: false,
+        status: 404,
+        code: 'draft_not_found',
+        responseType: 'ephemeral',
+        message: `Draft ${input.target} was not found.`,
+        draftId: input.target,
+      };
+    }
+    return updateSlackDraftField(db, draft, input, actor);
+  }
+
+  const project = await fetchPublishedProject(db, input.target);
+  if (!project) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'published_project_not_found',
+      responseType: 'ephemeral',
+      message: `Published project ${input.target} was not found.`,
+    };
+  }
+
+  const pendingDraft = await fetchPendingProjectUpdateDraft(db, project.id);
+  if (pendingDraft) return updateSlackDraftField(db, pendingDraft, input, actor, project);
+
+  const draftId = `draft_${randomUUID()}`;
+  const proposedFields = {
+    ...publishedProjectFields(project),
+    [input.field]: input.value,
+    [STAGED_FIELD_DIFF_KEY]: {
+      [input.field]: { before: project[input.field], after: input.value },
+    },
+  } satisfies JsonRecord;
+  await db.query(
+    `INSERT INTO project_drafts (
+       id, proposed_project_id, proposed_fields, private_notes, provenance_map, lifecycle_state
+     ) VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, 'needs_review')`,
+    [
+      draftId,
+      project.id,
+      JSON.stringify(proposedFields),
+      'Field-scoped update staged from Slack. Admin approval and publish remain required.',
+      JSON.stringify({
+        workflow: 'published_project_update',
+        projectId: project.id,
+        generatedBy: 'slack_control_plane',
+        publicPublish: false,
+      }),
+    ],
+  );
+  await insertSlackFieldUpdateEvent(db, {
+    draftId,
+    projectId: project.id,
+    candidateId: null,
+    actor,
+    beforeState: 'published',
+    field: input.field,
+    before: project[input.field],
+    after: input.value,
+    kind: 'published_project_update_staged',
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    code: 'published_project_update_staged',
+    responseType: 'ephemeral',
+    message: `Staged ${input.field} update for ${project.slug} in draft ${draftId}. Admin publish remains required.`,
+    draftId,
+  };
+}
+
+async function updateSlackDraftField(
+  db: SlackControlPlaneQueryable,
+  draft: DraftRow,
+  input: SlackFieldUpdateInput,
+  actor: string,
+  project?: PublishedProjectRow,
+): Promise<SlackControlPlaneResult> {
+  const before = draft.proposed_fields[input.field] ?? '';
+  const proposedFields: JsonRecord = { ...draft.proposed_fields, [input.field]: input.value };
+  const existingDiff = readSlackStagedFieldDiff(draft.proposed_fields);
+  if (draft.proposed_project_id) {
+    const published = project ?? (await fetchPublishedProject(db, draft.proposed_project_id));
+    if (!published) {
+      return {
+        ok: false,
+        status: 409,
+        code: 'staged_project_missing',
+        responseType: 'ephemeral',
+        message: 'The published project for this staged update no longer exists.',
+        draftId: draft.id,
+      };
+    }
+    existingDiff[input.field] = {
+      before: existingDiff[input.field]?.before ?? published[input.field],
+      after: input.value,
+    };
+    proposedFields[STAGED_FIELD_DIFF_KEY] = existingDiff;
+  }
+
+  await db.query(
+    `UPDATE project_drafts
+     SET proposed_fields = $2::jsonb, lifecycle_state = 'needs_review', updated_at = now()
+     WHERE id = $1`,
+    [draft.id, JSON.stringify(proposedFields)],
+  );
+  await insertSlackFieldUpdateEvent(db, {
+    draftId: draft.id,
+    projectId: draft.proposed_project_id,
+    candidateId: draft.candidate_id,
+    actor,
+    beforeState: draft.lifecycle_state,
+    field: input.field,
+    before,
+    after: input.value,
+    kind: draft.proposed_project_id ? 'published_project_update_staged' : 'draft_field_updated',
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    code: draft.proposed_project_id ? 'published_project_update_staged' : 'draft_field_updated',
+    responseType: 'ephemeral',
+    message: `Staged ${input.field} update in draft ${draft.id}. Admin publish remains required.`,
+    draftId: draft.id,
+    ...(draft.candidate_id ? { candidateId: draft.candidate_id } : {}),
+  };
+}
+
+async function insertSlackFieldUpdateEvent(
+  db: SlackControlPlaneQueryable,
+  input: {
+    draftId: string;
+    projectId: string | null;
+    candidateId: string | null;
+    actor: string;
+    beforeState: string;
+    field: EditablePublicField;
+    before: JsonValue;
+    after: JsonValue;
+    kind: 'draft_field_updated' | 'published_project_update_staged';
+  },
+): Promise<void> {
+  await db.query(
+    `INSERT INTO review_events (
+       id, project_id, draft_id, candidate_id, actor, action, before_state, after_state, notes, metadata
+     ) VALUES ($1, $2, $3, $4, $5, 'note', $6, 'needs_review', $7, $8::jsonb)`,
+    [
+      `review_${randomUUID()}`,
+      input.projectId,
+      input.draftId,
+      input.candidateId,
+      input.actor,
+      input.beforeState,
+      'Slack staged a field-scoped project update; no public project row was changed.',
+      JSON.stringify({
+        source: 'slack_control_plane',
+        kind: input.kind,
+        fieldsUpdated: [input.field],
+        fieldDiff: { [input.field]: { before: input.before, after: input.after } },
+      }),
+    ],
+  );
+}
+
+async function fetchDraftById(db: SlackControlPlaneQueryable, draftId: string): Promise<DraftRow | null> {
+  const result = await db.query<DraftRow>(
+    `SELECT id, candidate_id, proposed_project_id, proposed_fields, lifecycle_state
+     FROM project_drafts
+     WHERE id = $1`,
+    [draftId],
+  );
+  return normalizeRows(result)[0] ?? null;
+}
+
+async function fetchPublishedProject(
+  db: SlackControlPlaneQueryable,
+  target: string,
+): Promise<PublishedProjectRow | null> {
+  const result = await db.query<PublishedProjectRow>(
+    `SELECT id, slug, title, tagline, area, year, summary, activity, details, metrics, links, media
+     FROM projects
+     WHERE lifecycle_state = 'published'
+       AND (id = $1 OR slug = $1)
+     LIMIT 1`,
+    [target],
+  );
+  return normalizeRows(result)[0] ?? null;
+}
+
+async function fetchPendingProjectUpdateDraft(
+  db: SlackControlPlaneQueryable,
+  projectId: string,
+): Promise<DraftRow | null> {
+  const result = await db.query<DraftRow>(
+    `SELECT d.id, d.candidate_id, d.proposed_project_id, d.proposed_fields, d.lifecycle_state
+     FROM project_drafts d
+     WHERE d.proposed_project_id = $1
+       AND d.provenance_map->>'workflow' = 'published_project_update'
+       AND NOT EXISTS (
+         SELECT 1 FROM review_events event
+         WHERE event.draft_id = d.id AND event.action = 'published'
+       )
+     ORDER BY d.updated_at DESC
+     LIMIT 1`,
+    [projectId],
+  );
+  return normalizeRows(result)[0] ?? null;
+}
+
+function publishedProjectFields(project: PublishedProjectRow): JsonRecord {
+  return Object.fromEntries(EDITABLE_PUBLIC_FIELDS.map((field) => [field, project[field]])) as JsonRecord;
+}
+
+function readSlackStagedFieldDiff(fields: JsonRecord): StagedFieldDiff {
+  const value = fields[STAGED_FIELD_DIFF_KEY];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const diff: StagedFieldDiff = {};
+  for (const field of EDITABLE_PUBLIC_FIELDS) {
+    const change = value[field];
+    if (!change || typeof change !== 'object' || Array.isArray(change)) continue;
+    if (!('before' in change) || !('after' in change)) continue;
+    diff[field] = { before: change.before, after: change.after };
+  }
+  return diff;
+}
+
 async function requestHiddenDraft(
   db: SlackControlPlaneQueryable,
   candidateId: string,
@@ -491,7 +823,7 @@ async function requestHiddenDraft(
   );
 
   if (!existingDraft) {
-    const repoDescription = await fetchCandidateRepoDescription(db, candidateId);
+    const source = await fetchCandidateDraftSource(db, candidateId);
     await db.query(
       `INSERT INTO project_drafts (
          id, candidate_id, proposed_fields, private_notes, provenance_map, lifecycle_state
@@ -499,7 +831,7 @@ async function requestHiddenDraft(
       [
         draftId,
         candidateId,
-        JSON.stringify(buildHiddenDraftFields(candidate, repoDescription)),
+        JSON.stringify(buildHiddenDraftFields(candidate, source)),
         'Created from Slack draft action. Hidden until admin review and publish.',
         JSON.stringify(buildHiddenDraftProvenance(candidate)),
       ],
@@ -623,35 +955,47 @@ async function fetchCandidate(
   return normalizeRows(result)[0] ?? null;
 }
 
-async function fetchCandidateRepoDescription(
+async function fetchCandidateDraftSource(
   db: SlackControlPlaneQueryable,
   candidateId: string,
-): Promise<string> {
-  const result = await db.query<RepoEvidenceRow>(
-    `SELECT extracted_text
+): Promise<CandidateDraftSource> {
+  const result = await db.query<CandidateEvidenceRow>(
+    `SELECT source_type, extracted_text
      FROM evidence_sources
      WHERE candidate_id = $1
-       AND source_type = 'repo'
+       AND source_type IN ('repo', 'readme')
        AND extracted_text IS NOT NULL
-     ORDER BY created_at DESC
-     LIMIT 1`,
+     ORDER BY created_at DESC`,
     [candidateId],
   );
-  return normalizeRows(result)[0]?.extracted_text?.trim() ?? '';
+  const rows = normalizeRows(result);
+  return {
+    description: rows.find((row) => row.source_type === 'repo')?.extracted_text?.trim() ?? '',
+    readme: rows.find((row) => row.source_type === 'readme')?.extracted_text?.trim() ?? '',
+  };
 }
 
 async function fetchDraftForCandidate(
   db: SlackControlPlaneQueryable,
   candidateId: string,
 ): Promise<DraftRow | null> {
-  const result = await db.query<DraftRow>(`SELECT id FROM project_drafts WHERE candidate_id = $1 ORDER BY created_at LIMIT 1`, [
-    candidateId,
-  ]);
+  const result = await db.query<DraftRow>(
+    `SELECT id, candidate_id, proposed_project_id, proposed_fields, lifecycle_state
+     FROM project_drafts
+     WHERE candidate_id = $1
+     ORDER BY created_at
+     LIMIT 1`,
+    [candidateId],
+  );
   return normalizeRows(result)[0] ?? null;
 }
 
-function buildHiddenDraftFields(candidate: CandidateRow, repoDescription: string): JsonRecord {
+function buildHiddenDraftFields(candidate: CandidateRow, source: CandidateDraftSource): JsonRecord {
   const repoName = repoNameFromCandidate(candidate);
+  const title = titleFromRepoName(repoName) || 'Untitled Project';
+  const readmeSummary = summaryFromReadme(source.readme);
+  const summary = source.description || readmeSummary || `${title} project from GitHub.`;
+  const tagline = taglineFromDescription(source.description || readmeSummary) || `${title} project.`;
   return {
     source: 'github_discovery',
     candidateId: candidate.id,
@@ -661,11 +1005,11 @@ function buildHiddenDraftFields(candidate: CandidateRow, repoDescription: string
     evidencePacket: candidate.evidence_packet,
     visibility: 'hidden',
     slug: slugFromRepoName(repoName) || slugFromRepoName(candidate.id) || 'draft',
-    title: titleFromRepoName(repoName),
-    tagline: taglineFromDescription(repoDescription),
-    area: typeof candidate.signals.language === 'string' ? candidate.signals.language : '',
+    title,
+    tagline,
+    area: areaFromSignals(candidate.signals),
     year: yearFromSignals(candidate.signals),
-    summary: repoDescription,
+    summary,
     links: candidate.repo_visibility === 'public' ? [['GitHub', candidate.source_ref]] : [],
   };
 }
@@ -710,6 +1054,32 @@ function taglineFromDescription(description: string): string {
   if (!trimmed) return '';
   const sentence = trimmed.match(/^(.+?[.!?])(?:\s|$)/s)?.[1]?.trim();
   return (sentence || trimmed).slice(0, 140).trim();
+}
+
+function summaryFromReadme(readme: string): string {
+  if (!readme.trim()) return '';
+  const plain = readme
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_~`>|]/g, '')
+    .replace(/\r/g, '')
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .find(Boolean);
+  return plain?.slice(0, 600).trim() ?? '';
+}
+
+function areaFromSignals(signals: JsonRecord): string {
+  if (typeof signals.language === 'string' && signals.language.trim()) return signals.language.trim();
+  const topics = signals.topics;
+  if (Array.isArray(topics)) {
+    const topic = topics.find((value) => typeof value === 'string' && value !== 'portfolio-candidate');
+    if (typeof topic === 'string' && topic.trim()) return titleFromRepoName(topic);
+  }
+  return 'Software';
 }
 
 function yearFromSignals(signals: JsonRecord): number {

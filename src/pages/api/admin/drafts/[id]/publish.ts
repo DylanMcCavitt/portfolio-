@@ -1,6 +1,10 @@
 import type { APIRoute } from 'astro';
 import { createDbClient, getDatabaseUrl, type DbClient } from '@/lib/db/client';
-import { publishAdminDraft, type AdminPublishQueryable } from '@/lib/admin/publish';
+import {
+  publishAdminDraft,
+  type AdminPublishHook,
+  type AdminPublishQueryable,
+} from '@/lib/admin/publish';
 import {
   readAdminAuthConfig,
   requireAdminSession,
@@ -15,6 +19,7 @@ export interface AdminDraftPublishHandlerDeps {
   authConfig?: AdminAuthConfig;
   session?: (request: Request) => AdminSessionResult;
   createClient?: () => DbClient;
+  afterPublish?: AdminPublishHook;
 }
 
 export function createAdminDraftPublishPostHandler(deps: AdminDraftPublishHandlerDeps = {}): APIRoute {
@@ -38,6 +43,8 @@ export function createAdminDraftPublishPostHandler(deps: AdminDraftPublishHandle
       const result = await publishAdminDraft(dbResult.db, draftId, auth.actor, {
         confirmProvenance: body.value.confirmProvenance === true,
         confirmPrivacy: body.value.confirmPrivacy === true,
+      }, {
+        afterPublish: deps.afterPublish,
       });
       return adminJson(result.status, result);
     } catch (error) {

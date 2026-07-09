@@ -6,20 +6,60 @@ endpoints; polished admin UI is deferred (Claude-routed later).
 
 ## Boundary rules
 
-- Slack approval alone can never publish. The Slack control plane only creates
-  `hidden` drafts; publishing requires a GitHub-OAuth-authenticated admin to
-  approve (`approved_for_publish` review event with `metadata.source =
-  'admin_publish'`) and then publish with explicit provenance + privacy
-  confirmations in the same deliberate request.
+- Slack approval alone can never publish. The Slack control plane stages hidden
+  drafts and field-scoped update diffs only; publishing requires a
+  GitHub-OAuth-authenticated admin to approve (`approved_for_publish` review
+  event with `metadata.source = 'admin_publish'`) and then publish with
+  explicit provenance + privacy confirmations in the same deliberate request.
 - Only validated public fields from `proposed_fields` reach the `projects` row.
-  `private_notes`, `provenance_map` contents, evidence text, and Slack payloads
-  never do.
+  `private_notes`, `provenance_map` contents, evidence text, Slack payloads, and
+  the internal `stagedFieldDiff` object never do.
 - Publish gates, in order: draft exists → lifecycle `approved_for_publish` →
   fresh admin approval event (field edits demote and invalidate stale approvals)
   → required public fields validate → `confirmProvenance` + `confirmPrivacy`
   both `true` → non-empty `provenance_map` → no linked evidence with
   `privacy_state` `unreviewed` or `blocked` (`private_allowed_for_draft` is
   allowed: it authorizes draft usage; the evidence itself stays private).
+
+## Slack staging (AGE-843)
+
+Slack never publishes. It only prepares admin review material.
+
+- **Scan + draft:** `/dm-scan owner/repo` fetches GitHub metadata/README when
+  configured, qualifies via `portfolio-candidate`, and the Draft action creates a
+  hidden `project_drafts` row with required publish fields prefilled (`slug`,
+  `title`, `tagline`, `area`, `year`, `summary`). The allowlisted maintainer can
+  correct fields via `/dm-update <draft_id> <field> <value>`.
+- **Published-project updates:** `/dm-update <project-id-or-slug> <field>
+  <value>` stages a field-scoped diff in `project_drafts.proposed_fields` under
+  `stagedFieldDiff` (`{ field: { before, after } }`), sets
+  `proposed_project_id`, and writes `review_events` with actor
+  `slack:<user_id>`. Public `projects` rows stay unchanged until admin Publish.
+- **Audit:** Slack staging writes `review_events` with
+  `metadata.source = 'slack_control_plane'` for scan, draft, dismiss, snooze,
+  and field-update actions.
+
+## Publish cascade
+
+`publishAdminDraft` in `src/lib/admin/publish.ts` completes the cascade in one
+admin Publish click:
+
+1. **New projects:** upsert the `projects` row from validated `proposed_fields`
+   (deterministic id `draft_<uuid>` → `proj_<uuid>`).
+2. **Staged updates:** when `proposed_project_id` and `stagedFieldDiff` are
+   present, apply only the named fields to the existing published record. Curated
+   fields not in the diff are never overwritten with raw GitHub text. Stale
+   diffs (published field changed after staging) return `staged_diff_stale`.
+3. **Evidence linkage:** attach candidate/draft evidence to the published
+   `project_id`.
+4. **Audit:** write a `published` `review_events` row with `operation`
+   (`created` | `updated`) and `changedFields`.
+5. **Downstream hook:** optional `afterPublish` callback on the publish route
+   deps seam for RAG eligibility/ingest (AGE-848) without weakening publish
+   gates.
+
+Admin draft detail (`/admin/drafts/[id]`) surfaces `stagedFieldDiff` as a
+reviewable before/after list.
 
 ## Endpoints
 
@@ -36,7 +76,7 @@ for Slack webhooks).
 | `/api/admin/drafts` | GET | List drafts for review |
 | `/api/admin/drafts/[id]` | GET / PATCH | Draft detail with evidence privacy summary / edit validated public fields |
 | `/api/admin/drafts/[id]/approve` | POST | Mark `approved_for_publish` (requires valid required fields) |
-| `/api/admin/drafts/[id]/publish` | POST | Run publish gates, upsert `projects`, write `published` review event |
+| `/api/admin/drafts/[id]/publish` | POST | Run publish gates, upsert or field-scope-update `projects`, write `published` review event |
 
 Required public fields: `slug`, `title`, `tagline`, `area`, `year`, `summary`.
 Optional: `activity`, `details`, `metrics`, `links`, `media` (JSON arrays).
@@ -66,18 +106,24 @@ stay safe before setup. Post-AGE-803, preview deploys write to the Neon
 
 ## Actor and audit conventions
 
-- Actor string everywhere: `github:<lowercased-login>`.
+- Admin actor string: `github:<lowercased-login>`.
+- Slack actor string: `slack:<user_id>` (allowlisted maintainer only).
 - Every admin mutation writes a `review_events` row with
   `metadata.source = 'admin_publish'`.
 - Published project id is deterministic from the draft id
   (`draft_<uuid>` → `proj_<uuid>`) so a retried publish after a partial
   failure (Neon HTTP runs without transactions) converges on the same row
-  instead of dead-ending in a slug conflict.
+  instead of dead-ending in a slug conflict. Staged updates target an existing
+  `proposed_project_id` instead of slug-based overwrite.
 
 ## Tests
 
 `npm run test:admin` — `tests/admin-auth.test.ts` (OAuth boundary, cookie
 signing/tampering/expiry, wrong-login refusal) and `tests/admin-publish.test.ts`
 (PGlite + real migrations; every publish gate, Slack-only drafts cannot
-publish, stale-approval regression, full publish projection, republish update
-path).
+publish, stale-approval regression, full publish projection, staged-diff refresh,
+downstream hook seam, republish update path).
+
+`npm run test:slack` — `tests/slack-control-plane.test.ts` (GitHub metadata
+prefill, `/dm-update` field staging, published-project diff queue, Slack cannot
+publish).
