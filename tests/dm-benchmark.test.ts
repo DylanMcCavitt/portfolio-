@@ -1,6 +1,55 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { aggregateBenchmarkRuns, classifyBenchmarkRun, median, percentile, type DMBenchmarkRunRecord, type TimedDMEvent } from '@/lib/dm/benchmark';
+import { parseDMModelSpec, parseDMModelSpecs } from '@/lib/dm/model-specs';
+
+test('model specs keep full gateway ids so anthropic models resolve through the gateway', () => {
+  const keys = { hasGatewayKey: true, hasOpenaiKey: true };
+
+  // Regression: the old benchmark parser stripped the creator prefix, producing
+  // gateway('claude-sonnet-4.5') which is not a valid gateway model id.
+  assert.deepEqual(parseDMModelSpec('anthropic/claude-sonnet-4.6', keys), {
+    provider: 'gateway',
+    model: 'anthropic/claude-sonnet-4.6',
+    label: 'anthropic/claude-sonnet-4.6',
+  });
+
+  // With a gateway key, openai/* models also route through the gateway.
+  assert.deepEqual(parseDMModelSpec('openai/gpt-4.1', keys), {
+    provider: 'gateway',
+    model: 'openai/gpt-4.1',
+    label: 'openai/gpt-4.1',
+  });
+});
+
+test('model specs fall back to direct OpenAI when only OPENAI_API_KEY is set', () => {
+  const keys = { hasGatewayKey: false, hasOpenaiKey: true };
+
+  assert.deepEqual(parseDMModelSpec('openai/gpt-4.1', keys), {
+    provider: 'openai',
+    model: 'openai/gpt-4.1',
+    label: 'openai/gpt-4.1',
+  });
+  assert.deepEqual(parseDMModelSpec('gpt-4.1-mini', keys), {
+    provider: 'openai',
+    model: 'openai/gpt-4.1-mini',
+    label: 'openai/gpt-4.1-mini',
+  });
+  assert.throws(() => parseDMModelSpec('anthropic/claude-sonnet-4.6', keys), /AI_GATEWAY_API_KEY/);
+});
+
+test('model spec lists dedupe and support dry-mode parsing without keys', () => {
+  const keys = { hasGatewayKey: false, hasOpenaiKey: false };
+  const specs = parseDMModelSpecs('anthropic/claude-sonnet-4.6, anthropic/claude-sonnet-4.6, openai/gpt-4.1', keys, []);
+
+  assert.deepEqual(
+    specs.map((spec) => spec.label),
+    ['anthropic/claude-sonnet-4.6', 'openai/gpt-4.1'],
+  );
+  assert.equal(specs[0]?.provider, 'gateway');
+  assert.throws(() => parseDMModelSpecs(undefined, keys, []), /No models configured/);
+  assert.throws(() => parseDMModelSpec('anthropic/', keys), /creator.*model|<creator>\/<model>/);
+});
 
 test('benchmark classification marks no-token errors as MODEL_CALL_FAILED invalid latency', () => {
   const events: TimedDMEvent[] = [

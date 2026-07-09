@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { aggregateBenchmarkRuns, classifyBenchmarkRun, type DMBenchmarkRunRecord, type TimedDMEvent } from '@/lib/dm/benchmark';
 import { createEvalProjectDb, createStubModelForEvalCase, DM_EVAL_CASES } from '@/lib/dm/eval-fixtures';
 import type { DMStreamEvent } from '@/lib/dm/contract';
+import { parseDMModelSpecs, readModelKeyAvailability } from '@/lib/dm/model-specs';
 import { createDMChatStream } from '@/lib/dm/runtime';
 
 process.env.DM_METRICS ??= '0';
@@ -14,12 +15,6 @@ interface CliOptions {
   jsonStdout: boolean;
   jsonPath?: string;
   help: boolean;
-}
-
-interface BenchmarkModelSpec {
-  provider: 'gateway' | 'openai';
-  model: string;
-  label: string;
 }
 
 interface TimedReadResult {
@@ -35,10 +30,12 @@ async function main(): Promise<void> {
   }
 
   const iterations = parseIterations(options.iterationsArg ?? process.env.DM_BENCH_ITERATIONS);
-  const modelSpecs = parseModelSpecs(options.modelsArg ?? process.env.DM_BENCH_MODELS, process.env.DM_MODEL);
-  const hasGatewayKey = Boolean(process.env.AI_GATEWAY_API_KEY?.trim());
-  const hasOpenaiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
-  const dryRun = !hasGatewayKey && !hasOpenaiKey;
+  const keys = readModelKeyAvailability();
+  const modelSpecs = parseDMModelSpecs(options.modelsArg ?? process.env.DM_BENCH_MODELS, keys, [
+    process.env.DM_MODEL?.trim() || 'openai/gpt-4.1',
+    'anthropic/claude-sonnet-4.6',
+  ]);
+  const dryRun = !keys.hasGatewayKey && !keys.hasOpenaiKey;
 
   if (modelSpecs.length < 2) {
     console.warn(`[dm:bench] expected at least two models for comparison; running ${modelSpecs.length}.`);
@@ -48,7 +45,7 @@ async function main(): Promise<void> {
   const runRecords: DMBenchmarkRunRecord[] = [];
 
   console.log(`[dm:bench] mode=${dryRun ? 'dry (stubbed, NOT valid latency evidence)' : 'live'} iterations=${iterations} cases=${DM_EVAL_CASES.length}`);
-  console.log(`[dm:bench] models=${modelSpecs.map((spec) => spec.label).join(', ')}`);
+  console.log(`[dm:bench] models=${modelSpecs.map((spec) => `${spec.label} via ${spec.provider}`).join(', ')}`);
 
   for (const modelSpec of modelSpecs) {
     for (let iteration = 1; iteration <= iterations; iteration += 1) {
@@ -177,31 +174,6 @@ function parseIterations(value: string | undefined): number {
   return parsed;
 }
 
-function parseModelSpecs(value: string | undefined, defaultModel: string | undefined): BenchmarkModelSpec[] {
-  const fallback = [defaultModel?.trim() || 'gpt-4o-mini', 'gpt-4.1-mini'];
-  const rawModels = (value ? value.split(',') : fallback).map((item) => item.trim()).filter(Boolean);
-  const unique = [...new Set(rawModels)];
-  if (unique.length === 0) throw new Error('No benchmark models configured.');
-  return unique.map(parseModelSpec);
-}
-
-function parseModelSpec(value: string): BenchmarkModelSpec {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error('Model label must not be empty.');
-  if (trimmed.includes('/')) {
-    const [provider, ...rest] = trimmed.split('/');
-    const model = rest.join('/').trim();
-    if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'google') {
-      throw new Error(
-        `Unsupported provider "${provider}" in model "${trimmed}". Use openai/<model>, anthropic/<model>, or google/<model>.`,
-      );
-    }
-    if (!model) throw new Error(`Missing model name in "${trimmed}".`);
-    return { provider: provider === 'openai' ? 'openai' : 'gateway', model, label: `${provider}/${model}` };
-  }
-  return { provider: 'openai', model: trimmed, label: `openai/${trimmed}` };
-}
-
 async function readTimedNdjson(stream: ReadableStream<Uint8Array>): Promise<TimedReadResult> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -318,7 +290,7 @@ function printUsage(): void {
 Usage: npm run dm:bench -- [options]
 
 Options:
-  --models <list>       Comma-separated model list (openai/gpt-4.1,anthropic/claude-sonnet-4.5)
+  --models <list>       Comma-separated model list (openai/gpt-4.1,anthropic/claude-sonnet-4.6)
   --iterations <n>      Iterations per fixture (default: 3 or DM_BENCH_ITERATIONS)
   --json                Print JSON report to stdout
   --json-path <path>    Write JSON report to a file path
@@ -327,8 +299,9 @@ Options:
 Environment:
   DM_BENCH_MODELS       Comma-separated model list (same format as --models)
   DM_BENCH_ITERATIONS   Iteration count override
-  AI_GATEWAY_API_KEY    Required for gateway models (anthropic/google/etc). Missing key enables dry mode.
-  OPENAI_API_KEY        Required for direct OpenAI models and for RAG search. Missing key enables dry mode.
+  AI_GATEWAY_API_KEY    When set, ALL models (including openai/*) route through the Vercel AI Gateway.
+  OPENAI_API_KEY        Without a gateway key, reaches openai/* models directly. Also used by RAG search.
+                        With neither key set, the run uses dry mode (stubbed models, plumbing check only).
 `);
 }
 

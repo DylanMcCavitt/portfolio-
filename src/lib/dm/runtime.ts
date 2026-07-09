@@ -72,7 +72,7 @@ export function readDMRuntimeConfig(env: DMRuntimeEnv = process.env): DMRuntimeC
   return { provider, model };
 }
 
-function createModel(config: DMRuntimeConfig): LanguageModel {
+export function createDMModel(config: DMRuntimeConfig): LanguageModel {
   if (config.provider === 'gateway') {
     return gateway(config.model);
   }
@@ -86,7 +86,7 @@ export function createDMChatStream(
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const tools = createPublicDMDataTools(deps.db);
-  const model = deps.model ?? createModel(config);
+  const model = deps.model ?? createDMModel(config);
   const metrics = createDMMetricsRecorder({ enabled: shouldRecordDMMetrics() });
 
   return new ReadableStream<Uint8Array>({
