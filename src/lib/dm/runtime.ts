@@ -420,7 +420,7 @@ async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
     ...trackLines,
     '',
     'Tool selection rules:',
-    "- Questions about status/area (e.g., 'live projects', 'iOS apps') -> use filterProjects.",
+    "- Questions about status/area (e.g., 'live projects', 'AI & Developer Tools') -> use filterProjects.",
     "- 'Best', 'most impressive', 'strongest' -> use rankProjects with an intent query, do not guess project ids.",
     '- Topic or keyword questions -> use searchProjects.',
     '- Resume/background/career/education -> use readResume.',

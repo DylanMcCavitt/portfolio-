@@ -76,13 +76,11 @@ export type ProjectShot = ProjectImageShot | ProjectVideoShot | ProjectSkeletonS
 
 /** Catalog areas — also serve as project library filters. */
 export type ProjectArea =
-  | 'Trading systems'
-  | 'Agents & MCP'
-  | 'iOS'
-  | 'Shipped'
-  | 'School'
-  | 'Infrastructure'
-  | 'Research';
+  | 'Shipped & Client Work'
+  | 'Apps'
+  | 'AI & Developer Tools'
+  | 'Side Projects & Experiments'
+  | 'Coursework';
 
 export interface Project {
   id: string;
@@ -128,7 +126,7 @@ export const CATALOG: Project[] = [
     id: 'agentic-trader',
     title: 'agentic-trader',
     sym: 'at',
-    area: 'Agents & MCP',
+    area: 'Side Projects & Experiments',
     status: ['dry', 'Dry-run'],
     year: 2026,
     activity: 'live 06·23',
@@ -168,7 +166,7 @@ export const CATALOG: Project[] = [
     id: 'exit-manager',
     title: 'tastytrade-exit-manager',
     sym: 'em',
-    area: 'Trading systems',
+    area: 'Side Projects & Experiments',
     status: ['live', 'Live'],
     year: 2026,
     activity: 'today',
@@ -208,7 +206,7 @@ export const CATALOG: Project[] = [
     id: 'hood',
     title: 'hood',
     sym: 'hd',
-    area: 'Trading systems',
+    area: 'Side Projects & Experiments',
     status: ['live', 'Active'],
     year: 2026,
     activity: 'today',
@@ -248,7 +246,7 @@ export const CATALOG: Project[] = [
     id: 'tradingview-mcp',
     title: 'tradingview-mcp',
     sym: 'tv',
-    area: 'Agents & MCP',
+    area: 'AI & Developer Tools',
     status: ['wip', 'WIP'],
     year: 2026,
     activity: '2d ago',
@@ -288,7 +286,7 @@ export const CATALOG: Project[] = [
     id: 'evalgate',
     title: 'evalgate',
     sym: 'eg',
-    area: 'Agents & MCP',
+    area: 'AI & Developer Tools',
     status: ['wip', 'Building'],
     year: 2026,
     activity: 'in progress',
@@ -328,7 +326,7 @@ export const CATALOG: Project[] = [
     id: 'dog-log',
     title: 'dog log',
     sym: 'dg',
-    area: 'iOS',
+    area: 'Apps',
     status: ['live', 'App Store'],
     year: 2026,
     activity: 'v1.2',
@@ -368,7 +366,7 @@ export const CATALOG: Project[] = [
     id: 'chore-ladder',
     title: 'chore ladder',
     sym: 'cl',
-    area: 'iOS',
+    area: 'Apps',
     status: ['wip', 'TestFlight'],
     year: 2026,
     activity: 'may',
@@ -408,7 +406,7 @@ export const CATALOG: Project[] = [
     id: 'homeserver',
     title: 'homeserver',
     sym: 'hs',
-    area: 'Infrastructure',
+    area: 'Side Projects & Experiments',
     status: ['live', 'Online'],
     year: 2025,
     activity: '99.9%',
@@ -452,7 +450,7 @@ export const CATALOG: Project[] = [
     id: 'slurmlet',
     title: 'slurmlet',
     sym: 'sl',
-    area: 'Infrastructure',
+    area: 'AI & Developer Tools',
     status: ['wip', 'WIP'],
     year: 2026,
     activity: 'building',
@@ -492,7 +490,7 @@ export const CATALOG: Project[] = [
     id: 'bellas-beads',
     title: "bella's beads",
     sym: 'bb',
-    area: 'Shipped',
+    area: 'Shipped & Client Work',
     status: ['done', 'Shipped'],
     year: 2025,
     activity: '2025',
@@ -533,7 +531,7 @@ export const CATALOG: Project[] = [
     id: 'nhf',
     title: 'no hard feelings',
     sym: 'nh',
-    area: 'Shipped',
+    area: 'Shipped & Client Work',
     status: ['live', 'Live'],
     year: 2025,
     activity: 'live',
@@ -572,7 +570,7 @@ export const CATALOG: Project[] = [
     id: 'work-orders',
     title: 'work orders',
     sym: 'wo',
-    area: 'School',
+    area: 'Coursework',
     status: ['done', 'Shipped'],
     year: 2025,
     activity: 'team of 4',
@@ -612,7 +610,7 @@ export const CATALOG: Project[] = [
     id: 'epl-ml',
     title: 'EPL match predictor',
     sym: 'ep',
-    area: 'School',
+    area: 'Coursework',
     status: ['done', 'Shipped'],
     year: 2025,
     activity: '8 models',
@@ -653,7 +651,7 @@ export const CATALOG: Project[] = [
     id: 'condor-study',
     title: '0DTE condor study',
     sym: '0d',
-    area: 'Research',
+    area: 'Side Projects & Experiments',
     status: ['done', 'Retired'],
     year: 2025,
     activity: '2025',
@@ -692,7 +690,7 @@ export const CATALOG: Project[] = [
     id: 'harness-arena',
     title: 'harness-arena',
     sym: 'ha',
-    area: 'Research',
+    area: 'Side Projects & Experiments',
     status: ['done', 'Shelved'],
     year: 2026,
     activity: 'apr',
@@ -735,33 +733,29 @@ export type PlaylistId = 'all' | 'wip' | ProjectArea;
 
 /** Ordered list of area filters. */
 export const AREA_PLAYLISTS: ProjectArea[] = [
-  'Trading systems',
-  'Agents & MCP',
-  'iOS',
-  'Shipped',
-  'School',
-  'Infrastructure',
-  'Research',
+  'Shipped & Client Work',
+  'Apps',
+  'AI & Developer Tools',
+  'Side Projects & Experiments',
+  'Coursework',
 ];
 
 /**
  * Canonical URL slugs for the filtered library routes (#25). The filter ids
  * double as area labels, so several contain spaces, ampersands, and uppercase
- * (`Trading systems`, `Agents & MCP`, `iOS`); those are not stable, shareable
- * URL segments. This map is the single source of truth for `/library/<slug>`;
+ * characters; those are not stable, shareable URL segments. This map is the
+ * single source of truth for `/library/<slug>`;
  * routes and the sitemap read it, so the slug scheme stays aligned.
  *
  * `all` is intentionally absent: it lives at `/`, not `/library/all`.
  */
 export const PLAYLIST_SLUGS: Record<Exclude<PlaylistId, 'all'>, string> = {
   wip: 'wip',
-  'Trading systems': 'trading-systems',
-  'Agents & MCP': 'agents-mcp',
-  iOS: 'ios',
-  Shipped: 'shipped',
-  School: 'school',
-  Infrastructure: 'infrastructure',
-  Research: 'research',
+  'Shipped & Client Work': 'shipped-client-work',
+  Apps: 'apps',
+  'AI & Developer Tools': 'ai-developer-tools',
+  'Side Projects & Experiments': 'side-projects-experiments',
+  Coursework: 'coursework',
 };
 
 /** Reverse lookup: URL slug → playlist id. Built once from {@link PLAYLIST_SLUGS}. */

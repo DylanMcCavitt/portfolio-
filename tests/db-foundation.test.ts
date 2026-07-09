@@ -95,7 +95,11 @@ test('migrations create the DM project foundation tables', async () => {
   const db = createTestDb();
   const applied = await applyMigrations(db);
 
-  assert.deepEqual(applied, ['0001_dm_project_foundation.sql', '0002_review_events_seq.sql']);
+  assert.deepEqual(applied, [
+    '0001_dm_project_foundation.sql',
+    '0002_review_events_seq.sql',
+    '0003_recruiter_project_areas.sql',
+  ]);
 
   const tables = await db.query<{ table_name: string }>(
     `SELECT table_name
@@ -133,7 +137,10 @@ test('review_events seq migration upgrades an existing database deterministicall
             ('review_seq_b', 'cand_seq', 'test', 'note', '2026-01-01T00:00:00Z')`,
   );
 
-  assert.deepEqual(await applyMigrations(db), ['0002_review_events_seq.sql']);
+  assert.deepEqual(await applyMigrations(db), [
+    '0002_review_events_seq.sql',
+    '0003_recruiter_project_areas.sql',
+  ]);
 
   const upgraded = await db.query<{ id: string; seq: string | number | null }>(
     `SELECT id, seq FROM review_events WHERE candidate_id = 'cand_seq'`,
@@ -158,6 +165,56 @@ test('review_events seq migration upgrades an existing database deterministicall
   assert.equal(latest.rows[0]?.id, 'review_seq_d');
 });
 
+test('project area taxonomy migration remaps project rows and draft proposed_fields', async () => {
+  const db = createTestDb();
+  const stageDir = await mkdtemp(join(tmpdir(), 'age842-mig-'));
+  for (const name of ['0001_dm_project_foundation.sql', '0002_review_events_seq.sql']) {
+    await copyFile(
+      fileURLToPath(new URL(`../db/migrations/${name}`, import.meta.url)),
+      join(stageDir, name),
+    );
+  }
+  assert.deepEqual(await applyMigrations(db, stageDir), [
+    '0001_dm_project_foundation.sql',
+    '0002_review_events_seq.sql',
+  ]);
+
+  await db.query(
+    `INSERT INTO projects (id, slug, title, tagline, area, year, lifecycle_state, published_at)
+     VALUES ('evalgate', 'evalgate', 'evalgate', 'Regression tests for assistant behavior', 'Agents & MCP', 2026, 'published', now())`,
+  );
+  await db.query(
+    `INSERT INTO project_drafts (id, proposed_project_id, proposed_fields, lifecycle_state)
+     VALUES (
+       'draft-evalgate',
+       'evalgate',
+       '{"slug":"evalgate","area":"Agents & MCP","title":"evalgate"}'::jsonb,
+       'hidden'
+     )`,
+  );
+  await db.query(
+    `INSERT INTO project_drafts (id, proposed_fields, lifecycle_state)
+     VALUES (
+       'draft-dog-log',
+       '{"slug":"dog-log","area":"iOS","title":"dog log"}'::jsonb,
+       'hidden'
+     )`,
+  );
+
+  assert.deepEqual(await applyMigrations(db), ['0003_recruiter_project_areas.sql']);
+
+  const project = await db.query<{ area: string }>(`SELECT area FROM projects WHERE id = 'evalgate'`);
+  assert.equal(project.rows[0]?.area, 'AI & Developer Tools');
+
+  const drafts = await db.query<{ id: string; proposed_fields: { area: string } }>(
+    `SELECT id, proposed_fields FROM project_drafts WHERE id IN ('draft-evalgate', 'draft-dog-log') ORDER BY id`,
+  );
+  assert.equal(drafts.rows[0]?.proposed_fields.area, 'Apps');
+  assert.equal(drafts.rows[1]?.proposed_fields.area, 'AI & Developer Tools');
+
+  assert.deepEqual(await applyMigrations(db), []);
+});
+
 test('planned lifecycle states are constrained in SQL and exported types', async () => {
   const db = createTestDb();
   await applyMigrations(db);
@@ -170,7 +227,7 @@ test('planned lifecycle states are constrained in SQL and exported types', async
 
   await db.query(`
     INSERT INTO projects (id, slug, title, tagline, area, year, lifecycle_state)
-    VALUES ('state-test-project', 'state-test-project', 'State test', 'State test', 'Agents & MCP', 2026, 'draft_only')
+    VALUES ('state-test-project', 'state-test-project', 'State test', 'State test', 'AI & Developer Tools', 2026, 'draft_only')
   `);
   await db.query(`
     INSERT INTO scan_runs (id, trigger, actor, lifecycle_state)
@@ -180,7 +237,7 @@ test('planned lifecycle states are constrained in SQL and exported types', async
   await assert.rejects(
     db.query(`
       INSERT INTO projects (id, slug, title, tagline, area, year, lifecycle_state)
-      VALUES ('bad-project', 'bad-project', 'Bad', 'Bad', 'Agents & MCP', 2026, 'public')
+      VALUES ('bad-project', 'bad-project', 'Bad', 'Bad', 'AI & Developer Tools', 2026, 'public')
     `),
   );
 
@@ -240,7 +297,11 @@ test('seed and reset path works without external credentials', async () => {
   );
   assert.equal(afterReset.rows[0]?.count, '0');
 
-  assert.deepEqual(await applyMigrations(db), ['0001_dm_project_foundation.sql', '0002_review_events_seq.sql']);
+  assert.deepEqual(await applyMigrations(db), [
+    '0001_dm_project_foundation.sql',
+    '0002_review_events_seq.sql',
+    '0003_recruiter_project_areas.sql',
+  ]);
   assert.deepEqual(await applySeeds(db), ['001_foundation_smoke.sql']);
 
   const reseeded = await db.query<{ id: string }>(
@@ -457,7 +518,7 @@ test('public DB read helpers render admin-published rows without legacy snapshot
        details, metrics, links, media, source, published_at, archived_at
      ) VALUES (
        'manual-db-project', 'manual-db-slug', 'Manual DB Project', 'DB-only public tagline',
-       'Agents & MCP', 2026, 'published', 'Published from admin',
+       'AI & Developer Tools', 2026, 'published', 'Published from admin',
        'Public summary from admin review.',
        $1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb, 'manual', '2026-07-04T00:00:00.000Z', null
      )`,
@@ -498,7 +559,7 @@ test('DB read layer parses valid video media and drops invalid video entries', a
        details, metrics, links, media, source, published_at, archived_at
      ) VALUES (
        'video-media-project', 'video-media-project', 'Video Media Project', 'Demo video media',
-       'Agents & MCP', 2026, 'published', 'Published from admin',
+       'AI & Developer Tools', 2026, 'published', 'Published from admin',
        'Public summary for video media.',
        $1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb, 'manual', '2026-07-04T00:00:00.000Z', null
      )`,

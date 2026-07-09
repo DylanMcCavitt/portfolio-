@@ -82,6 +82,43 @@ test('DM data tools expose DB-gated public records and static resume/contact onl
   assert.equal(contact.resume, '/resume.pdf');
 }));
 
+test('DM data tools filterProjects by recruiter-friendly area names', async () => withPublicProjectDbGate(async () => {
+  const db = await publishedProjectDb();
+  const tools = createPublicDMDataTools(db);
+
+  const aiTools = await tools.filterProjects({ area: 'AI & Developer Tools' });
+  assert.ok(aiTools.projects.some((project) => project.id === 'evalgate'));
+  assert.ok(aiTools.projects.some((project) => project.id === 'tradingview-mcp'));
+
+  const apps = await tools.filterProjects({ area: 'Apps' });
+  assert.deepEqual(
+    apps.projects.map((project) => project.id).sort(),
+    ['chore-ladder', 'dog-log'],
+  );
+
+  const sideProjects = await tools.filterProjects({ area: 'Side Projects & Experiments' });
+  assert.ok(sideProjects.projects.some((project) => project.id === 'agentic-trader'));
+  assert.ok(sideProjects.projects.some((project) => project.id === 'exit-manager'));
+
+  const shipped = await tools.filterProjects({ area: 'Shipped & Client Work' });
+  assert.deepEqual(
+    shipped.projects.map((project) => project.id).sort(),
+    ['bellas-beads', 'nhf'],
+  );
+
+  const coursework = await tools.filterProjects({ area: 'Coursework' });
+  assert.deepEqual(
+    coursework.projects.map((project) => project.id).sort(),
+    ['epl-ml', 'work-orders'],
+  );
+
+  const lower = await tools.filterProjects({ area: 'ai & developer tools' });
+  assert.deepEqual(
+    lower.projects.map((project) => project.id).sort(),
+    aiTools.projects.map((project) => project.id).sort(),
+  );
+}));
+
 test('DM data tools use catalog fallback when the public project DB gate is disabled', async () => withoutPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
   const tools = createPublicDMDataTools(db);
@@ -554,7 +591,7 @@ test('streamed project artifacts satisfy active public-source ids absent from th
   const artifact: ProjectArtifact = {
     id: 'db-only-project',
     title: 'DB-only Project',
-    area: 'Agents & MCP',
+    area: 'AI & Developer Tools',
     status: ['done', 'Published'],
     year: 2026,
     activity: 'Published from DB',
