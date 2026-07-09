@@ -72,13 +72,20 @@ export interface PublicDMDataTools {
   assertProjectIds(ids: string[]): Promise<void>;
   assertResumeTrackIds(ids: string[]): void;
   publishedProjectIds(): Promise<Set<string>>;
+  allPublishedProjects(): Promise<ProjectSummary[]>;
 }
 
-export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataTools {
+export type PublishedProjectLoader = () => Promise<ProjectDetailReadModel[]>;
+
+export function createPublicDMDataTools(
+  db: ProjectReadQueryable,
+  options: { loadProjects?: PublishedProjectLoader } = {},
+): PublicDMDataTools {
   let projectsPromise: Promise<ProjectDetailReadModel[]> | null = null;
 
   async function projects(): Promise<ProjectDetailReadModel[]> {
-    projectsPromise ??= loadPublicProjectDetails({ db }).then(({ projects }) => projects).catch((error: unknown) => {
+    const loadProjects = options.loadProjects ?? (() => loadPublicProjectDetails({ db }).then(({ projects }) => projects));
+    projectsPromise ??= loadProjects().catch((error: unknown) => {
       projectsPromise = null;
       throw new DMToolError('public_data_unavailable', 'Failed to read active public project records.', {
         cause: error instanceof Error ? error.name : typeof error,
@@ -205,6 +212,9 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     assertProjectIds,
     assertResumeTrackIds,
     publishedProjectIds: projectIds,
+    async allPublishedProjects() {
+      return (await projects()).map(summarizeProject);
+    },
   };
 }
 
@@ -236,6 +246,7 @@ function getContact(): ContactBlock {
 function summarizeProject(project: ProjectDetailReadModel): ProjectSummary {
   return {
     id: project.id,
+    slug: project.slug,
     title: project.title,
     area: project.area,
     status: project.status,
@@ -288,11 +299,21 @@ function projectHaystack(project: ProjectDetailReadModel): string {
     project.summary,
     ...project.about,
     ...project.notes,
-    ...project.stack.flat(),
-    ...project.metrics.flat(),
+    ...flattenLabeledValues(project.stack),
+    ...flattenLabeledValues(project.metrics),
   ]
     .join(' ')
     .toLowerCase();
+}
+
+function flattenLabeledValues(values: unknown[]): string[] {
+  return values.flatMap((value) => {
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+    if (value && typeof value === 'object') {
+      return Object.values(value).filter((item): item is string => typeof item === 'string');
+    }
+    return [];
+  });
 }
 
 function scoreProject(project: ProjectDetailReadModel, tokenSets: string[][]): number {

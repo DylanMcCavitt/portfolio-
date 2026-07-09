@@ -20,6 +20,48 @@ export interface PublicRagCitation {
   text: string;
 }
 
+export type ProjectFactPacketStatus = 'complete' | 'partial' | 'fallback' | 'empty';
+
+export interface ProjectFactMetric {
+  id: string;
+  projectId: string;
+  value: string;
+  label: string;
+}
+
+export interface ProjectFactLink {
+  id: string;
+  projectId: string;
+  label: string;
+  href: string;
+}
+
+export interface ProjectFact {
+  id: string;
+  slug: string;
+  title: string;
+  href: string;
+  area: string;
+  status: Project['status'];
+  year: number;
+  activity: string;
+  tagline: string;
+  about: string[];
+  notes: string[];
+  metrics: ProjectFactMetric[];
+  links: ProjectFactLink[];
+}
+
+/** The complete public evidence boundary for project prose in one DM turn. */
+export interface ProjectFactPacket {
+  operation: 'none' | 'searchProjects' | 'filterProjects' | 'rankProjects';
+  status: ProjectFactPacketStatus;
+  query: string;
+  fallbackUsed: boolean;
+  projects: ProjectFact[];
+  citations: PublicRagCitation[];
+}
+
 export interface DMConversationMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -56,6 +98,7 @@ export interface ToolTraceMetadata {
 
 export interface ProjectSummary {
   id: string;
+  slug?: string;
   title: string;
   area: Project['area'];
   status: Project['status'];
@@ -97,5 +140,5 @@ export type DMStreamEvent =
   | { type: 'tool'; name: string; summary?: string }
   | { type: 'text-delta'; delta: string }
   | { type: 'block'; index?: number; block: AnswerBlock }
-  | { type: 'done'; answer: AnswerBlock[]; trace: ToolTraceMetadata }
+  | { type: 'done'; answer: AnswerBlock[]; trace: ToolTraceMetadata; facts?: ProjectFactPacket }
   | { type: 'error'; message: string };

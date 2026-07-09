@@ -12,6 +12,7 @@ import {
   runCliJudge,
   type DMCliJudge,
 } from '@/lib/dm/judge';
+import type { ProjectFactPacket } from '@/lib/dm/contract';
 
 const KEYS = { hasGatewayKey: true, hasOpenaiKey: true };
 const NO_OVERRIDES = {};
@@ -66,14 +67,41 @@ test('describeJudgeConfig names the routing so reports stay readable', () => {
 });
 
 test('CLI judge prompt carries the rubric and the payload', () => {
+  const factPacket = {
+    operation: 'searchProjects',
+    status: 'complete',
+    query: 'What is Loom?',
+    fallbackUsed: false,
+    projects: [
+      {
+        id: 'loom',
+        slug: 'loom',
+        title: 'Loom',
+        href: '/projects/loom',
+        area: 'Agents & MCP',
+        status: ['done', 'Published'],
+        year: 2026,
+        activity: 'Published from the database',
+        tagline: 'A durable agent workflow runtime.',
+        about: ['Coordinates tracked delivery work.'],
+        notes: [],
+        metrics: [{ id: 'loom:metric:0', projectId: 'loom', value: '8', label: 'workflow stages' }],
+        links: [{ id: 'loom:link:0', projectId: 'loom', label: 'Case study', href: '/projects/loom' }],
+      },
+    ],
+    citations: [],
+  } satisfies ProjectFactPacket;
   const prompt = buildCliJudgePrompt({
-    visitorQuestion: 'What live projects are available?',
-    answerText: 'agentic-trader is live.',
-    answerBlocks: ['projects:agentic-trader'],
+    visitorQuestion: 'What is Loom?',
+    answerText: 'Loom coordinates tracked delivery work.',
+    answerBlocks: ['projects:loom'],
+    factPacket,
     deterministicCheck: 'passed',
   });
   assert.ok(prompt.startsWith(DM_JUDGE_RUBRIC));
-  assert.match(prompt, /"visitorQuestion": "What live projects are available\?"/);
+  assert.match(prompt, /"visitorQuestion": "What is Loom\?"/);
+  assert.match(prompt, /"id": "loom"/);
+  assert.match(prompt, /"value": "8"/);
 });
 
 test('score extraction takes the last valid JSON object out of noisy CLI output', () => {
@@ -85,12 +113,11 @@ test('score extraction takes the last valid JSON object out of noisy CLI output'
   ].join('\n');
   assert.deepEqual(extractJudgeScore(noisy), { grounded: 5, honest: 4, useful: 5, notes: 'Concrete and correct.' });
 
-  assert.deepEqual(extractJudgeScore('{"grounded": 9, "honest": -2, "useful": 3.4}'), {
-    grounded: 5,
-    honest: 0,
-    useful: 3,
-    notes: '',
-  });
+  const outOfRange = extractJudgeScore('{"grounded": 9, "honest": -2, "useful": 3}');
+  assert.ok('error' in outOfRange);
+
+  const fractional = extractJudgeScore('{"grounded": 3.6, "honest": 5, "useful": 4}');
+  assert.ok('error' in fractional);
 
   const missing = extractJudgeScore('no scores here');
   assert.ok('error' in missing);

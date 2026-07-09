@@ -3,9 +3,10 @@ import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { generateText } from 'ai';
 import type { AnswerBlock, DMStreamEvent } from '@/lib/dm/contract';
-import { createEvalProjectDb, createStubModelForEvalCase, DM_EVAL_CASES, readNdjsonEvents, type DMEvalCase } from '@/lib/dm/eval-fixtures';
+import { createEvalProjectSource, createStubModelForEvalCase, DM_EVAL_CASES, readNdjsonEvents, type DMEvalCase } from '@/lib/dm/eval-fixtures';
 import { formatMissingLiveModelKeysError, parseDMEvalModelSpecs, readModelKeyAvailability, type DMModelSpec } from '@/lib/dm/model-specs';
 import {
+  applyEvalReleaseGate,
   diffEvalReports,
   renderEvalReportHtml,
   triageRun,
@@ -65,7 +66,7 @@ async function main(): Promise<void> {
     throw new Error('--judge only applies to --live runs; offline answers come from stubs.');
   }
 
-  const db = await createEvalProjectDb();
+  const source = await createEvalProjectSource();
   const records: EvalRunRecord[] = [];
   const targets: Array<DMModelSpec | undefined> = modelSpecs ?? [undefined];
 
@@ -83,11 +84,12 @@ async function main(): Promise<void> {
         createDMChatStream(
           { message: testCase.prompt },
           spec ? { provider: spec.provider, model: spec.model } : OFFLINE_CONFIG,
-          { db, ...(spec ? {} : { model: createStubModelForEvalCase(testCase) }) },
+          { db: source.db, projectLoader: source.projectLoader, ...(spec ? {} : { model: createStubModelForEvalCase(testCase) }) },
         ),
       );
       const elapsedMs = Math.round(performance.now() - started);
       const failure = testCase.expect(events);
+      const doneEvent = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
       const record: EvalRunRecord = {
         model: modelLabel,
         caseName: testCase.name,
@@ -96,14 +98,16 @@ async function main(): Promise<void> {
         elapsedMs,
         answerText: collectAnswerText(events),
         blockKinds: collectBlockKinds(events),
+        factPacket: doneEvent?.facts,
       };
 
       if (judgeConfig && spec) {
         record.judge = await judgeAnswer(judgeConfig, spec.model, testCase, record);
       }
 
-      records.push(record);
-      console.log(formatRunLine(record));
+      const gated = applyEvalReleaseGate(record);
+      records.push(gated);
+      console.log(formatRunLine(gated));
     }
   }
 
@@ -291,6 +295,7 @@ async function judgeAnswer(
     visitorQuestion: testCase.prompt,
     answerText: record.answerText.slice(0, 6000),
     answerBlocks: record.blockKinds,
+    factPacket: record.factPacket ?? null,
     deterministicCheck: record.failure ?? 'passed',
   };
 

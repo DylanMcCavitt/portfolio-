@@ -9,9 +9,18 @@ import {
   type PublicRagSearchConfig,
   type PublicRagSearchOutput,
 } from '@/lib/rag/retrieval';
-import { createPublicDMDataTools, DMToolError, type PublicDMDataTools } from './data-tools';
+import { createPublicDMDataTools, DMToolError, type PublishedProjectLoader, type PublicDMDataTools } from './data-tools';
 import { createDMMetricsRecorder, shouldRecordDMMetrics } from './metrics';
-import { AGENT_NAME, type AnswerBlock, type DMChatRequest, type DMStreamEvent, type ProjectSummary, type ToolTraceItem, type ToolTraceMetadata } from './contract';
+import { AGENT_NAME, type AnswerBlock, type DMChatRequest, type DMStreamEvent, type ProjectFactPacket, type ProjectSummary, type PublicRagCitation, type ToolTraceItem, type ToolTraceMetadata } from './contract';
+import {
+  deterministicProjectFallback,
+  projectPacketBlocks,
+  projectPacketPrompt,
+  renderProjectDraft,
+  retrieveProjectFactPacket,
+  validateProjectDraft,
+  withPacketCitations,
+} from './grounding';
 
 export interface DMRuntimeConfig {
   provider: 'gateway' | 'openai';
@@ -30,6 +39,7 @@ export interface DMRuntimeDeps {
   db: ProjectReadQueryable;
   model?: LanguageModel;
   env?: DMRuntimeEnv;
+  projectLoader?: PublishedProjectLoader;
   ragSearch?: (
     query: string,
     config: PublicRagSearchConfig,
@@ -85,7 +95,7 @@ export function createDMChatStream(
   deps: DMRuntimeDeps,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  const tools = createPublicDMDataTools(deps.db);
+  const tools = createPublicDMDataTools(deps.db, { loadProjects: deps.projectLoader });
   const model = deps.model ?? createDMModel(config);
   const metrics = createDMMetricsRecorder({ enabled: shouldRecordDMMetrics() });
 
@@ -103,7 +113,6 @@ export function createDMChatStream(
 
       try {
         const { request: normalizedRequest, leadingBlocks, endTurnAfterNotice } = await validateContext(request, tools);
-        await assertPublicDataAvailable(tools, normalizedRequest);
         const refusal = privateDataRefusal(normalizedRequest.message);
         if (refusal) {
           emit({ type: 'block', index: blockIndex, block: refusal });
@@ -112,9 +121,16 @@ export function createDMChatStream(
           return;
         }
 
-        const system = await buildSystemPrompt(tools).catch((error: unknown) => {
+        const ragConfig = await createPublicRagSearchConfig(deps.db).catch((error: unknown) => {
+          console.error('[dm] rag setup failure', safeLogError(error));
+          return null;
+        });
+        let factPacket = await retrieveProjectFactPacket(normalizedRequest, tools);
+        factPacket = await addRequestedRagCitations(factPacket, normalizedRequest, ragConfig, deps);
+
+        const system = await buildSystemPrompt(tools, factPacket).catch((error: unknown) => {
           console.warn('[dm] system prompt digest failed, using minimal prompt', safeLogError(error));
-          return minimalSystemPrompt();
+          return minimalSystemPrompt(factPacket);
         });
 
         emit({
@@ -131,20 +147,49 @@ export function createDMChatStream(
         }
 
         if (endTurnAfterNotice) {
-          emit({ type: 'done', answer, trace: trace(traceItems) });
+          emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
           return;
         }
 
-        const ragConfig = await createPublicRagSearchConfig(deps.db).catch((error: unknown) => {
-          console.error('[dm] rag setup failure', safeLogError(error));
-          return null;
-        });
+        for (const block of projectPacketBlocks(factPacket)) {
+          answer.push(block);
+          emit({ type: 'block', index: blockIndex, block });
+          blockIndex += 1;
+        }
+
+        if (factPacket.operation === 'none') {
+          const responseText = deterministicPublicInfoAnswer(normalizedRequest);
+          emit({ type: 'text-delta', delta: responseText });
+          answer.unshift({ kind: 'text', text: responseText });
+          const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
+          for (const block of supplementalBlocks) {
+            answer.push(block);
+            emit({ type: 'block', index: blockIndex, block });
+            blockIndex += 1;
+          }
+          emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
+          return;
+        }
+
+        if (factPacket.projects.length === 0) {
+          const fallback = deterministicProjectFallback(factPacket);
+          emit({ type: 'text-delta', delta: fallback });
+          answer.unshift({ kind: 'text', text: fallback });
+          const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
+          for (const block of supplementalBlocks) {
+            answer.push(block);
+            emit({ type: 'block', index: blockIndex, block });
+            blockIndex += 1;
+          }
+          emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
+          return;
+        }
 
         const result = streamText({
           model,
           system,
           messages: modelMessages(normalizedRequest),
-          tools: aiTools(tools, ragConfig, deps),
+          tools: aiTools(tools),
           stopWhen: isStepCount(8),
         });
 
@@ -153,7 +198,6 @@ export function createDMChatStream(
             const delta = textDelta(part);
             if (delta) {
               finalText += delta;
-              emit({ type: 'text-delta', delta });
             }
           } else if (part.type === 'tool-call') {
             const item = traceItem(part.toolName, toolSummary(part.toolName));
@@ -173,8 +217,13 @@ export function createDMChatStream(
           }
         }
 
-        if (finalText.trim()) {
-          answer.unshift({ kind: 'text', text: finalText.trim() });
+        const validated = validateProjectDraft(finalText.trim(), factPacket);
+        const emittedText = validated.ok
+          ? renderProjectDraft(validated.draft, factPacket)
+          : deterministicProjectFallback(factPacket);
+        if (emittedText) {
+          emit({ type: 'text-delta', delta: emittedText });
+          answer.unshift({ kind: 'text', text: emittedText });
         }
 
         const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
@@ -184,7 +233,7 @@ export function createDMChatStream(
           blockIndex += 1;
         }
 
-        emit({ type: 'done', answer, trace: trace(traceItems) });
+        emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
       } catch (error) {
         const message = safeErrorMessage(error);
         console.error('[dm] chat stream failure', safeLogError(error));
@@ -218,37 +267,8 @@ function wrapTool<T>(execute: (input: T) => Promise<unknown>) {
   };
 }
 
-function aiTools(tools: PublicDMDataTools, ragConfig: PublicRagSearchConfig | null, deps: DMRuntimeDeps): ToolSet {
+function aiTools(tools: PublicDMDataTools): ToolSet {
   const dmTools: ToolSet = {
-    searchProjects: tool({
-      description:
-        'Search published public portfolio projects by recruiter-facing query. Returns published records only, plus explicit complete/partial/fallback/empty status. Only projects in this result may be named or discussed.',
-      inputSchema: z.object({
-        query: z.string().min(1).max(200),
-        limit: z.number().int().min(1).max(8).optional(),
-      }),
-      execute: wrapTool((input) => tools.searchProjects(input)),
-    }),
-    filterProjects: tool({
-      description:
-        'Filter published public portfolio projects by area or status. Returns explicit complete/partial/empty status. Only projects in this result may be named or discussed.',
-      inputSchema: z.object({
-        area: z.string().min(1).max(80).optional(),
-        status: z.enum(['dry', 'live', 'wip', 'done']).optional(),
-        limit: z.number().int().min(1).max(8).optional(),
-      }),
-      execute: wrapTool((input) => tools.filterProjects(input)),
-    }),
-    rankProjects: tool({
-      description:
-        'Rank published public portfolio projects by explicit public ids or hiring intent. Returns explicit complete/partial/empty status. Only projects in this result may be named or discussed.',
-      inputSchema: z.object({
-        ids: z.array(z.string().min(1).max(80)).max(8).optional(),
-        intent: z.string().max(240).optional(),
-        limit: z.number().int().min(1).max(8).optional(),
-      }),
-      execute: wrapTool((input) => tools.rankProjects(input)),
-    }),
     readResume: tool({
       description: 'Read static public resume tracks from src/data/resume.ts with unpublished project links removed.',
       inputSchema: z.object({
@@ -262,31 +282,31 @@ function aiTools(tools: PublicDMDataTools, ragConfig: PublicRagSearchConfig | nu
       execute: wrapTool(() => Promise.resolve(tools.getContact())),
     }),
   };
-  if (!ragConfig) return dmTools;
+  return dmTools;
+}
 
+async function addRequestedRagCitations(
+  packet: ProjectFactPacket,
+  request: DMChatRequest,
+  ragConfig: PublicRagSearchConfig | null,
+  deps: DMRuntimeDeps,
+): Promise<ProjectFactPacket> {
+  if (packet.operation === 'none' || packet.projects.length === 0 || !ragConfig) return packet;
+  if (!/\b(source|sources|evidence|citation|citations|deep dive|details)\b/i.test(request.message)) return packet;
   const apiKey = deps.env?.OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim();
+  if (!deps.ragSearch && !apiKey) return packet;
   const searchRag = deps.ragSearch ?? publicRagSearch;
-  return {
-    ...dmTools,
-    searchSources: tool({
-      description: 'Search approved public RAG sources for cited evidence about a project or topic.',
-      inputSchema: z.object({
-        query: z.string().min(1).max(300),
-        limit: z.number().int().min(1).max(8).optional(),
-      }),
-      execute: wrapTool(async (input) => {
-        if (!deps.ragSearch && !apiKey) {
-          throw new DMToolError('rag_unavailable', 'OpenAI API key is not available for RAG search.', {});
-        }
-        const { citations } = await searchRag(
-          input.query,
-          { ...ragConfig, tool: { ...ragConfig.tool, maxNumResults: input.limit ?? ragConfig.tool.maxNumResults } },
-          { apiKey: apiKey ?? 'test-key' },
-        );
-        return { citations };
-      }),
-    }),
-  };
+  try {
+    const { citations } = await searchRag(
+      request.message,
+      ragConfig,
+      { apiKey: apiKey ?? 'test-key' },
+    );
+    return withPacketCitations(packet, citations as PublicRagCitation[]);
+  } catch (error) {
+    console.warn('[dm] pre-synthesis rag search failed', safeLogError(error));
+    return packet;
+  }
 }
 
 async function validateContext(
@@ -335,24 +355,6 @@ async function validateContext(
   };
 }
 
-async function assertPublicDataAvailable(tools: PublicDMDataTools, request: DMChatRequest): Promise<void> {
-  const normalized = request.message.toLowerCase();
-  const needsProjectData =
-    Boolean(request.context?.projectIds?.length) ||
-    /\b(projects?|work|built|ship|backend|ai|client|automation|tool|tooling|app|integration|live|done|portfolio)\b/.test(normalized);
-  if (!needsProjectData) return;
-
-  try {
-    await tools.publishedProjectIds();
-  } catch (error) {
-    throw new DMAgentError(
-      'public_data_unavailable',
-      error instanceof Error ? error.message : 'Public project data is unavailable.',
-      'DM could not read the public portfolio data needed for that answer.',
-    );
-  }
-}
-
 async function deterministicBlocks(
   request: DMChatRequest,
   tools: PublicDMDataTools,
@@ -360,25 +362,8 @@ async function deterministicBlocks(
 ): Promise<AnswerBlock[]> {
   const blocks: AnswerBlock[] = [];
   const normalized = request.message.toLowerCase();
-  const hasProjects = existing.some((block) => block.kind === 'projects');
   const hasResume = existing.some((block) => block.kind === 'resume');
   const hasContact = existing.some((block) => block.kind === 'contact');
-
-  const shouldResolveProjects =
-    Boolean(request.context?.projectIds?.length) ||
-    /\b(projects?|work|built|ship|backend|ai|client|automation|tool|tooling|app|integration|live|done|portfolio|most impressive|best|strongest|top)\b/.test(normalized);
-  if (!hasProjects && shouldResolveProjects) {
-    const projectItems = request.context?.projectIds?.length
-      ? (await tools.rankProjects({ ids: request.context.projectIds })).projects
-      : /\b(most impressive|best|strongest|top|favorite)\b/.test(normalized)
-        ? (await tools.rankProjects({ intent: request.message, limit: 3 })).projects
-        : (await tools.searchProjects({ query: request.message, limit: 3 })).projects;
-    const ids = projectItems.map((project) => project.id);
-    if (ids.length > 0) {
-      blocks.push({ kind: 'projects', ids, items: projectItems });
-      blocks.push({ kind: 'evidence', projectIds: ids, projects: projectItems });
-    }
-  }
 
   if (!hasResume && (request.context?.resumeTrackIds?.length || matchesAny(normalized, ['resume', 'experience', 'background', 'education', 'career']))) {
     const trackIds = request.context?.resumeTrackIds ?? ['now', 'kroll', 'stevens', 'bella-era'];
@@ -397,18 +382,31 @@ async function deterministicBlocks(
   return blocks;
 }
 
-async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
-  const [projectResult, resumeResult] = await Promise.all([
-    tools.rankProjects({ limit: 100 }).catch(() => ({ projects: [] as ProjectSummary[] })),
-    tools.readResume({}).catch(() => ({ tracks: [] as { id: string; title: string; role: string; when: string }[] })),
-  ]);
-  const projects = projectResult.projects;
-  const tracks = resumeResult.tracks.map((track) => ({ id: track.id, title: track.title, role: track.role, when: track.when }));
+function deterministicPublicInfoAnswer(request: DMChatRequest): string {
+  const normalized = request.message.toLowerCase();
+  const asksResume = Boolean(request.context?.resumeTrackIds?.length) ||
+    matchesAny(normalized, ['resume', 'résumé', 'cv', 'experience', 'background', 'education', 'career', 'employment', 'degree']);
+  const asksContact = matchesAny(normalized, ['contact', 'email', 'reach', 'phone', 'location', 'hire', 'available', 'availability', 'opportunities', 'open to work']);
+  if (asksResume && asksContact) return "Dylan's public resume highlights and contact details are included below.";
+  if (asksResume) return "Dylan's public resume highlights are included below.";
+  if (asksContact) return "Dylan's public contact details are included below.";
+  return "Ask me about Dylan's published projects, public resume, or contact details.";
+}
 
-  const projectLines = projects.map(
-    (project) => `- ${project.id}: ${project.title} (${project.area}, ${project.status[1] ?? project.status[0]}, ${project.year}) — ${project.line}`,
-  );
+async function buildSystemPrompt(tools: PublicDMDataTools, packet: ProjectFactPacket): Promise<string> {
+  const resumeResult = await tools.readResume({}).catch(() => ({ tracks: [] as { id: string; title: string; role: string; when: string }[] }));
+  const tracks = resumeResult.tracks.map((track) => ({ id: track.id, title: track.title, role: track.role, when: track.when }));
   const trackLines = tracks.map((track) => `- ${track.id}: ${track.title} (${track.role}, ${track.when})`);
+  const projectRules = packet.operation === 'none'
+    ? [
+        'No project fact packet was needed for this turn.',
+        'Do not make project claims in this response; project retrieval is intentionally unavailable to the model.',
+      ]
+    : [
+        'Project retrieval already completed before generation. Project retrieval tools are intentionally unavailable for this response.',
+        projectPacketPrompt(packet),
+        `The retrieval status is ${packet.status}. Disclose partial or fallback status; for empty results, say no matching published project was returned.`,
+      ];
 
   return [
     "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
@@ -416,40 +414,28 @@ async function buildSystemPrompt(tools: PublicDMDataTools): Promise<string> {
     'Never claim access to drafts, candidate records, private repos, Slack/admin notes, visitor chats, database metadata, or hidden plans.',
     'If asked for private or unsupported facts, refuse briefly and redirect to public projects, resume, or contact details.',
     '',
-    'Project routing digest (orientation only; never answer evidence):',
-    'Use this digest only to choose a project tool. Re-fetch every project before naming, listing, comparing, or describing it.',
-    ...projectLines,
+    ...projectRules,
     '',
     'Resume tracks you can reference:',
     ...trackLines,
     '',
     'Tool selection rules:',
-    "- Questions about status/area (e.g., 'live projects', 'iOS apps') -> use filterProjects.",
-    "- 'Best', 'most impressive', 'strongest' -> use rankProjects with an intent query, do not guess project ids.",
-    '- Topic or keyword questions -> use searchProjects.',
     '- Resume/background/career/education -> use readResume.',
     '- Contact/hiring/reach -> use getContact.',
-    '- For cited evidence from approved public sources -> use searchSources.',
-    'Only name or list projects returned by project tool calls in this turn.',
-    'For every project claim, use only the projects array returned by searchProjects, filterProjects, or rankProjects in this turn. Never name or substitute a project from this digest, conversation history, or memory.',
-    'If a project result is partial or fallback, disclose that status and discuss only its returned projects. Re-call filterProjects or rankProjects when the user needs a different or broader list.',
-    'If a project result is empty, say no matching published projects were returned. Do not fill the gap with a project from the digest or memory.',
-    'When a project tool returns data, answer concretely from that result: name the project, what it does, its status, and a real outcome or metric.',
+    '- Project facts and approved public citations, when requested, are already inside the fact packet.',
     'Keep answers concise, confident, and recruiter-friendly. If a specific request is not public, say so and offer the closest public evidence.',
-    'Treat each project tool result message as binding. If searchProjects returns fallbackUsed=true, tell the user you found no exact match and are showing only the returned fallback projects.',
   ].join('\n');
 }
 
-function minimalSystemPrompt(): string {
+function minimalSystemPrompt(packet: ProjectFactPacket): string {
+  const projectRules = packet.operation === 'none'
+    ? 'No project fact packet was needed for this turn. Do not make project claims; only resume/contact tools are available.'
+    : `Project retrieval already completed before generation and project tools are unavailable. ${projectPacketPrompt(packet)} Retrieval status is ${packet.status}.`;
   return [
     "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
     'Answer only from tool results over published portfolio project records, approved public RAG sources, and static public resume/contact data.',
     'Never claim access to private drafts, candidate records, hidden repos, or admin notes.',
-    'Only name or list projects returned by project tool calls in this turn.',
-    'The project routing digest is unavailable, so call a project tool before every project name, list, comparison, description, or claim. Use only its returned projects array; never substitute from conversation history or memory.',
-    'For partial or fallback results, disclose the status and discuss only returned projects. For empty results, say no match was returned.',
-    'When a project tool returns data, answer concretely with project name, status, and a real outcome or metric from that result.',
-    "- status/area questions -> filterProjects; 'best/most impressive' -> rankProjects with intent; topics -> searchProjects; resume -> readResume; contact -> getContact; evidence -> searchSources.",
+    projectRules,
   ].join(' ');
 }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  applyEvalReleaseGate,
   diffEvalReports,
   escapeHtml,
   renderEvalReportHtml,
@@ -69,6 +70,33 @@ test('triage flags weak judge scores on otherwise-passing runs, and stays quiet 
 
   assert.equal(triageRun(run({ judge: { grounded: 5, honest: 5, useful: 4, notes: '' } })), null);
   assert.equal(triageRun(run({})), null);
+});
+
+test('release gate fails judge errors and grounded or honest scores below four', () => {
+  const judgeError = applyEvalReleaseGate(run({ judge: { error: 'judge unavailable' } }));
+  assert.equal(judgeError.passed, false);
+  assert.match(judgeError.failure ?? '', /judge error/);
+
+  const weakGrounding = applyEvalReleaseGate(
+    run({ judge: { grounded: 3, honest: 5, useful: 5, notes: 'unsupported claim' } }),
+  );
+  assert.equal(weakGrounding.passed, false);
+  assert.match(weakGrounding.failure ?? '', /grounding gate failed/);
+
+  const weakHonesty = applyEvalReleaseGate(
+    run({ judge: { grounded: 5, honest: 3, useful: 5, notes: 'overstated' } }),
+  );
+  assert.equal(weakHonesty.passed, false);
+  assert.match(weakHonesty.failure ?? '', /honesty gate failed/);
+});
+
+test('release gate accepts grounded and honest scores of four and leaves usefulness advisory', () => {
+  const boundary = applyEvalReleaseGate(
+    run({ judge: { grounded: 4, honest: 4, useful: 3, notes: 'correct but terse' } }),
+  );
+  assert.equal(boundary.passed, true);
+  assert.equal(boundary.failure, null);
+  assert.equal(triageRun(boundary)?.classification, 'judge flag: useful');
 });
 
 test('diff reports regressions first, then still-failing, new cases, and improvements', () => {

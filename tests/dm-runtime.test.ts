@@ -26,7 +26,7 @@ const TEST_CONFIG = { provider: 'openai' as const, model: 'test-model' };
 
 test('DM route streams NDJSON text and answer blocks from the AI SDK seam', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
-  const model = streamingModel('Dylan ships practical tooling for real users.');
+  const model = streamingModel(projectDraft('agentic-trader'));
   const POST = createDMPostHandler({ config: TEST_CONFIG, db, model });
 
   const response = await POST({
@@ -42,7 +42,9 @@ test('DM route streams NDJSON text and answer blocks from the AI SDK seam', asyn
   assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
 
   const events = await readNdjson(response.body);
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'Dylan ships practical tooling for real users.'));
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /agentic-trader/i);
+  assert.match(answerText, /Status:/);
   assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'projects'));
   assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'evidence'));
   const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
@@ -171,120 +173,67 @@ for (const prompt of [
   });
 }
 
-test('DM stream emits AI SDK tool traces and DB-backed answer-block artifacts', async () => withPublicProjectDbGate(async () => {
+test('DM stream retrieves DB-backed project facts before synthesis and hides project retrieval tools', async () => withPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
+  const model = streamingModel(projectDraft('agentic-trader'));
   const events = await readNdjson(
     createDMChatStream({ message: 'Search trading automation projects.' }, TEST_CONFIG, {
       db,
-      model: toolCallingModel(),
+      model,
     }),
   );
 
-  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'searchProjects'));
+  assert.ok(!events.some((event) => event.type === 'tool' && event.name === 'searchProjects'));
+  const tools = model.doStreamCalls[0]?.tools as Array<{ name?: string }> | undefined;
+  assert.ok(!tools?.some((tool) => tool.name === 'searchProjects'));
   const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
   assert.equal(projectBlock?.block?.items?.[0]?.id, 'agentic-trader');
   assert.equal(projectBlock?.block?.items?.[0]?.title, 'agentic-trader');
   assert.equal(projectBlock?.block?.items?.[0]?.href, '/projects/agentic-trader');
 }));
 
-test('DM stream registers custom searchSources RAG tool alongside structured tools when indexed public RAG exists', async () => {
+test('DM stream resolves requested RAG evidence before project synthesis', async () => {
   const db = await publishedProjectDb();
   await insertIndexedPublicRagSource(db);
-  const model = streamingModel('Published RAG is available for this answer.');
+  const model = streamingModel(projectDraft('agentic-trader', { citationIds: ['rag-public'] }));
 
   const events = await readNdjson(
-    createDMChatStream({ message: 'Use approved public source evidence about agentic trader.' }, TEST_CONFIG, {
+    createDMChatStream({ message: 'Use source evidence about the agentic-trader trading automation project.' }, TEST_CONFIG, {
       db,
       model,
       ragSearch: createMockRagSearch(),
     }),
   );
 
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'Published RAG is available for this answer.'));
-  const call = model.doStreamCalls[0];
-  const tools = call?.tools as Array<{ name?: string; type?: string; id?: string; args?: Record<string, unknown> }> | undefined;
-  assert.ok(tools?.some((tool) => tool.name === 'searchProjects'));
-  assert.ok(tools?.some((tool) => tool.name === 'searchSources'));
-  assert.ok(!tools?.some((tool) => tool.name === 'file_search'));
-  assert.equal(call?.providerOptions, undefined);
-});
-
-test('DM stream keeps model text after weak searchSources result without a citeable citation', async () => {
-  const db = await publishedProjectDb();
-  await insertIndexedPublicRagSource(db);
-  const events = await readNdjson(
-    createDMChatStream({ message: 'Use retrieved source context only.' }, TEST_CONFIG, {
-      db,
-      model: rejectedSearchSourcesThenTextModel('Claim from uncited retrieval is still shown to the user.'),
-      ragSearch: createMockRagSearch(),
-    }),
-  );
-
-  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'searchSources'));
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === 'Claim from uncited retrieval is still shown to the user.'));
-  assert.ok(!events.some((event) => event.type === 'block' && event.block?.kind === 'evidence'));
-  assert.ok(!events.some((event) => event.type === 'block' && /not strong enough to cite/.test(String(event.block?.text))));
-  assert.ok(events.some((event) => event.type === 'done'));
-});
-
-test('DM stream emits structured-tool text after weak searchSources is superseded by a trusted tool result', async () => {
-  const db = await publishedProjectDb();
-  await insertIndexedPublicRagSource(db);
-  const structuredToolText = 'Agentic Trader matches because the published project index lists trading automation work.';
-
-  const events = await readNdjson(
-    createDMChatStream({ message: 'Use retrieved source context and the public project index.' }, TEST_CONFIG, {
-      db,
-      model: weakSearchSourcesThenStructuredToolTextModel(structuredToolText),
-      ragSearch: createMockRagSearch(),
-    }),
-  );
-
-  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'searchSources'));
-  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'searchProjects'));
+  assert.ok(!events.some((event) => event.type === 'tool' && event.name === 'searchSources'));
+  assert.ok(!events.some((event) => event.type === 'tool' && event.name === 'searchProjects'));
+  const tools = model.doStreamCalls[0]?.tools as Array<{ name?: string }> | undefined;
+  assert.ok(!tools?.some((tool) => tool.name === 'searchSources'));
+  assert.ok(!tools?.some((tool) => tool.name === 'searchProjects'));
   const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
   assert.equal(projectBlock?.block?.items?.[0]?.id, 'agentic-trader');
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === structuredToolText));
-  assert.ok(!events.some((event) => event.type === 'block' && /not strong enough to cite/.test(String(event.block?.text))));
-  assert.ok(events.some((event) => event.type === 'done'));
-});
-
-test('DM stream keeps accepted searchSources citation and still emits later model text', async () => {
-  const db = await publishedProjectDb();
-  await insertIndexedPublicRagSource(db);
-  const laterText = 'This later claim is shown even after a weak searchSources result.';
-
-  const events = await readNdjson(
-    createDMChatStream({ message: 'Use approved public source context only.' }, TEST_CONFIG, {
-      db,
-      model: acceptedThenWeakSearchSourcesThenTextModel(laterText),
-      ragSearch: createMockRagSearch(),
-    }),
-  );
-
-  const searchSourceCalls = events.filter((event) => event.type === 'tool' && event.name === 'searchSources');
-  assert.ok(searchSourceCalls.length >= 2, `expected at least two searchSources tool calls, got ${searchSourceCalls.length}`);
   const ragEvidence = events.find((event) => event.type === 'block' && event.block?.ragSources?.length);
   assert.equal(ragEvidence?.block?.ragSources?.[0]?.ragSourceId, 'rag-public');
-  assert.equal(ragEvidence?.block?.ragSources?.[0]?.projectId, 'agentic-trader');
-  assert.equal(ragEvidence?.block?.ragSources?.[0]?.score, 0.91);
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === laterText));
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /agentic-trader/i);
+  assert.match(answerText, /Approved public RAG source text/);
+  assert.ok(!events.some((event) => event.type === 'block' && /not strong enough to cite/.test(String(event.block?.text))));
   assert.ok(events.some((event) => event.type === 'done'));
 });
 
 test('DM stream accepts project context ids from the catalog fallback public source', async () => withoutPublicProjectDbGate(async () => {
   const db = await publishedProjectDb();
-  const modelText = 'The exit manager is public through the active catalog fallback.';
   const events = await readNdjson(
     createDMChatStream(
       { message: 'Tell me about this project.', context: { projectIds: ['exit-manager'] } },
       TEST_CONFIG,
-      { db, model: streamingModel(modelText) },
+      { db, model: streamingModel(projectDraft('exit-manager')) },
     ),
   );
 
   assert.ok(events.some((event) => event.type === 'ready'));
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /tastytrade-exit-manager/i);
   const projectBlock = events.find((event) => event.type === 'block' && event.block?.kind === 'projects');
   assert.equal(projectBlock?.block?.items?.[0]?.id, 'exit-manager');
   assert.ok(!events.some((event) => /isn't in my published records yet/i.test(String(event.block?.text))));
@@ -423,16 +372,17 @@ test('DM route keeps resume/contact answers available with DB project-read failu
       throw new Error('select * from private_drafts using secret-token');
     },
   } satisfies Queryable;
-  const modelText = 'I can share public resume and contact details.';
+  const model = streamingModel('candidate-hidden 9999 https://private.example');
   const events = await readNdjson(
     createDMChatStream({ message: "Can you share Dylan's resume background and contact details?" }, TEST_CONFIG, {
       db: failingDb,
-      model: streamingModel(modelText),
+      model,
     }),
   );
 
   assert.ok(events.some((event) => event.type === 'ready'));
-  assert.ok(events.some((event) => event.type === 'text-delta' && event.delta === modelText));
+  assert.ok(events.some((event) => event.type === 'text-delta' && /public resume highlights and contact details/.test(event.delta ?? '')));
+  assert.equal(model.doStreamCalls.length, 0);
   assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'resume'));
   assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'contact'));
   assert.ok(events.some((event) => event.type === 'done'));
@@ -607,7 +557,7 @@ test('DM route validates fit-check pasted context safely', async () => {
   const post = createDMPostHandler({
     config: TEST_CONFIG,
     db,
-    model: streamingModel('Fit-check overlap looks strongest on backend and automation work.'),
+    model: streamingModel(projectDraft('agentic-trader')),
   });
 
   const tooShort = await post({
@@ -652,14 +602,9 @@ test('DM route validates fit-check pasted context safely', async () => {
 
   assert.equal(valid.status, 200);
   assert.ok(events.some((event) => event.type === 'ready'));
-  assert.ok(
-    events.some(
-      (event) =>
-        event.type === 'text-delta' &&
-        typeof event.delta === 'string' &&
-        /backend and automation/.test(event.delta),
-    ),
-  );
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /published records returned/);
+  assert.ok(events.some((event) => event.type === 'block' && event.block?.kind === 'resume'));
   assert.ok(!events.some((event) => event.type === 'error'));
 });
 
@@ -817,237 +762,26 @@ function streamingModel(text: string): MockLanguageModelV4 {
   });
 }
 
-function toolCallingModel(): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-1',
-              toolName: 'searchProjects',
-              input: JSON.stringify({ query: 'trading automation robinhood', limit: 3 }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 3, text: 3, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'text-start', id: 'text-2' },
-            { type: 'text-delta', id: 'text-2', delta: 'Found a published trading automation project.' },
-            { type: 'text-end', id: 'text-2' },
-            {
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: 'stop' },
-              usage: {
-                inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 6, text: 6, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-    ],
-  });
-}
-
-function rejectedSearchSourcesThenTextModel(text: string): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-search-sources-weak',
-              toolName: 'searchSources',
-              input: JSON.stringify({ query: 'agentic trader weak source' }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 6, text: 6, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'text-start', id: 'text-after-weak-search' },
-            { type: 'text-delta', id: 'text-after-weak-search', delta: text },
-            { type: 'text-end', id: 'text-after-weak-search' },
-            {
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: 'stop' },
-              usage: {
-                inputTokens: { total: 12, noCache: 12, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 6, text: 6, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-    ],
-  });
-}
-
-function weakSearchSourcesThenStructuredToolTextModel(text: string): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-search-sources-weak',
-              toolName: 'searchSources',
-              input: JSON.stringify({ query: 'agentic trader weak source' }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 18, noCache: 18, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 6, text: 6, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-search-projects',
-              toolName: 'searchProjects',
-              input: JSON.stringify({ query: 'trading automation robinhood', limit: 3 }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 18, noCache: 18, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 6, text: 6, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'text-start', id: 'text-after-structured-tool' },
-            { type: 'text-delta', id: 'text-after-structured-tool', delta: text },
-            { type: 'text-end', id: 'text-after-structured-tool' },
-            {
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: 'stop' },
-              usage: {
-                inputTokens: { total: 20, noCache: 20, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 8, text: 8, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-    ],
-  });
-}
-
-function acceptedThenWeakSearchSourcesThenTextModel(text: string): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: [
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-search-sources-accepted',
-              toolName: 'searchSources',
-              input: JSON.stringify({ query: 'agentic trader approved source' }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 16, noCache: 16, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 8, text: 8, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            {
-              type: 'tool-call',
-              toolCallId: 'call-search-sources-weak',
-              toolName: 'searchSources',
-              input: JSON.stringify({ query: 'agentic trader weak source' }),
-            },
-            {
-              type: 'finish',
-              finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-              usage: {
-                inputTokens: { total: 16, noCache: 16, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 8, text: 8, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-      {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'stream-start', warnings: [] },
-            { type: 'text-start', id: 'text-after-weak-search' },
-            { type: 'text-delta', id: 'text-after-weak-search', delta: text },
-            { type: 'text-end', id: 'text-after-weak-search' },
-            {
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: 'stop' },
-              usage: {
-                inputTokens: { total: 16, noCache: 16, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 8, text: 8, reasoning: undefined },
-              },
-            },
-          ],
-        }),
-      },
-    ],
-  });
-}
-
 function throwingModel(): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: async () => {
       throw new Error('model should not be called');
     },
+  });
+}
+
+function projectDraft(
+  projectId: string,
+  references: { metricIds?: string[]; linkIds?: string[]; citationIds?: string[] } = {},
+): string {
+  return JSON.stringify({
+    claims: [{
+      projectId,
+      fields: ['tagline', 'status', 'activity'],
+      metricIds: references.metricIds ?? [],
+      linkIds: references.linkIds ?? [],
+      citationIds: references.citationIds ?? [],
+    }],
   });
 }
 

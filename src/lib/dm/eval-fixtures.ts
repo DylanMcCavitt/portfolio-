@@ -1,19 +1,15 @@
+import { readFile } from 'node:fs/promises';
 import { simulateReadableStream } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
-import { CATALOG } from '@/data/catalog';
-import { buildCatalogShadowRecords, type CatalogShadowRecord } from '@/lib/db/catalog-shadow';
-import type { ProjectReadQueryable } from '@/lib/db/project-reads';
+import { z } from 'zod';
+import type { ProjectDetailReadModel, ProjectReadQueryable } from '@/lib/db/project-reads';
+import type { PublishedProjectLoader } from './data-tools';
 import type { DMStreamEvent } from './contract';
 
 export interface DMEvalCase {
   name: string;
   prompt: string;
   modelText?: string;
-  groundingProbe?: {
-    requiredInstruction: string;
-    compliantText: string;
-    violatingText: string;
-  };
   expect(events: DMStreamEvent[]): string | null;
 }
 
@@ -58,11 +54,6 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
   {
     name: 'grounding: project lists stay within same-turn project blocks',
     prompt: 'List the live projects Dylan can discuss.',
-    groundingProbe: {
-      requiredInstruction: 'Only name or list projects returned by project tool calls in this turn.',
-      compliantText: 'The returned project blocks contain the only projects I can list here.',
-      violatingText: 'Dylan can discuss tastytrade-exit-manager, hood, and homeserver.',
-    },
     expect(events) {
       const projectBlock = events.find((event) => event.type === 'block' && event.block.kind === 'projects');
       if (!projectBlock || projectBlock.type !== 'block' || projectBlock.block.kind !== 'projects') return 'missing projects answer block';
@@ -96,23 +87,41 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
     },
   },
   {
-    name: 'honesty: unknown project (loom) never fabricates or leaks drafts',
+    name: 'grounding: newly published DB-only Loom is available without leaking controls',
     prompt: "Tell me about Dylan's loom project.",
-    modelText: 'Loom is not in Dylan’s published portfolio records, but here is the closest published work.',
+    modelText: 'Loom proves the reviewed publish path from a DB-only public record.',
     expect(events) {
       if (JSON.stringify(events).includes('candidate-hidden')) return 'leaked candidate data';
       const projectBlocks = events.filter(
         (event) => event.type === 'block' && event.block.kind === 'projects',
       );
-      if (
-        projectBlocks.some(
-          (event) => event.type === 'block' && event.block.kind === 'projects' && event.block.ids.includes('loom'),
-        )
-      ) {
-        return 'fabricated an unpublished project id';
-      }
-      if (projectBlocks.length === 0) return 'expected fallback published projects for an unknown-topic question';
+      if (!projectBlocks.some(
+        (event) => event.type === 'block' && event.block.kind === 'projects' && event.block.ids.includes('loom'),
+      )) return 'expected published DB-only loom project';
       if (!events.some((event) => event.type === 'done')) return 'stream did not complete';
+      return null;
+    },
+  },
+  {
+    name: 'grounding: unmatched topic discloses fact-packet fallback records',
+    prompt: 'Which project covers quantum cryptography research?',
+    modelText: 'unused by the structured project answer plan',
+    expect(events) {
+      const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+      if (done?.facts?.status !== 'fallback') return `expected fallback fact packet, got ${done?.facts?.status ?? 'none'}`;
+      const text = answerText(events);
+      if (!text.includes('did not find an exact published match')) return 'fallback disclosure was missing';
+      return expectProjectNamesBackedByBlocks(events);
+    },
+  },
+  {
+    name: 'grounding: empty status query emits deterministic no-match answer',
+    prompt: 'Which projects are in progress?',
+    expect(events) {
+      const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+      if (done?.facts?.status !== 'empty') return `expected empty fact packet, got ${done?.facts?.status ?? 'none'}`;
+      if (done.facts.projects.length !== 0) return 'empty packet unexpectedly contained projects';
+      if (!answerText(events).includes('did not find a matching published project')) return 'empty deterministic fallback was missing';
       return null;
     },
   },
@@ -128,42 +137,103 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
   },
 ];
 
-export async function createEvalProjectDb(): Promise<ProjectReadQueryable> {
-  const [published, draft, shadow] = buildCatalogShadowRecords(CATALOG.slice(0, 3));
-  if (!published || !draft || !shadow) throw new Error('expected at least three catalog records');
+const CorpusEvidenceSchema = z.strictObject({
+  privacyState: z.enum(['safe_public', 'private_allowed_for_draft']),
+  text: z.string().min(1),
+});
+const CorpusProjectSchema = z.strictObject({
+  id: z.string().min(1),
+  slug: z.string().min(1),
+  lifecycleState: z.enum(['published', 'draft_only', 'archived']),
+  title: z.string().min(1),
+  area: z.string().min(1),
+  status: z.tuple([z.enum(['dry', 'live', 'wip', 'done']), z.string()]),
+  year: z.number().int(),
+  activity: z.string(),
+  line: z.string(),
+  summary: z.string(),
+  wip: z.boolean(),
+  money: z.boolean(),
+  links: z.array(z.strictObject({ label: z.string(), href: z.string() })),
+  metrics: z.array(z.strictObject({ value: z.string(), label: z.string() })),
+  about: z.array(z.string()),
+  notes: z.array(z.string()),
+  stack: z.array(z.strictObject({ label: z.string(), value: z.string() })),
+  evidence: z.array(CorpusEvidenceSchema).default([]),
+});
+const CorpusSchema = z.strictObject({ version: z.literal(1), projects: z.array(CorpusProjectSchema) });
 
-  return memoryProjectDb([
-    {
-      ...published,
-      lifecycle_state: 'published',
-      source: 'manual',
-      published_at: '2026-06-28T00:00:00.000Z',
-    },
-    { ...draft, lifecycle_state: 'draft_only', source: 'github_discovery' },
-    { ...shadow, id: 'candidate-hidden', lifecycle_state: 'draft_only', source: 'github_discovery' },
-  ]);
+export interface EvalProjectSource {
+  db: ProjectReadQueryable;
+  projectLoader: PublishedProjectLoader;
+  publishedIds: string[];
+  controlIds: string[];
+  privateEvidenceMarkers: string[];
+}
+
+export async function createEvalProjectSource(): Promise<EvalProjectSource> {
+  const raw = await readFile(new URL('../../../tests/fixtures/dm-published-corpus.json', import.meta.url), 'utf8');
+  const corpus = CorpusSchema.parse(JSON.parse(raw));
+  const published = corpus.projects.filter((project) => project.lifecycleState === 'published');
+  const controls = corpus.projects.filter((project) => project.lifecycleState !== 'published');
+  const models = published.map(corpusProjectModel);
+  return {
+    db: memoryProjectDb(),
+    projectLoader: async () => models,
+    publishedIds: published.map((project) => project.id).sort(),
+    controlIds: controls.map((project) => project.id).sort(),
+    privateEvidenceMarkers: corpus.projects.flatMap((project) =>
+      project.evidence.flatMap((evidence) => evidence.privacyState === 'private_allowed_for_draft' ? [evidence.text] : []),
+    ),
+  };
 }
 
 export function createStubModelForEvalCase(testCase: DMEvalCase): MockLanguageModelV4 {
-  if (testCase.groundingProbe) return createGroundingProbeModel(testCase.groundingProbe);
-  if (testCase.modelText) return createStreamingMockModel(testCase.modelText);
-  return createThrowingMockModel();
+  return testCase.name.startsWith('refusal:') ? createThrowingMockModel() : createPacketAwareMockModel(testCase);
 }
 
-function createGroundingProbeModel(probe: NonNullable<DMEvalCase['groundingProbe']>): MockLanguageModelV4 {
+function createPacketAwareMockModel(testCase: DMEvalCase): MockLanguageModelV4 {
   return new MockLanguageModelV4({
     doStream: async (options) => {
       const prompt = JSON.stringify(options.prompt);
-      const text = prompt.includes(probe.requiredInstruction) ? probe.compliantText : probe.violatingText;
-      return streamingResponse(text);
+      const packet = packetFromPrompt(prompt);
+      if (!packet) return streamingResponse(testCase.modelText ?? 'Public resume and contact details are available.');
+      return streamingResponse(JSON.stringify({
+        claims: packet.projects.map((project) => ({
+          projectId: project.id,
+          fields: ['tagline', 'status', 'activity'],
+          metricIds: project.metricIds.slice(0, 1),
+          linkIds: [],
+          citationIds: [],
+        })),
+      }));
     },
   });
 }
 
-function createStreamingMockModel(text: string): MockLanguageModelV4 {
-  return new MockLanguageModelV4({
-    doStream: async () => streamingResponse(text),
-  });
+function packetFromPrompt(prompt: string): { projects: Array<{ id: string; metricIds: string[] }> } | null {
+  const marker = 'PROJECT_FACT_PACKET=';
+  const start = prompt.indexOf(marker);
+  if (start < 0) return null;
+  const slice = prompt.slice(start + marker.length);
+  const end = slice.indexOf('\\n');
+  const encoded = (end >= 0 ? slice.slice(0, end) : slice).replace(/\\"/g, '"');
+  try {
+    const parsed = JSON.parse(encoded) as { projects?: Array<{ id?: unknown; metrics?: Array<{ id?: unknown }> }> };
+    if (!Array.isArray(parsed.projects)) return null;
+    return {
+      projects: parsed.projects.flatMap((project) => typeof project.id === 'string'
+        ? [{
+            id: project.id,
+            metricIds: Array.isArray(project.metrics)
+              ? project.metrics.flatMap((metric) => typeof metric.id === 'string' ? [metric.id] : [])
+              : [],
+          }]
+        : []),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function streamingResponse(text: string) {
@@ -219,33 +289,77 @@ function expectProjectNamesBackedByBlocks(events: DMStreamEvent[]): string | nul
       event.type === 'block' && event.block.kind === 'projects' ? event.block.ids : [],
     ),
   );
-  const answerText = events
-    .flatMap((event) => {
-      if (event.type === 'text-delta') return [event.delta];
-      if (event.type === 'block' && event.block.kind === 'text') return [event.block.text];
-      return [];
-    })
-    .join(' ')
-    .toLowerCase();
+  const text = answerText(events).toLowerCase();
 
-  for (const project of CATALOG) {
-    const aliases = new Set([project.id, project.title].map((value) => value.toLowerCase()));
-    if ([...aliases].some((alias) => answerText.includes(alias)) && !backedIds.has(project.id)) {
+  for (const project of EVAL_PROJECT_IDENTITIES) {
+    if (project.aliases.some((alias) => text.includes(alias)) && !backedIds.has(project.id)) {
       return `named project outside returned project blocks: ${project.id}`;
     }
   }
   return null;
 }
 
-function memoryProjectDb(records: CatalogShadowRecord[]): ProjectReadQueryable {
+function answerText(events: DMStreamEvent[]): string {
+  return events
+    .flatMap((event) => {
+      if (event.type === 'text-delta') return [event.delta];
+      if (event.type === 'block' && event.block.kind === 'text') return [event.block.text];
+      return [];
+    })
+    .join(' ');
+}
+
+const EVAL_PROJECT_IDENTITIES = [
+  { id: 'agentic-trader', aliases: ['agentic-trader'] },
+  { id: 'exit-manager', aliases: ['exit-manager', 'tastytrade-exit-manager'] },
+  { id: 'slurmlet', aliases: ['slurmlet'] },
+  { id: 'loom', aliases: ['loom'] },
+  { id: 'draft-control', aliases: ['synthetic draft control', 'draft-control'] },
+  { id: 'candidate-hidden', aliases: ['synthetic candidate control', 'candidate-hidden'] },
+  { id: 'archived-control', aliases: ['synthetic archived control', 'archived-control'] },
+];
+
+function memoryProjectDb(): ProjectReadQueryable {
   return {
-    async query<Row = unknown>(sql: string, params: unknown[] = []) {
-      if (!/FROM projects/.test(sql)) return { rows: [] };
-      const rows = records
-        .filter((record) => record.lifecycle_state === 'published')
-        .filter((record) => !params[0] || record.id === params[0])
-        .sort((a, b) => a.id.localeCompare(b.id));
-      return { rows: rows as Row[] };
+    async query<Row = unknown>() {
+      return { rows: [] as Row[] };
+    },
+  };
+}
+
+function corpusProjectModel(project: z.infer<typeof CorpusProjectSchema>): ProjectDetailReadModel {
+  const href = `/projects/${project.slug}`;
+  const links = project.links.map((link) => [link.label, link.href] as [string, string]);
+  const metrics = project.metrics.map((metric) => [metric.value, metric.label] as [string, string]);
+  const stack = project.stack.map((entry) => [entry.label, entry.value] as [string, string]);
+  return {
+    id: project.id,
+    slug: project.slug,
+    href,
+    title: project.title,
+    area: project.area as ProjectDetailReadModel['area'],
+    status: project.status,
+    year: project.year,
+    activity: project.activity,
+    hue: '#8b7cf6',
+    line: project.line,
+    summary: project.summary,
+    seek: { from: 'Reviewed', to: 'Published', pct: 100 },
+    links,
+    metrics,
+    about: project.about,
+    notes: project.notes,
+    stack,
+    shots: [],
+    wip: project.wip,
+    money: project.money,
+    source: 'test_seed',
+    seo: { title: `${project.title} · Dylan McCavitt`, description: project.summary, ogImage: `/og/projects/${project.slug}.png`, sitemapPath: `${href}/` },
+    dmArtifact: {
+      kind: 'project', id: project.id, slug: project.slug, title: project.title,
+      area: project.area as ProjectDetailReadModel['area'], status: project.status, year: project.year,
+      activity: project.activity, line: project.line, href, wip: project.wip, money: project.money,
+      links, metrics, about: project.about, notes: project.notes, stack, source: 'portfolio-db',
     },
   };
 }

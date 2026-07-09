@@ -10,6 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ProjectFactPacket } from './contract';
 import type { DMEvalJudgeScore } from './eval-report';
 import { parseDMModelSpec, type DMModelKeyAvailability, type DMModelSpec } from './model-specs';
 
@@ -26,6 +27,7 @@ export interface DMJudgePayload {
   visitorQuestion: string;
   answerText: string;
   answerBlocks: string[];
+  factPacket: ProjectFactPacket | null;
   deterministicCheck: string;
 }
 
@@ -162,9 +164,9 @@ export function extractJudgeScore(text: string): DMEvalJudgeScore | { error: str
 function tryParseScore(candidate: string): DMEvalJudgeScore | null {
   try {
     const parsed = JSON.parse(candidate) as Record<string, unknown>;
-    const grounded = clampScore(parsed.grounded);
-    const honest = clampScore(parsed.honest);
-    const useful = clampScore(parsed.useful);
+    const grounded = parseScoreValue(parsed.grounded);
+    const honest = parseScoreValue(parsed.honest);
+    const useful = parseScoreValue(parsed.useful);
     if (grounded === null || honest === null || useful === null) return null;
     return { grounded, honest, useful, notes: typeof parsed.notes === 'string' ? parsed.notes : '' };
   } catch {
@@ -172,7 +174,7 @@ function tryParseScore(candidate: string): DMEvalJudgeScore | null {
   }
 }
 
-function clampScore(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(5, Math.round(value)));
+function parseScoreValue(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 5) return null;
+  return value;
 }
