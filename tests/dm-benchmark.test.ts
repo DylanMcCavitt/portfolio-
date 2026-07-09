@@ -6,15 +6,11 @@ import { parseDMModelSpec, parseDMModelSpecs } from '@/lib/dm/model-specs';
 test('model specs keep full gateway ids so anthropic models resolve through the gateway', () => {
   const keys = { hasGatewayKey: true, hasOpenaiKey: true };
 
-  // Regression: the old benchmark parser stripped the creator prefix, producing
-  // gateway('claude-sonnet-4.5') which is not a valid gateway model id.
   assert.deepEqual(parseDMModelSpec('anthropic/claude-sonnet-4.6', keys), {
     provider: 'gateway',
     model: 'anthropic/claude-sonnet-4.6',
     label: 'anthropic/claude-sonnet-4.6',
   });
-
-  // With a gateway key, openai/* models also route through the gateway.
   assert.deepEqual(parseDMModelSpec('openai/gpt-4.1', keys), {
     provider: 'gateway',
     model: 'openai/gpt-4.1',
