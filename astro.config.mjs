@@ -3,43 +3,18 @@ import console from 'node:console';
 import process from 'node:process';
 import { defineConfig } from 'astro/config';
 import vercel from '@astrojs/vercel';
-
-// Keep in sync with shouldUsePublicProjectDb in src/lib/public-projects.ts.
-// (astro.config cannot import that TS module: the `@/` path alias is not
-// resolved when Astro bundles the config file.)
-const PUBLIC_PROJECT_DB_FLAGS = ['PUBLIC_PROJECT_PAGES_FROM_DB', 'PORTFOLIO_PUBLIC_PROJECTS_FROM_DB'];
-const DATABASE_ENV_KEYS = ['DATABASE_URL', 'POSTGRES_URL', 'PORTFOLIO_DATABASE_URL', 'PORTFOLIO_POSTGRES_URL'];
-const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
-const PUBLIC_PROJECT_SOURCE_VALUES = new Set(['database', 'catalog_emergency']);
-
-function publicProjectSourceMode() {
-  const configuredSource = (process.env.PUBLIC_PROJECT_SOURCE ?? '').trim().toLowerCase();
-  if (configuredSource) {
-    if (!PUBLIC_PROJECT_SOURCE_VALUES.has(configuredSource)) {
-      throw new Error('Invalid PUBLIC_PROJECT_SOURCE. Expected database or catalog_emergency.');
-    }
-    if (configuredSource === 'catalog_emergency') {
-      console.warn(
-        '[public-projects] SOURCE MODE catalog_emergency: serving the legacy catalog by explicit operator override.',
-      );
-    }
-    return configuredSource;
-  }
-
-  if (PUBLIC_PROJECT_DB_FLAGS.some((key) => TRUTHY_ENV_VALUES.has((process.env[key] ?? '').trim().toLowerCase()))) {
-    return 'database';
-  }
-  const ci = (process.env.CI ?? '').trim().toLowerCase();
-  if (process.env.VERCEL === '1' && (ci === '1' || ci === 'true')) return 'database';
-  if (DATABASE_ENV_KEYS.some((key) => (process.env[key] ?? '').trim() !== '')) return 'database';
-  return 'catalog_development';
-}
+import { resolvePublicProjectSourceModeFromEnv } from './src/lib/public-project-source-mode.ts';
 
 function publicProjectPagesRenderLive() {
   return PUBLIC_PROJECT_SOURCE_MODE === 'database';
 }
 
-const PUBLIC_PROJECT_SOURCE_MODE = publicProjectSourceMode();
+const PUBLIC_PROJECT_SOURCE_MODE = resolvePublicProjectSourceModeFromEnv(process.env);
+if (PUBLIC_PROJECT_SOURCE_MODE === 'catalog_emergency') {
+  console.warn(
+    '[public-projects] SOURCE MODE catalog_emergency: serving the legacy catalog by explicit operator override.',
+  );
+}
 
 const LIVE_PUBLIC_PROJECT_PAGES = [
   'src/pages/projects/[id].astro',

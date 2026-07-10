@@ -1103,7 +1103,11 @@ test('loadPublicProjectDetails retries live DB reads after a transient failure',
   const env = { PUBLIC_PROJECT_SOURCE: 'database' };
   await assert.rejects(
     () => loadPublicProjectDetails({ env, db: flakyDb }),
-    (error: unknown) => error instanceof PublicProjectDataError && error.code === 'read_failed',
+    (error: unknown) =>
+      error instanceof PublicProjectDataError &&
+      error.code === 'read_failed' &&
+      !('cause' in error) &&
+      !String(error.stack).includes('transient db error'),
   );
 
   shouldFail = false;

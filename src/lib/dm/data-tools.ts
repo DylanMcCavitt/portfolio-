@@ -1,6 +1,6 @@
 import { RESUME, getResumeTrackById, type ResumeTrack } from '@/data/resume';
 import type { ProjectDetailReadModel, ProjectReadQueryable } from '@/lib/db/project-reads';
-import { loadPublicProjectDetails } from '@/lib/public-projects';
+import { loadPublicProjectDetails, PublicProjectDataError } from '@/lib/public-projects';
 import type { ContactBlock, ProjectSummary, ResumeTrackSummary } from './contract';
 
 export class DMToolError extends Error {
@@ -89,6 +89,7 @@ export function createPublicDMDataTools(
       projectsPromise = null;
       throw new DMToolError('public_data_unavailable', 'Failed to read active public project records.', {
         cause: error instanceof Error ? error.name : typeof error,
+        ...(error instanceof PublicProjectDataError ? { sourceCode: error.code } : {}),
       });
     });
     return projectsPromise;

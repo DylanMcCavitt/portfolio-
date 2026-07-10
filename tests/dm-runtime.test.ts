@@ -364,13 +364,18 @@ test('DM route masks setup failures and fails closed on project DB failures', as
     },
   } satisfies Queryable;
   const model = streamingModel('This model output must never be emitted.');
-  const events = await readNdjson(
-    createDMChatStream({ message: 'Which projects show backend work?' }, TEST_CONFIG, {
-      db: failingDb,
-      model,
+  const failingDbPost = createDMPostHandler({ config: TEST_CONFIG, db: failingDb, model });
+  const failingDbResponse = await failingDbPost({
+    request: new Request('https://example.test/api/dm/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Which projects show backend work?' }),
     }),
-  );
+  } as never);
+  const events = await readNdjson(failingDbResponse.body);
 
+  assert.equal(failingDbResponse.status, 200);
+  assert.equal(failingDbResponse.headers.get('X-Public-Project-Source'), 'database');
   assert.deepEqual(events.map((event) => event.type), ['error']);
   assert.match(String(events[0]?.message), /could not read the public portfolio data/i);
   assert.equal(model.doStreamCalls.length, 0);
@@ -378,18 +383,15 @@ test('DM route masks setup failures and fails closed on project DB failures', as
   assert.ok(!JSON.stringify(events).includes('secret-token'));
 }));
 
-test('DM route exposes explicit emergency catalog mode and does not query the injected DB', async () => withCatalogEmergency(async () => {
-  let queryCount = 0;
-  const unavailableDb = {
-    async query() {
-      queryCount += 1;
-      throw new Error('the emergency source must not query this database');
-    },
-  } satisfies Queryable;
+test('DM route exposes explicit emergency catalog mode without initializing a DB', async () => withCatalogEmergency(async () => {
+  let createDbCalls = 0;
   const POST = createDMPostHandler({
     config: TEST_CONFIG,
     env: { PUBLIC_PROJECT_SOURCE: 'catalog_emergency' },
-    db: unavailableDb,
+    createDb() {
+      createDbCalls += 1;
+      throw new Error('the emergency source must not initialize a database');
+    },
     model: throwingModel(),
   });
   const response = await POST({
@@ -403,7 +405,7 @@ test('DM route exposes explicit emergency catalog mode and does not query the in
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('X-Public-Project-Source'), 'catalog_emergency');
-  assert.equal(queryCount, 0);
+  assert.equal(createDbCalls, 0);
   assert.equal(
     events.find((event) => event.type === 'block' && event.block?.kind === 'projects')?.block?.items?.[0]?.id,
     'exit-manager',
@@ -578,6 +580,11 @@ test('streamed project artifacts satisfy active public-source ids absent from th
   console.warn = (...args: unknown[]) => warnings.push(args);
 
   try {
+    assert.equal(validateBlock({ kind: 'projects', ids: [artifact.id] }), null);
+    assert.equal(
+      validateBlock({ kind: 'projects', ids: ['different-project'], items: [artifact] }),
+      null,
+    );
     assert.deepEqual(validateBlock({ kind: 'projects', ids: [artifact.id], items: [artifact] }), {
       kind: 'projects',
       ids: [artifact.id],
