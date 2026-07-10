@@ -190,6 +190,12 @@ export function createDMChatStream(
         if (projectOverview) {
           emit({ type: 'text-delta', delta: projectOverview });
           answer.unshift({ kind: 'text', text: projectOverview });
+          const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
+          for (const block of supplementalBlocks) {
+            answer.push(block);
+            emit({ type: 'block', index: blockIndex, block });
+            blockIndex += 1;
+          }
           emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
           return;
         }

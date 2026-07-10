@@ -72,7 +72,8 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
     expect(events) {
       const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
       if (done?.facts?.operation !== 'rankProjects') return `expected ranked overview, got ${done?.facts?.operation ?? 'none'}`;
-      if (done.facts.status !== 'complete') return `expected complete overview, got ${done.facts.status}`;
+      if (done.facts.status !== 'partial') return `expected representative subset status, got ${done.facts.status}`;
+      if (done.facts.responseMode !== 'representative-overview') return 'missing representative overview response mode';
       if (done.facts.projects.length !== 3) return `expected three representative projects, got ${done.facts.projects.length}`;
       const text = answerText(events);
       if (!text.includes('three representative projects')) return 'missing concise overview introduction';

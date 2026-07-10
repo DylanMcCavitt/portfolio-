@@ -46,6 +46,7 @@ export async function retrieveProjectFactPacket(
   const allProjects = await tools.allPublishedProjects();
   const namedProjectIds = resolveNamedProjectIds(request, allProjects);
   let operation: ProjectFactPacket['operation'];
+  let responseMode: ProjectFactPacket['responseMode'];
   let result: { projects: ProjectSummary[]; resultStatus: ProjectToolResultStatus; fallbackUsed?: boolean };
 
   if (request.context?.projectIds?.length) {
@@ -59,14 +60,11 @@ export async function retrieveProjectFactPacket(
     result = await tools.rankProjects({ intent: query, limit: 3 });
   } else if (isBroadProjectOverviewQuery(normalized)) {
     operation = 'rankProjects';
-    const overview = await tools.rankProjects({
+    responseMode = 'representative-overview';
+    result = await tools.rankProjects({
       intent: 'representative shipped live client product AI automation work',
       limit: 3,
     });
-    result = {
-      ...overview,
-      resultStatus: overview.projects.length > 0 ? 'complete' : 'empty',
-    };
   } else {
     const status = statusIntent(normalized);
     if (status && isStatusListIntent(normalized)) {
@@ -81,6 +79,7 @@ export async function retrieveProjectFactPacket(
   return {
     operation,
     status: result.resultStatus,
+    ...(responseMode ? { responseMode } : {}),
     query: request.message,
     fallbackUsed: result.fallbackUsed === true || result.resultStatus === 'fallback',
     projects: result.projects.map(projectFact),
@@ -89,7 +88,7 @@ export async function retrieveProjectFactPacket(
 }
 
 export function deterministicProjectOverview(packet: ProjectFactPacket): string | null {
-  if (!isBroadProjectOverviewQuery(packet.query) || packet.projects.length === 0) return null;
+  if (packet.responseMode !== 'representative-overview' || packet.projects.length === 0) return null;
   const projects = packet.projects.slice(0, 3);
   const introduction = projects.length === 3
     ? 'Here are three representative projects from Dylan’s published work.'
@@ -274,12 +273,9 @@ function normalizeIdentityText(value: string): string {
 
 function isBroadProjectOverviewQuery(value: string): boolean {
   const normalized = normalizeIdentityText(value);
-  if (!/\b(projects|portfolio|work)\b/.test(normalized)) return false;
-  if (/\b(most impressive|best|strongest|top|favorite|live|shipped|client|backend|automation|technical|architecture|specific)\b/.test(normalized)) {
-    return false;
-  }
-  return /\b(?:tell me about|overview|show me|what (?:has|did|are)|give me (?:an )?overview)\b/.test(normalized)
-    || /\bdylan(?:s| s)? projects\b/.test(normalized);
+  const subject = String.raw`(?:dylan(?:s| s)?|his|your|the)?\s*(?:projects|portfolio|work)`;
+  return new RegExp(`^(?:tell me about|show me|give me an overview of|overview of)\\s+${subject}$`).test(normalized)
+    || /^(?:what projects (?:has|did) dylan (?:build|built|ship|shipped)|what has dylan (?:built|shipped))$/.test(normalized);
 }
 
 function isStatusListIntent(value: string): boolean {
