@@ -29,6 +29,8 @@ export interface SearchProjectsOutput {
   query: string;
   projects: ProjectSummary[];
   fallbackUsed: boolean;
+  resultStatus: ProjectToolResultStatus;
+  message: string;
 }
 
 export interface FilterProjectsInput {
@@ -39,6 +41,8 @@ export interface FilterProjectsInput {
 
 export interface FilterProjectsOutput {
   projects: ProjectSummary[];
+  resultStatus: ProjectToolResultStatus;
+  message: string;
 }
 
 export interface RankProjectsInput {
@@ -49,7 +53,11 @@ export interface RankProjectsInput {
 
 export interface RankProjectsOutput {
   projects: ProjectSummary[];
+  resultStatus: ProjectToolResultStatus;
+  message: string;
 }
+
+export type ProjectToolResultStatus = 'complete' | 'partial' | 'fallback' | 'empty';
 
 export interface ReadResumeInput {
   trackIds?: string[];
@@ -64,13 +72,20 @@ export interface PublicDMDataTools {
   assertProjectIds(ids: string[]): Promise<void>;
   assertResumeTrackIds(ids: string[]): void;
   publishedProjectIds(): Promise<Set<string>>;
+  allPublishedProjects(): Promise<ProjectSummary[]>;
 }
 
-export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataTools {
+export type PublishedProjectLoader = () => Promise<ProjectDetailReadModel[]>;
+
+export function createPublicDMDataTools(
+  db: ProjectReadQueryable,
+  options: { loadProjects?: PublishedProjectLoader } = {},
+): PublicDMDataTools {
   let projectsPromise: Promise<ProjectDetailReadModel[]> | null = null;
 
   async function projects(): Promise<ProjectDetailReadModel[]> {
-    projectsPromise ??= loadPublicProjectDetails({ db }).then(({ projects }) => projects).catch((error: unknown) => {
+    const loadProjects = options.loadProjects ?? (() => loadPublicProjectDetails({ db }).then(({ projects }) => projects));
+    projectsPromise ??= loadProjects().catch((error: unknown) => {
       projectsPromise = null;
       throw new DMToolError('public_data_unavailable', 'Failed to read active public project records.', {
         cause: error instanceof Error ? error.name : typeof error,
@@ -125,17 +140,30 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
       const ranked = source
         .slice(0, clampLimit(input.limit, 4))
         .map(({ project }) => summarizeProject(project));
-      return { query, projects: ranked, fallbackUsed };
+      const resultStatus = projectResultStatus(ranked.length, source.length, fallbackUsed);
+      return {
+        query,
+        projects: ranked,
+        fallbackUsed,
+        resultStatus,
+        message: projectResultMessage('searchProjects', resultStatus, query),
+      };
     },
 
     async filterProjects(input = {}) {
       const normalizedArea = input.area?.trim().toLowerCase();
-      const filtered = (await projects())
+      const matches = (await projects())
         .filter((project) => !normalizedArea || project.area.toLowerCase() === normalizedArea)
-        .filter((project) => !input.status || project.status[0] === input.status)
+        .filter((project) => !input.status || project.status[0] === input.status);
+      const filtered = matches
         .slice(0, clampLimit(input.limit, 6))
         .map(summarizeProject);
-      return { projects: filtered };
+      const resultStatus = projectResultStatus(filtered.length, matches.length);
+      return {
+        projects: filtered,
+        resultStatus,
+        message: projectResultMessage('filterProjects', resultStatus),
+      };
     },
 
     async rankProjects(input = {}) {
@@ -143,22 +171,30 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
       if (input.ids?.length) {
         await assertProjectIds(input.ids);
         const byId = new Map(all.map((project) => [project.id, project]));
+        const rankedProjects = input.ids
+          .map((id) => byId.get(id))
+          .filter((project): project is ProjectDetailReadModel => Boolean(project))
+          .slice(0, clampLimit(input.limit, input.ids.length))
+          .map(summarizeProject);
+        const resultStatus = projectResultStatus(rankedProjects.length, input.ids.length);
         return {
-          projects: input.ids
-            .map((id) => byId.get(id))
-            .filter((project): project is ProjectDetailReadModel => Boolean(project))
-            .slice(0, clampLimit(input.limit, input.ids.length))
-            .map(summarizeProject),
+          projects: rankedProjects,
+          resultStatus,
+          message: projectResultMessage('rankProjects', resultStatus),
         };
       }
 
       const tokenSets = expandQuery(input.intent ?? '');
+      const rankedProjects = all
+        .map((project) => ({ project, score: impactScore(project, tokenSets) }))
+        .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id))
+        .slice(0, clampLimit(input.limit, 4))
+        .map(({ project }) => summarizeProject(project));
+      const resultStatus = projectResultStatus(rankedProjects.length, all.length);
       return {
-        projects: all
-          .map((project) => ({ project, score: impactScore(project, tokenSets) }))
-          .sort((a, b) => b.score - a.score || a.project.id.localeCompare(b.project.id))
-          .slice(0, clampLimit(input.limit, 4))
-          .map(({ project }) => summarizeProject(project)),
+        projects: rankedProjects,
+        resultStatus,
+        message: projectResultMessage('rankProjects', resultStatus),
       };
     },
 
@@ -176,6 +212,9 @@ export function createPublicDMDataTools(db: ProjectReadQueryable): PublicDMDataT
     assertProjectIds,
     assertResumeTrackIds,
     publishedProjectIds: projectIds,
+    async allPublishedProjects() {
+      return (await projects()).map(summarizeProject);
+    },
   };
 }
 
@@ -207,6 +246,7 @@ function getContact(): ContactBlock {
 function summarizeProject(project: ProjectDetailReadModel): ProjectSummary {
   return {
     id: project.id,
+    slug: project.slug,
     title: project.title,
     area: project.area,
     status: project.status,
@@ -259,11 +299,21 @@ function projectHaystack(project: ProjectDetailReadModel): string {
     project.summary,
     ...project.about,
     ...project.notes,
-    ...project.stack.flat(),
-    ...project.metrics.flat(),
+    ...flattenLabeledValues(project.stack),
+    ...flattenLabeledValues(project.metrics),
   ]
     .join(' ')
     .toLowerCase();
+}
+
+function flattenLabeledValues(values: unknown[]): string[] {
+  return values.flatMap((value) => {
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+    if (value && typeof value === 'object') {
+      return Object.values(value).filter((item): item is string => typeof item === 'string');
+    }
+    return [];
+  });
 }
 
 function scoreProject(project: ProjectDetailReadModel, tokenSets: string[][]): number {
@@ -285,6 +335,38 @@ function creditValue(track: ResumeTrack, label: string): string {
 function clampLimit(limit: number | undefined, fallback: number): number {
   if (!Number.isFinite(limit)) return fallback;
   return Math.max(1, Math.min(8, Math.trunc(limit as number)));
+}
+
+function projectResultStatus(
+  returnedCount: number,
+  availableCount: number,
+  fallbackUsed = false,
+): ProjectToolResultStatus {
+  if (returnedCount === 0) return 'empty';
+  if (fallbackUsed) return 'fallback';
+  if (returnedCount < availableCount) return 'partial';
+  return 'complete';
+}
+
+function projectResultMessage(
+  toolName: 'searchProjects' | 'filterProjects' | 'rankProjects',
+  status: ProjectToolResultStatus,
+  query?: string,
+): string {
+  switch (status) {
+    case 'complete':
+      return 'Only name or discuss projects in this returned projects array.';
+    case 'partial':
+      return `This is a partial result. Only name or discuss projects in this returned projects array; re-call ${toolName} to retrieve different projects.`;
+    case 'fallback':
+      return `No exact published project matched${query ? ` "${query}"` : ''}. These are fallback results. Only name or discuss projects in this returned projects array; do not substitute projects from memory or the orientation digest.`;
+    case 'empty':
+      return `No published projects matched this ${toolName} request. Do not name or substitute projects from memory or the orientation digest.`;
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
 }
 
 const SEARCH_STOP_WORDS = new Set([

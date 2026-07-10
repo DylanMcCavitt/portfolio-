@@ -8,6 +8,12 @@ Three layers for continuous answer-quality improvement:
 | Live behavioral | `npm run dm:eval -- --live` | Same fixtures against real gateway models | Model/prompt/tool changes |
 | Live judged | `npm run dm:eval -- --live --judge auto` | Judge scores (grounded / honest / useful, 0-5) | Before switching `DM_MODEL` |
 
+The release gate is stricter than the visual review flags: every deterministic case must pass,
+every judge invocation must succeed, and every live answer must score at least **4/5 for both
+grounding and honesty**. Usefulness remains visible in the report but does not independently
+block the command. A full live judged run is required after the final grounding commit.
+`npm run dm:eval:release` is the canonical release command for that final gate.
+
 Latency stays separate: `npm run dm:bench` (`docs/agents/dm-latency-benchmark.md`).
 
 ## Judges
@@ -34,7 +40,7 @@ self-contained HTML report plus a timestamped JSON snapshot into `.dm-evals/` (g
 
 - **What to fix next** — failed runs triaged by severity (blocker / fix / review) with the
   file to look at, mirroring the improvement-loop classification below. Judge-scored runs
-  that pass deterministic checks but score ≤ 3 on any dimension get a review flag.
+  below 4 for grounding or honesty are release blockers; usefulness ≤ 3 is a review flag.
 - **Since last run** — regressions, improvements, still-failing, and new cases versus the
   previous run in the report dir (or an explicit `--baseline <report.json>`), including
   judge-mean movement.
@@ -89,13 +95,26 @@ npm run dm:bench -- --models anthropic/claude-sonnet-4.6,openai/gpt-4.1 --iterat
 2. Classify: content gap (unpublished fact), retrieval/tool gap (`data-tools.ts` / system prompt), or model gap (prompt / `DM_MODEL`).
 3. Add a failing fixture in `src/lib/dm/eval-fixtures.ts` before fixing.
 4. Fix, then run offline + live (+ judge when changing models) with `--report` so the diff confirms the fix and catches regressions.
-5. Keep `--json-path` / `.dm-evals/` reports as comparison artifacts; commit conclusions to the Linear issue, not the raw files.
+5. Keep `--json-path` / `.dm-evals/` reports as comparison artifacts; attach the final sanitized
+   live judged summary to the GitHub issue/PR without committing raw reports.
 
-Unknown projects (e.g. loom) are a content gap until published and/or given an approved RAG source. The `honesty: unknown project (loom)` fixture pins the honest fallback.
+The eval project source is a sanitized snapshot of the published corpus, not the TypeScript
+catalog. It deliberately contains a published DB-only `loom` record and synthetic draft,
+candidate, and archived controls. This proves DB-only records can be grounded while non-public
+records remain invisible without copying private evidence into the fixture.
 
 ## Fixture expectations
 
 - Assert on blocks and ids, not exact prose.
+- For project-list cases, fail when the answer names a known project that is absent from the
+  same-turn `ProjectFactPacket`. Project facts are retrieved before generation; the model returns
+  only a strict answer plan of packet field and id references. The server validates ownership and
+  renders project prose from those exact facts, so model-authored names, numbers, statuses, and
+  URLs never reach the stream.
+- Invalid plans, cross-project references, and unknown project/metric/link/citation ids must emit
+  the deterministic grounded fallback instead of partial model output.
+- Resume/contact-only turns use deterministic public-info copy plus static blocks and do not call
+  the model, preventing a non-project route from becoming a project-grounding bypass.
 - Include a leak check (`candidate-hidden`) for project-data cases.
 - Provide `modelText` so the offline gate can run the same `expect()`.
 - Tone/concreteness belongs in the judge rubric, not `expect()`.
