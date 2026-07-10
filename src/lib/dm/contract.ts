@@ -56,6 +56,7 @@ export interface ProjectFact {
 export interface ProjectFactPacket {
   operation: 'none' | 'searchProjects' | 'filterProjects' | 'rankProjects';
   status: ProjectFactPacketStatus;
+  responseMode?: 'representative-overview';
   query: string;
   fallbackUsed: boolean;
   projects: ProjectFact[];

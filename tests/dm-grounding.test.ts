@@ -92,6 +92,63 @@ test('conversation follow-ups retrieve a new same-turn packet from recent public
   assert.match(text(events), /slurmlet/i);
 });
 
+test('broad project overviews stay concise even when the model requests every long-form field', async () => {
+  const source = await createEvalProjectSource();
+  const expansiveModel = model(JSON.stringify({
+    claims: ['agentic-trader', 'exit-manager', 'loom', 'slurmlet'].map((projectId) => ({
+      projectId,
+      fields: ['tagline', 'status', 'year', 'activity', 'area', 'about', 'notes'],
+      metricIds: [],
+      linkIds: [],
+      citationIds: [],
+    })),
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'tell me about dylans projects' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: expansiveModel },
+  ));
+  const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+  const answer = text(events);
+
+  assert.equal(done?.facts?.operation, 'rankProjects');
+  assert.equal(done?.facts?.status, 'partial');
+  assert.equal(done?.facts?.responseMode, 'representative-overview');
+  assert.equal(done?.facts?.projects.length, 3);
+  assert.equal(expansiveModel.doStreamCalls.length, 0);
+  assert.match(answer, /three representative projects/i);
+  assert.match(answer, /ask me to go deeper/i);
+  assert.doesNotMatch(answer, /did not find an exact published match|returned fallback records/i);
+  assert.ok(answer.length < 700, `overview should be concise, received ${answer.length} characters`);
+});
+
+for (const qualifiedPrompt of [
+  'Show me Dylan’s projects that use TypeScript',
+  'What are Dylan’s projects built with?',
+  'Tell me about Dylan’s projects and how to contact him',
+  'Give me an overview of Dylan’s projects and resume',
+]) {
+  test(`qualified or mixed project intent bypasses the deterministic overview: ${qualifiedPrompt}`, async () => {
+    const source = await createEvalProjectSource();
+    const responseModel = model(answerPlan('agentic-trader'));
+    const events = await readNdjsonEvents(createDMChatStream(
+      { message: qualifiedPrompt },
+      CONFIG,
+      { db: source.db, projectLoader: source.projectLoader, model: responseModel },
+    ));
+    const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+
+    assert.notEqual(done?.facts?.responseMode, 'representative-overview');
+    assert.equal(responseModel.doStreamCalls.length, 1);
+    if (/contact/i.test(qualifiedPrompt)) {
+      assert.ok(events.some((event) => event.type === 'block' && event.block.kind === 'contact'));
+    }
+    if (/resume/i.test(qualifiedPrompt)) {
+      assert.ok(events.some((event) => event.type === 'block' && event.block.kind === 'resume'));
+    }
+  });
+}
+
 for (const exactCase of [
   { prompt: 'Is Slurmlet live?', id: 'slurmlet' },
   { prompt: 'What is tastytrade-exit-manager?', id: 'exit-manager' },

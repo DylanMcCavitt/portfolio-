@@ -13,6 +13,7 @@ import { createPublicDMDataTools, DMToolError, type PublishedProjectLoader, type
 import { createDMMetricsRecorder, shouldRecordDMMetrics } from './metrics';
 import { AGENT_NAME, type AnswerBlock, type DMChatRequest, type DMStreamEvent, type ProjectFactPacket, type ProjectSummary, type PublicRagCitation, type ToolTraceItem, type ToolTraceMetadata } from './contract';
 import {
+  deterministicProjectOverview,
   deterministicProjectFallback,
   projectPacketBlocks,
   projectPacketPrompt,
@@ -175,6 +176,20 @@ export function createDMChatStream(
           const fallback = deterministicProjectFallback(factPacket);
           emit({ type: 'text-delta', delta: fallback });
           answer.unshift({ kind: 'text', text: fallback });
+          const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
+          for (const block of supplementalBlocks) {
+            answer.push(block);
+            emit({ type: 'block', index: blockIndex, block });
+            blockIndex += 1;
+          }
+          emit({ type: 'done', answer, trace: trace(traceItems), facts: factPacket });
+          return;
+        }
+
+        const projectOverview = deterministicProjectOverview(factPacket);
+        if (projectOverview) {
+          emit({ type: 'text-delta', delta: projectOverview });
+          answer.unshift({ kind: 'text', text: projectOverview });
           const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
           for (const block of supplementalBlocks) {
             answer.push(block);
