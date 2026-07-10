@@ -9,6 +9,7 @@ import {
   type GithubDiscoveryQueryable,
   type GithubRepositorySnapshot,
 } from '@/lib/db/github-discovery';
+import { handleSlackInteraction } from '@/lib/slack/control-plane';
 
 function createTestDb(): Queryable {
   return new PGlite() as Queryable;
@@ -425,7 +426,7 @@ test('a lost concurrent different-revision insert rejects without cross-linking 
   let injectedConflict = false;
   const racingDb: GithubDiscoveryQueryable = {
     async query<Row = unknown>(sql: string, params?: unknown[]) {
-      if (!injectedConflict && sql.includes('WITH existing_revision AS')) {
+      if (!injectedConflict && sql.includes('existing_revision AS') && sql.includes('INSERT INTO project_drafts')) {
         injectedConflict = true;
         throw { code: '23505', constraint: 'project_drafts_active_source_uidx' };
       }
@@ -458,6 +459,144 @@ test('a lost concurrent different-revision insert rejects without cross-linking 
       `SELECT source_revision, lifecycle_state FROM project_drafts`,
     )).rows,
     [{ source_revision: PUBLIC_REPO.sourceRevision, lifecycle_state: 'hidden' }],
+  );
+});
+
+test('a stale same-revision fingerprint cannot attach evidence after a newer restage owns the draft', async () => {
+  const db = await createMigratedDb();
+  const staleRepo = {
+    ...PUBLIC_REPO,
+    description: 'Stale repository description.',
+    readmeMarkdown: '# Stale repository evidence',
+  };
+  const winningRepo = {
+    ...PUBLIC_REPO,
+    description: 'Winning repository description.',
+    readmeMarkdown: '# Winning repository evidence',
+  };
+  let interleaved = false;
+  let winningDraftId: string | null = null;
+  const racingDb: GithubDiscoveryQueryable = {
+    async query<Row = unknown>(sql: string, params?: unknown[]) {
+      if (!interleaved && sql.includes('UPDATE evidence_sources') && sql.includes('SET draft_id = CASE')) {
+        interleaved = true;
+        const winner = await scanGithubRepositoryCandidate(db, {
+          actor: 'test:newer-fingerprint',
+          trigger: 'test',
+          repo: winningRepo,
+        });
+        assert.equal(winner.status, 'qualified');
+        if (winner.status === 'qualified') winningDraftId = winner.draftId;
+      }
+      return db.query<Row>(sql, params);
+    },
+  };
+
+  const stale = await scanGithubRepositoryCandidate(racingDb, {
+    actor: 'test:stale-fingerprint',
+    trigger: 'test',
+    repo: staleRepo,
+  });
+  assert.equal(interleaved, true);
+  assert.equal(stale.status, 'rejected');
+  if (stale.status !== 'rejected') return;
+  assert.equal(stale.code, 'active_revision_conflict');
+  assert.ok(winningDraftId);
+
+  const ownership = await db.query<{
+    candidate_fingerprint: string;
+    draft_fingerprint: string;
+    lifecycle_state: string;
+    proposed_fields: Record<string, unknown>;
+  }>(
+    `SELECT c.content_fingerprint AS candidate_fingerprint,
+            d.content_fingerprint AS draft_fingerprint,
+            d.lifecycle_state,
+            d.proposed_fields
+     FROM project_candidates c
+     JOIN project_drafts d ON d.candidate_id = c.id
+     WHERE d.id = $1`,
+    [winningDraftId],
+  );
+  assert.equal(ownership.rows[0]?.candidate_fingerprint, ownership.rows[0]?.draft_fingerprint);
+  assert.equal(ownership.rows[0]?.lifecycle_state, 'needs_review');
+  assert.equal(ownership.rows[0]?.proposed_fields.summary, winningRepo.description);
+
+  const evidence = await db.query<{
+    draft_id: string | null;
+    extracted_text: string | null;
+    claim_map: { contentFingerprint?: string };
+  }>(`SELECT draft_id, extracted_text, claim_map FROM evidence_sources ORDER BY extracted_text`);
+  assert.equal(evidence.rows.length, 4);
+  const attached = evidence.rows.filter((row) => row.draft_id === winningDraftId);
+  const detached = evidence.rows.filter((row) => row.draft_id === null);
+  assert.equal(attached.length, 2);
+  assert.equal(detached.length, 2);
+  assert.deepEqual(
+    attached.map((row) => row.extracted_text).sort(),
+    [winningRepo.readmeMarkdown, winningRepo.description].sort(),
+  );
+  assert.deepEqual(
+    detached.map((row) => row.extracted_text).sort(),
+    [staleRepo.readmeMarkdown, staleRepo.description].sort(),
+  );
+  assert.ok(attached.every((row) => row.claim_map.contentFingerprint === ownership.rows[0]?.draft_fingerprint));
+  assert.equal(
+    (await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM review_events WHERE action = 'draft_requested'`,
+    )).rows[0]?.count,
+    '1',
+  );
+});
+
+test('a Slack dismissal after candidate upsert prevents a paused scan from creating a draft', async () => {
+  const db = await createMigratedDb();
+  let dismissed = false;
+  let dismissedCandidateId: string | null = null;
+  const racingDb: GithubDiscoveryQueryable = {
+    async query<Row = unknown>(sql: string, params?: unknown[]) {
+      if (!dismissed && sql.includes('INSERT INTO project_drafts') && sql.includes('content_fingerprint')) {
+        dismissed = true;
+        dismissedCandidateId = String(params?.[1]);
+        const result = await handleSlackInteraction(
+          db,
+          { signingSecret: 'test-signing-secret', allowedUserId: 'U_DYLAN' },
+          { userId: 'U_DYLAN', action: 'dismiss', candidateId: dismissedCandidateId },
+        );
+        assert.equal(result.ok, true);
+        assert.equal(result.code, 'candidate_dismissed');
+      }
+      return db.query<Row>(sql, params);
+    },
+  };
+
+  const result = await scanGithubRepositoryCandidate(racingDb, {
+    actor: 'test:paused-before-draft',
+    trigger: 'test',
+    repo: PUBLIC_REPO,
+  });
+  assert.equal(dismissed, true);
+  assert.ok(dismissedCandidateId);
+  assert.equal(result.status, 'rejected');
+  if (result.status !== 'rejected') return;
+  assert.equal(result.code, 'candidate_dismissed');
+  assert.deepEqual(
+    (await db.query<{ lifecycle_state: string }>(
+      `SELECT lifecycle_state FROM project_candidates WHERE id = $1`,
+      [dismissedCandidateId],
+    )).rows,
+    [{ lifecycle_state: 'dismissed' }],
+  );
+  assert.deepEqual(
+    (await db.query<{ drafts: string; evidence: string; draft_events: string; dismiss_events: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM project_drafts
+          WHERE lifecycle_state IN ('hidden', 'needs_review', 'changes_requested', 'approved_for_publish')) AS drafts,
+         (SELECT count(*)::text FROM evidence_sources) AS evidence,
+         (SELECT count(*)::text FROM review_events WHERE action = 'draft_requested') AS draft_events,
+         (SELECT count(*)::text FROM review_events WHERE action = 'candidate_dismissed') AS dismiss_events`,
+    )).rows,
+    [{ drafts: '0', evidence: '0', draft_events: '0', dismiss_events: '1' }],
   );
 });
 

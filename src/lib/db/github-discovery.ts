@@ -73,7 +73,13 @@ type NormalizedRepo = GithubRepositorySnapshot & { fullName: string };
 type CandidateRow = { id: string; lifecycle_state: string };
 type SourceRow = { project_id: string | null };
 type ProjectRow = PublicProjectFields & { id: string; publication_version: string | number };
-type DraftRow = { id: string; lifecycle_state: string; source_revision: string };
+type DraftRow = {
+  id: string;
+  candidate_id: string;
+  lifecycle_state: string;
+  source_revision: string;
+  content_fingerprint: string;
+};
 type InsertEvidenceInput = {
   id: string;
   candidateId: string;
@@ -103,9 +109,18 @@ class InvalidManifestError extends Error {
 class ActiveRevisionConflictError extends Error {
   readonly code = 'active_revision_conflict';
 
-  constructor() {
-    super('another source revision became active during this scan; retry against the current GitHub HEAD');
+  constructor(message = 'another source revision became active during this scan; retry against the current GitHub HEAD') {
+    super(message);
     this.name = 'ActiveRevisionConflictError';
+  }
+}
+
+class CandidateDismissedError extends Error {
+  readonly code = 'candidate_dismissed';
+
+  constructor() {
+    super('candidate for this repository revision was dismissed during the scan');
+    this.name = 'CandidateDismissedError';
   }
 }
 
@@ -284,7 +299,7 @@ export async function scanGithubRepositoryCandidate(
         baseProjectVersion: Number(project?.publication_version ?? 0),
       });
     } catch (error) {
-      if (!(error instanceof ActiveRevisionConflictError)) throw error;
+      if (!(error instanceof ActiveRevisionConflictError) && !(error instanceof CandidateDismissedError)) throw error;
       await completeScanRun(db, scanRunId, {
         scanned: 1,
         candidates: 1,
@@ -313,44 +328,44 @@ export async function scanGithubRepositoryCandidate(
       return { status: 'rejected', scanRunId, code: 'revision_already_processed', reason, audit };
     }
 
-    // Evidence is persisted only after this exact revision owns the returned
-    // draft. A concurrent different-HEAD scan can therefore never attach its
-    // evidence or provenance to the winning revision's draft.
+    // Evidence rows are inserted without a draft link. The final optimistic
+    // claim below checks candidate state plus the exact draft fingerprint and
+    // associates only the winning evidence in the same statement as its event.
     for (const evidence of evidenceInputs) await upsertEvidenceSource(db, evidence);
 
-    await db.query(
-      `UPDATE project_candidates
-       SET lifecycle_state = 'draft_requested', updated_at = now()
-       WHERE id = $1 AND lifecycle_state <> 'dismissed'`,
-      [candidate.id],
-    );
-    await db.query(
-      `UPDATE evidence_sources
-       SET draft_id = CASE WHEN id = ANY($3::text[]) THEN $2 ELSE NULL END
-       WHERE candidate_id = $1
-         AND (draft_id = $2 OR id = ANY($3::text[]))`,
-      [candidate.id, draft.id, evidenceInputs.map((evidence) => evidence.id)],
-    );
-    await db.query(
-      `INSERT INTO review_events (id, draft_id, candidate_id, actor, action, before_state, after_state, notes, metadata)
-       VALUES ($1, $2, $3, $4, 'draft_requested', 'qualified', $5, $6, $7::jsonb)`,
-      [
-        `review_${randomUUID()}`,
-        draft.id,
-        candidate.id,
-        input.actor,
-        draft.lifecycle_state,
-        'GitHub scan staged or revalidated one review-gated revision draft.',
-        JSON.stringify({
+    try {
+      await finalizeRevisionDraft(db, {
+        candidateId: candidate.id,
+        draftId: draft.id,
+        repositoryId: repo.repositoryId,
+        sourceRevision: repo.sourceRevision,
+        contentFingerprint,
+        evidenceIds: evidenceInputs.map((evidence) => evidence.id),
+        actor: input.actor,
+        draftLifecycleState: draft.lifecycle_state,
+        metadata: {
           source: 'github_discovery',
           scanRunId,
           provider: 'github',
           repositoryId: repo.repositoryId,
           sourceRevision: repo.sourceRevision,
           proposalSource: manifestProject ? 'manifest' : 'repository_evidence',
-        }),
-      ],
-    );
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof ActiveRevisionConflictError) && !(error instanceof CandidateDismissedError)) throw error;
+      await completeScanRun(db, scanRunId, {
+        scanned: 1,
+        candidates: 1,
+        drafts: 0,
+        evidence: 0,
+        rejected: 1,
+        reason: error.message,
+        code: error.code,
+        audit,
+      });
+      return { status: 'rejected', scanRunId, code: error.code, reason: error.message, audit };
+    }
 
     await completeScanRun(db, scanRunId, {
       scanned: 1,
@@ -589,7 +604,18 @@ async function persistRevisionDraft(
   try {
     const row = normalizeRows(
       await db.query<DraftRow>(
-        `WITH existing_revision AS (
+        `WITH eligible_candidate AS (
+           SELECT id
+           FROM project_candidates
+           WHERE id = $2
+             AND provider = 'github'
+             AND repository_id = $4
+             AND source_revision = $5
+             AND content_fingerprint = $9
+             AND lifecycle_state <> 'dismissed'
+           FOR UPDATE
+         ),
+         existing_revision AS (
            SELECT id
            FROM project_drafts
            WHERE provider = 'github'
@@ -603,6 +629,7 @@ async function persistRevisionDraft(
              AND repository_id = $4
              AND source_revision <> $5
              AND lifecycle_state IN ('hidden', 'needs_review', 'changes_requested', 'approved_for_publish')
+             AND EXISTS (SELECT 1 FROM eligible_candidate)
              AND NOT EXISTS (SELECT 1 FROM existing_revision)
            RETURNING id
          )
@@ -612,7 +639,8 @@ async function persistRevisionDraft(
            content_fingerprint, reviewed_field_diff, base_project_version
          )
          SELECT $1, $2, $3, $6::jsonb, $7, $8::jsonb, 'hidden', 'github', $4, $5, $9, '[]'::jsonb, $10
-         FROM (SELECT count(*) FROM superseded) AS supersession_gate
+         FROM eligible_candidate
+         CROSS JOIN (SELECT count(*) FROM superseded) AS supersession_gate
          ON CONFLICT (provider, repository_id, source_revision)
            WHERE provider IS NOT NULL AND repository_id IS NOT NULL AND source_revision IS NOT NULL
          DO UPDATE SET
@@ -683,7 +711,7 @@ async function persistRevisionDraft(
                THEN now()
              ELSE project_drafts.updated_at
            END
-         RETURNING id, lifecycle_state, source_revision`,
+         RETURNING id, candidate_id, lifecycle_state, source_revision, content_fingerprint`,
         [
           `draft_${randomUUID()}`,
           input.candidateId,
@@ -698,13 +726,25 @@ async function persistRevisionDraft(
         ],
       ),
     )[0];
-    if (!row) throw new Error('GitHub draft persistence did not return a row.');
+    if (!row) {
+      throw await classifyDraftClaimFailure(db, {
+        candidateId: input.candidateId,
+        repositoryId: input.repositoryId,
+        sourceRevision: input.sourceRevision,
+        contentFingerprint: input.contentFingerprint,
+      });
+    }
     return row;
   } catch (error) {
     if (!isPgErrorCode(error, '23505')) throw error;
+    const claimFailure = await candidateClaimFailure(db, {
+      candidateId: input.candidateId,
+      contentFingerprint: input.contentFingerprint,
+    });
+    if (claimFailure) throw claimFailure;
     const active = normalizeRows(
       await db.query<DraftRow>(
-        `SELECT id, lifecycle_state, source_revision
+        `SELECT id, candidate_id, lifecycle_state, source_revision, content_fingerprint
          FROM project_drafts
          WHERE provider = 'github'
            AND repository_id = $1
@@ -714,10 +754,176 @@ async function persistRevisionDraft(
         [input.repositoryId],
       ),
     )[0];
-    if (active?.source_revision === input.sourceRevision) return active;
+    if (
+      active?.candidate_id === input.candidateId
+      && active.source_revision === input.sourceRevision
+      && active.content_fingerprint === input.contentFingerprint
+    ) return active;
     if (active) throw new ActiveRevisionConflictError();
     throw error;
   }
+}
+
+async function finalizeRevisionDraft(
+  db: GithubDiscoveryQueryable,
+  input: {
+    candidateId: string;
+    draftId: string;
+    repositoryId: string;
+    sourceRevision: string;
+    contentFingerprint: string;
+    evidenceIds: string[];
+    actor: string;
+    draftLifecycleState: string;
+    metadata: JsonRecord;
+  },
+): Promise<void> {
+  const rows = normalizeRows(
+    await db.query<DraftRow>(
+      `WITH eligible_candidate AS (
+         SELECT id
+         FROM project_candidates
+         WHERE id = $1
+           AND provider = 'github'
+           AND repository_id = $3
+           AND source_revision = $4
+           AND content_fingerprint = $5
+           AND lifecycle_state <> 'dismissed'
+         FOR UPDATE
+       ),
+       eligible_draft AS (
+         SELECT id, candidate_id, lifecycle_state, source_revision, content_fingerprint
+         FROM project_drafts
+         WHERE id = $2
+           AND candidate_id = $1
+           AND provider = 'github'
+           AND repository_id = $3
+           AND source_revision = $4
+           AND content_fingerprint = $5
+           AND lifecycle_state IN ('hidden', 'needs_review', 'changes_requested', 'approved_for_publish')
+           AND EXISTS (SELECT 1 FROM eligible_candidate)
+         FOR UPDATE
+       ),
+       expected_evidence AS (
+         SELECT count(*)::integer AS count
+         FROM evidence_sources
+         WHERE candidate_id = $1
+           AND id = ANY($6::text[])
+       ),
+       transitioned_candidate AS (
+         UPDATE project_candidates
+         SET lifecycle_state = 'draft_requested', updated_at = now()
+         WHERE id IN (SELECT id FROM eligible_candidate)
+           AND EXISTS (SELECT 1 FROM eligible_draft)
+           AND (SELECT count FROM expected_evidence) = cardinality($6::text[])
+         RETURNING id
+       ),
+       associated_evidence AS (
+         UPDATE evidence_sources
+         SET draft_id = CASE WHEN id = ANY($6::text[]) THEN $2 ELSE NULL END
+         WHERE candidate_id = $1
+           AND (draft_id = $2 OR id = ANY($6::text[]))
+           AND EXISTS (SELECT 1 FROM transitioned_candidate)
+         RETURNING id, draft_id
+       ),
+       association_gate AS (
+         SELECT count(*)::integer AS count
+         FROM associated_evidence
+         WHERE draft_id = $2
+       ),
+       event AS (
+         INSERT INTO review_events (
+           id, draft_id, candidate_id, actor, action, before_state, after_state, notes, metadata
+         )
+         SELECT $7, d.id, $1, $8, 'draft_requested', 'qualified', $9, $10, $11::jsonb
+         FROM eligible_draft d
+         WHERE EXISTS (SELECT 1 FROM transitioned_candidate)
+           AND (SELECT count FROM association_gate) = cardinality($6::text[])
+         RETURNING id
+       )
+       SELECT d.id, d.candidate_id, d.lifecycle_state, d.source_revision, d.content_fingerprint
+       FROM eligible_draft d
+       WHERE EXISTS (SELECT 1 FROM event)`,
+      [
+        input.candidateId,
+        input.draftId,
+        input.repositoryId,
+        input.sourceRevision,
+        input.contentFingerprint,
+        input.evidenceIds,
+        `review_${randomUUID()}`,
+        input.actor,
+        input.draftLifecycleState,
+        'GitHub scan staged or revalidated one review-gated revision draft.',
+        JSON.stringify(input.metadata),
+      ],
+    ),
+  );
+  if (rows.length > 0) return;
+
+  throw await classifyDraftClaimFailure(db, {
+    candidateId: input.candidateId,
+    repositoryId: input.repositoryId,
+    sourceRevision: input.sourceRevision,
+    contentFingerprint: input.contentFingerprint,
+    draftId: input.draftId,
+  });
+}
+
+async function candidateClaimFailure(
+  db: GithubDiscoveryQueryable,
+  input: { candidateId: string; contentFingerprint: string },
+): Promise<CandidateDismissedError | ActiveRevisionConflictError | null> {
+  const candidate = normalizeRows(
+    await db.query<{ lifecycle_state: string; content_fingerprint: string | null }>(
+      `SELECT lifecycle_state, content_fingerprint
+       FROM project_candidates
+       WHERE id = $1`,
+      [input.candidateId],
+    ),
+  )[0];
+  if (candidate?.lifecycle_state === 'dismissed') return new CandidateDismissedError();
+  if (!candidate || candidate.content_fingerprint !== input.contentFingerprint) {
+    return new ActiveRevisionConflictError(
+      'repository content changed during this scan; retry against the current GitHub snapshot',
+    );
+  }
+  return null;
+}
+
+async function classifyDraftClaimFailure(
+  db: GithubDiscoveryQueryable,
+  input: {
+    candidateId: string;
+    repositoryId: string;
+    sourceRevision: string;
+    contentFingerprint: string;
+    draftId?: string;
+  },
+): Promise<CandidateDismissedError | ActiveRevisionConflictError> {
+  const candidateFailure = await candidateClaimFailure(db, input);
+  if (candidateFailure) return candidateFailure;
+
+  const draft = normalizeRows(
+    await db.query<{ id: string; lifecycle_state: string; content_fingerprint: string }>(
+      `SELECT id, lifecycle_state, content_fingerprint
+       FROM project_drafts
+       WHERE provider = 'github'
+         AND repository_id = $1
+         AND source_revision = $2
+         AND ($3::text IS NULL OR id = $3)
+       LIMIT 1`,
+      [input.repositoryId, input.sourceRevision, input.draftId ?? null],
+    ),
+  )[0];
+  if (!draft || draft.content_fingerprint !== input.contentFingerprint) {
+    return new ActiveRevisionConflictError(
+      'repository content changed before this scan could claim its review draft; retry against the current GitHub snapshot',
+    );
+  }
+  return new ActiveRevisionConflictError(
+    `repository review draft changed to ${draft.lifecycle_state} before this scan could finish`,
+  );
 }
 
 async function fetchPublishedProject(db: GithubDiscoveryQueryable, projectId: string): Promise<ProjectRow | null> {
