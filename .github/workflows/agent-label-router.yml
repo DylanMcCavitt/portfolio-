@@ -37,6 +37,9 @@ jobs:
           ensure_label "agent:claude" "d4a72c" "Route to a Claude worker agent (UI / layout / presentation)."
           ensure_label "agent:glm" "bf3989" "Route to a GLM worker agent (UI / layout / presentation)."
           ensure_label "agent:composer-2.5" "8250df" "Route to a Composer 2.5 worker agent (light, quick tasks only)."
+          ensure_label "ready-for-agent" "0e8a16" "Ready for Codex agent implementation."
+          ensure_label "ready-for-human" "bfdadc" "Ready for Claude or human UI implementation."
+          ensure_label "needs-triage" "c5def5" "Needs maintainer evaluation."
 
           route_issue() {
             number="$1"
