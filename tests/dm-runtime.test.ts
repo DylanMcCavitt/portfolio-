@@ -542,6 +542,78 @@ test('DM route exposes explicit emergency catalog mode without initializing a DB
   assert.ok(!events.some((event) => event.type === 'error'));
 }));
 
+test('DM route keeps real limiter storage while serving the emergency catalog on Vercel', async () => withCatalogEmergency(async () => {
+  const limiterDb = await publishedProjectDb();
+  let createDbCalls = 0;
+  const env = {
+    VERCEL: '1',
+    PUBLIC_PROJECT_SOURCE: 'catalog_emergency',
+    DATABASE_URL: 'postgres://limiter-only.example/test',
+    DM_RATE_LIMIT_HMAC_SECRET: 'c'.repeat(32),
+  };
+  const post = createDMPostHandler({
+    config: TEST_CONFIG,
+    env,
+    createDb() {
+      createDbCalls += 1;
+      return limiterDb as never;
+    },
+    model: throwingModel(),
+  });
+  const response = await post({
+    request: new Request('https://example.test/api/dm/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-vercel-forwarded-for': '203.0.113.8',
+      },
+      body: JSON.stringify({ message: 'Tell me about exit manager.', context: { projectIds: ['exit-manager'] } }),
+    }),
+  } as never);
+  const events = await readNdjson(response.body);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('X-Public-Project-Source'), 'catalog_emergency');
+  assert.equal(createDbCalls, 1);
+  assert.equal(
+    events.find((event) => event.type === 'block' && event.block?.kind === 'projects')?.block?.items?.[0]?.id,
+    'exit-manager',
+  );
+  assert.ok(!events.some((event) => event.type === 'error'));
+}));
+
+test('DM emergency mode maps limiter DB initialization failures to a sanitized 503', async () => withCatalogEmergency(async () => {
+  const model = streamingModel(projectDraft('exit-manager'));
+  const response = await createDMPostHandler({
+    config: TEST_CONFIG,
+    env: {
+      VERCEL: '1',
+      PUBLIC_PROJECT_SOURCE: 'catalog_emergency',
+      DATABASE_URL: 'postgres://limiter-only.example/test',
+      DM_RATE_LIMIT_HMAC_SECRET: 'd'.repeat(32),
+    },
+    createDb() {
+      throw new Error('private limiter connection failure');
+    },
+    model,
+  })({
+    request: new Request('https://example.test/api/dm/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-vercel-forwarded-for': '203.0.113.9',
+      },
+      body: JSON.stringify({ message: 'Tell me about exit manager.' }),
+    }),
+  } as never);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: { code: 'rate_limit_unavailable', message: 'DM is unavailable right now. Please try again shortly.' },
+  });
+  assert.equal(model.doStreamCalls.length, 0);
+}));
+
 test('DM route keeps resume/contact answers available with DB project-read failures', async () => {
   const failingDb = {
     async query() {

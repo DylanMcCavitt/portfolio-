@@ -20,6 +20,7 @@ import {
   resolveTrustedVercelClientAddress,
   type DMClientAddressResolver,
   type DMRateLimitConfig,
+  type DMRateLimitEnv,
 } from '@/lib/dm/rate-limit';
 import { createDMMetricsRecorder } from '@/lib/dm/metrics';
 import type { DMChatContext, DMChatRequest } from '@/lib/dm/contract';
@@ -35,7 +36,7 @@ export const prerender = false;
 
 export interface DMPostHandlerDeps {
   config?: DMRuntimeConfig;
-  env?: DMRuntimeEnv;
+  env?: DMRuntimeEnv & DMRateLimitEnv;
   db?: DMRuntimeDeps['db'];
   model?: DMRuntimeDeps['model'];
   createDb?: (connectionString?: string) => DbClient;
@@ -79,7 +80,15 @@ export function createDMPostHandler(deps: DMPostHandlerDeps = {}): APIRoute {
         const limiterConfig = deps.rateLimitConfig ?? readDMRateLimitConfig(deps.env);
         const address = (deps.clientAddressResolver ?? ((input) => resolveTrustedVercelClientAddress(input, deps.env)))(request);
         if (!address) throw new DMRateLimitConfigError('Trusted DM client address is unavailable.');
-        const limiter = await consumeDMRateLimit(db, limiterConfig, address, deps.now?.() ?? Date.now());
+        let limiterDb = db;
+        if (!deps.db && projectSourceMode === 'catalog_emergency') {
+          try {
+            limiterDb = projectReadDb((deps.createDb ?? createDbClient)(getDatabaseUrl(deps.env)));
+          } catch {
+            throw new DMRateLimitStorageError('DM rate limiter storage is unavailable.');
+          }
+        }
+        const limiter = await consumeDMRateLimit(limiterDb, limiterConfig, address, deps.now?.() ?? Date.now());
         if (!limiter.allowed) {
           const metrics = createDMMetricsRecorder({ traceId });
           metrics.finish('rate_limited');

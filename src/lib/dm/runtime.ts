@@ -59,6 +59,7 @@ export interface DMRuntimeDeps {
   signal?: AbortSignal;
   traceId?: string;
   budgets?: DMBudgetConfig;
+  metricsLogger?: (line: string) => void;
 }
 
 export class DMRuntimeConfigError extends Error {
@@ -123,7 +124,11 @@ export function createDMChatStream(
   const model = deps.model ?? createDMModel(config);
   const budgets = deps.budgets ?? readDMBudgetConfig(deps.env);
   const abort = composeAbortSignal(deps.signal, budgets.deadlineMs);
-  const metrics = createDMMetricsRecorder({ enabled: shouldRecordDMMetrics(), traceId: deps.traceId });
+  const metrics = createDMMetricsRecorder({
+    enabled: shouldRecordDMMetrics(),
+    traceId: deps.traceId,
+    logger: deps.metricsLogger,
+  });
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -286,6 +291,11 @@ export function createDMChatStream(
         metrics.setUsage(usage?.inputTokens ?? null, usage?.outputTokens ?? null);
 
         const validated = validateProjectDraft(finalText.trim(), factPacket);
+        metrics.setSource(
+          sourceModeFromPacket(factPacket, normalizedRequest),
+          factPacket.projects.length + factPacket.citations.length,
+          factPacket.fallbackUsed || !validated.ok,
+        );
         const emittedText = validated.ok
           ? renderProjectDraft(validated.draft, factPacket)
           : deterministicProjectFallback(factPacket);
