@@ -95,3 +95,7 @@ non-obvious cloud caveats.
   them. Approved-source vector search additionally needs `OPENAI_API_KEY`. The
   chat UI degrades to a "DM is unavailable right now" notice. Never commit these
   values.
+
+## Code review
+
+Follow [`code_review.md`](code_review.md) for repository-wide review guidance.
