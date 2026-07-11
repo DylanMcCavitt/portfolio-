@@ -104,6 +104,7 @@ field for an existing project and every public field for a first publication.
 - `GITHUB_DISCOVERY_TOKEN` (preferred) or `GITHUB_TOKEN` for authenticated Slack snapshot fetches
 - `OUTBOX_WORKER_TOKEN` (at least 32 bytes)
 - `DM_READINESS_TOKEN` (at least 32 bytes; distinct from the worker token)
+- `DM_RATE_LIMIT_HMAC_SECRET` (at least 32 bytes)
 - `SITE_REFRESH_DEPLOY_HOOK_URL`
 - `OPENAI_API_KEY` and optional `RAG_VECTOR_STORE_ID` for RAG jobs
 

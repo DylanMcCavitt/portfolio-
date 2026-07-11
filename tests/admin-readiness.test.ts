@@ -8,6 +8,13 @@ import {
 
 const TOKEN = 'r'.repeat(32);
 const RAG_KEY = 'readiness-test-openai-key';
+const LIMITER_SECRET = 'l'.repeat(32);
+const READY_ENV = {
+  DM_READINESS_TOKEN: TOKEN,
+  OPENAI_API_KEY: RAG_KEY,
+  DM_RATE_LIMIT_HMAC_SECRET: LIMITER_SECRET,
+  PUBLIC_PROJECT_SOURCE: 'database',
+} as const;
 
 type ReadinessBody = {
   status: 'ready' | 'degraded';
@@ -67,7 +74,7 @@ test('readiness keeps missing configuration and missing or invalid bearer auth a
 
   const configured = createAdminReadinessGetHandler({
     db,
-    env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+    env: READY_ENV,
   });
   const missingAuth = await configured({ request: readinessRequest() } as never);
   const invalidAuth = await configured({ request: readinessRequest('wrong-token') } as never);
@@ -87,7 +94,7 @@ test('readiness keeps missing configuration and missing or invalid bearer auth a
 test('readiness returns the stable healthy shape only for a reachable DB, configured RAG, and bounded outbox', async () => {
   const GET = createAdminReadinessGetHandler({
     db: countDb({ queued: 2, processing: 1 }),
-    env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+    env: READY_ENV,
   });
 
   const response = await GET({ request: readinessRequest(TOKEN) } as never);
@@ -110,27 +117,27 @@ test('readiness degrades for a missing RAG key, an excessive active backlog, and
   const cases = [
     {
       name: 'RAG key missing',
-      env: { DM_READINESS_TOKEN: TOKEN },
+      env: { ...READY_ENV, OPENAI_API_KEY: undefined },
       counts: {},
-      expected: { configured: false, backlogExceeded: false },
+      expected: { configured: false, backlogExceeded: true, dbOk: false },
     },
     {
       name: 'backlog threshold reached',
-      env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+      env: READY_ENV,
       counts: { queued: OUTBOX_BACKLOG_THRESHOLD },
-      expected: { configured: true, backlogExceeded: true },
+      expected: { configured: true, backlogExceeded: true, dbOk: true },
     },
     {
       name: 'dead job',
-      env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+      env: READY_ENV,
       counts: { dead: 1 },
-      expected: { configured: true, backlogExceeded: true },
+      expected: { configured: true, backlogExceeded: true, dbOk: true },
     },
     {
       name: 'overdue job',
-      env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+      env: READY_ENV,
       counts: { overdue: 1 },
-      expected: { configured: true, backlogExceeded: true },
+      expected: { configured: true, backlogExceeded: true, dbOk: true },
     },
   ] as const;
 
@@ -140,10 +147,45 @@ test('readiness degrades for a missing RAG key, an excessive active backlog, and
     const json = await body(response);
     assert.equal(response.status, 503, entry.name);
     assert.equal(json.status, 'degraded', entry.name);
-    assert.equal(json.checks.db.ok, true, entry.name);
+    assert.equal(json.checks.db.ok, entry.expected.dbOk, entry.name);
     assert.equal(json.checks.rag.configured, entry.expected.configured, entry.name);
     assert.equal(json.checks.outbox.backlogExceeded, entry.expected.backlogExceeded, entry.name);
   }
+});
+
+test('readiness fails closed before database work when deployed DM configuration is incomplete or unsafe', async () => {
+  let calls = 0;
+  const db: ReadinessQueryable = {
+    async query() {
+      calls += 1;
+      throw new Error('database must not be reached for invalid DM configuration');
+    },
+  };
+  const cases = [
+    { name: 'missing limiter secret', env: { ...READY_ENV, DM_RATE_LIMIT_HMAC_SECRET: undefined } },
+    { name: 'short limiter secret', env: { ...READY_ENV, DM_RATE_LIMIT_HMAC_SECRET: 'short' } },
+    { name: 'invalid limiter key version', env: { ...READY_ENV, DM_RATE_LIMIT_KEY_VERSION: 'invalid key version' } },
+    { name: 'invalid limiter maximum', env: { ...READY_ENV, DM_RATE_LIMIT_MAX_REQUESTS: '101' } },
+    { name: 'invalid limiter window', env: { ...READY_ENV, DM_RATE_LIMIT_WINDOW_SECONDS: '59' } },
+    { name: 'invalid DM budget', env: { ...READY_ENV, DM_MAX_STEPS: '9' } },
+    { name: 'missing DM provider and RAG key', env: { ...READY_ENV, OPENAI_API_KEY: undefined } },
+    { name: 'catalog emergency source', env: { ...READY_ENV, PUBLIC_PROJECT_SOURCE: 'catalog_emergency' } },
+    { name: 'invalid project source', env: { ...READY_ENV, PUBLIC_PROJECT_SOURCE: 'catalog_development' } },
+  ] as const;
+
+  for (const entry of cases) {
+    const GET = createAdminReadinessGetHandler({ db, env: entry.env });
+    const response = await GET({ request: readinessRequest(TOKEN) } as never);
+    const json = await body(response);
+    assert.equal(response.status, 503, entry.name);
+    assert.equal(json.status, 'degraded', entry.name);
+    assert.equal(json.checks.db.ok, false, entry.name);
+    assert.equal(json.checks.outbox.backlogExceeded, true, entry.name);
+    if (entry.env.DM_RATE_LIMIT_HMAC_SECRET) {
+      assert.equal(JSON.stringify(json).includes(entry.env.DM_RATE_LIMIT_HMAC_SECRET), false, entry.name);
+    }
+  }
+  assert.equal(calls, 0);
 });
 
 test('readiness enforces its total query deadline and never serializes errors or configured values', async () => {
@@ -164,7 +206,7 @@ test('readiness enforces its total query deadline and never serializes errors or
   };
   const timeout = createAdminReadinessGetHandler({
     db: hanging,
-    env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: RAG_KEY },
+    env: READY_ENV,
     deadlineMs: 1,
   });
   const timeoutResponse = await timeout({ request: readinessRequest(TOKEN) } as never);
@@ -180,7 +222,7 @@ test('readiness enforces its total query deadline and never serializes errors or
   };
   const redacted = createAdminReadinessGetHandler({
     db: failing,
-    env: { DM_READINESS_TOKEN: TOKEN, OPENAI_API_KEY: `${noLeakSentinel}_OPENAI` },
+    env: { ...READY_ENV, OPENAI_API_KEY: `${noLeakSentinel}_OPENAI` },
   });
   const response = await redacted({ request: readinessRequest(TOKEN) } as never);
   const serialized = JSON.stringify(await body(response));

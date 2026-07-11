@@ -35,10 +35,12 @@ redacted fields `status`, `checks.db.ok`,
 `checks.outbox.{queued,processing,dead,overdue,backlogExceeded}`, and
 `checks.rag.configured`.
 
-It returns `200` only when the database query completes within 2000 ms,
-`OPENAI_API_KEY` is configured for public RAG, and the outbox gate is healthy.
-`RAG_VECTOR_STORE_ID` remains optional because vector-store identities are
-persisted per approved source.
+It returns `200` only when the deployed DM configuration is valid (runtime,
+budget, rate-limit, and `database` public-project source), the database query
+completes within 2000 ms, `OPENAI_API_KEY` is configured for public RAG, and
+the outbox gate is healthy. `DM_RATE_LIMIT_HMAC_SECRET` must be at least 32
+UTF-8 bytes. `RAG_VECTOR_STORE_ID` remains optional because vector-store
+identities are persisted per approved source.
 
 The documented outbox gate is deliberately conservative:
 

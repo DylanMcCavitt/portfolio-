@@ -6,6 +6,9 @@ import {
   type DatabaseEnv,
   type DbClient,
 } from '@/lib/db/client';
+import { readDMBudgetConfig, readDMRuntimeConfig, type DMRuntimeEnv } from '@/lib/dm/runtime';
+import { readDMRateLimitConfig, type DMRateLimitEnv } from '@/lib/dm/rate-limit';
+import { resolvePublicProjectSourceMode } from '@/lib/public-projects';
 
 export const prerender = false;
 
@@ -23,10 +26,9 @@ const OUTBOX_READINESS_SQL = `SELECT
   ) AS overdue
 FROM publish_outbox`;
 
-export interface AdminReadinessEnv extends DatabaseEnv {
+export type AdminReadinessEnv = DatabaseEnv & DMRuntimeEnv & DMRateLimitEnv & {
   DM_READINESS_TOKEN?: string;
-  OPENAI_API_KEY?: string;
-}
+};
 
 export interface ReadinessQueryable {
   query<Row = unknown>(
@@ -77,6 +79,10 @@ export function createAdminReadinessGetHandler(deps: AdminReadinessHandlerDeps =
     }
 
     const ragConfigured = Boolean(env.OPENAI_API_KEY?.trim());
+    if (!hasDeployedDMConfiguration(env)) {
+      return readinessJson(503, readinessPayload('degraded', false, ragConfigured, unavailableOutbox()));
+    }
+
     let db: ReadinessQueryable;
     try {
       db = deps.db ?? dbFromClient(deps.createClient?.() ?? createDbClient(getDatabaseUrl(env)));
@@ -103,6 +109,24 @@ export function createAdminReadinessGetHandler(deps: AdminReadinessHandlerDeps =
       return readinessJson(503, readinessPayload('degraded', false, ragConfigured, unavailableOutbox()));
     }
   };
+}
+
+/**
+ * Mirror every configuration parser used by the deployed DM route without
+ * constructing a model, contacting a provider, or exposing configuration
+ * details. Releases must use the published database source, not the explicit
+ * catalog emergency rollback mode.
+ */
+function hasDeployedDMConfiguration(env: AdminReadinessEnv): boolean {
+  try {
+    if (resolvePublicProjectSourceMode({ env }) !== 'database') return false;
+    readDMRuntimeConfig(env);
+    readDMBudgetConfig(env);
+    readDMRateLimitConfig(env);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function boundedDeadline(value: number | undefined): number {
