@@ -366,8 +366,12 @@ function resolveNamedProjectIds(request: DMChatRequest, projects: ProjectSummary
 }
 
 function isExplicitProjectCoreference(value: string): boolean {
-  if (requestedProjectArtifactLimit(value) !== null) return false;
-  return /\b(?:it|its|that|this|one|they|their|them|these|those|ones)\b|\b(?:what|how)\s+about\b/.test(value);
+  const withoutArtifactDirective = normalizeIdentityText(value)
+    .replace(/\b(?:show|render|open) (?:only )?(?:one|1|a single) (?:project )?(?:card|artifact)\b/g, '')
+    .replace(/\b(?:only one|a single) project\b/g, '')
+    .replace(/\b(?:without|no) (?:showing |rendering |opening )?(?:any )?(?:project )?(?:cards|artifacts)\b/g, '')
+    .replace(/\b(?:do not|don t) (?:show|render|open) (?:any )?(?:project )?(?:cards|artifacts)\b/g, '');
+  return /\b(?:it|its|that|this|one|they|their|them|these|those|ones)\b|\b(?:what|how)\s+about\b/.test(withoutArtifactDirective);
 }
 
 function isPluralProjectCoreference(value: string): boolean {

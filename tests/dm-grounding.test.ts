@@ -145,10 +145,19 @@ test('fresh non-project and project-history reset turns do not retrieve or emit 
 
 test('post-model enforcement limits selected-subset and zero project artifacts', async () => {
   const source = await createEvalProjectSource();
+  const overSelectedPlan = JSON.stringify({
+    claims: ['agentic-trader', 'exit-manager', 'slurmlet'].map((projectId) => ({
+      projectId,
+      fields: ['summary', 'status'],
+      metricIds: [],
+      linkIds: [],
+      citationIds: [],
+    })),
+  });
   const selected = await readNdjsonEvents(createDMChatStream(
     { message: 'Tell me about Dylan’s projects, but show only one project card.' },
     CONFIG,
-    { db: source.db, projectLoader: source.projectLoader, model: model(answerPlan('agentic-trader')) },
+    { db: source.db, projectLoader: source.projectLoader, model: model(overSelectedPlan) },
   ));
   const selectedDone = selected.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
   const selectedBlock = selected.find((event) => event.type === 'block' && event.block.kind === 'projects');
@@ -158,7 +167,7 @@ test('post-model enforcement limits selected-subset and zero project artifacts',
   const excluded = await readNdjsonEvents(createDMChatStream(
     { message: 'Tell me about Dylan’s projects without showing any project cards.' },
     CONFIG,
-    { db: source.db, projectLoader: source.projectLoader, model: model(JSON.stringify({ claims: [] })) },
+    { db: source.db, projectLoader: source.projectLoader, model: model(overSelectedPlan) },
   ));
   assert.equal(excluded.filter((event) => event.type === 'block' && event.block.kind === 'projects').length, 0);
   assert.match(text(excluded), /could not select a published project/i);
@@ -176,6 +185,20 @@ test('explicit project coreference is enforced after a zero-selection model plan
   assert.deepEqual(block?.type === 'block' && block.block.kind === 'projects' ? block.block.ids : [], ['loom']);
   assert.match(text(events), /does not include a detailed architecture breakdown/i);
   assert.match(text(events), /loom/i);
+});
+
+test('artifact count directives do not suppress an independent project coreference', async () => {
+  const events = await runRequest({
+    message: 'What about its architecture? Show only one project card.',
+    conversation: [
+      { role: 'user', content: 'Tell me about Loom.' },
+      { role: 'assistant', content: 'Loom is a published project.' },
+    ],
+  }, answerPlan('loom'));
+  const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+  const block = events.find((event) => event.type === 'block' && event.block.kind === 'projects');
+  assert.deepEqual(done?.facts?.projects.map((project) => project.id), ['loom']);
+  assert.deepEqual(block?.type === 'block' && block.block.kind === 'projects' ? block.block.ids : [], ['loom']);
 });
 
 test('broad project questions are synthesized from the current request instead of a fixed overview', async () => {
