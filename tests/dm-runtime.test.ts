@@ -346,6 +346,43 @@ test('DM stream resolves requested RAG evidence before project synthesis', async
   assert.ok(events.some((event) => event.type === 'done'));
 });
 
+test('deep-dive evidence collapses repeated chunks to one entry per selected citation id', async () => {
+  const db = await publishedProjectDb();
+  await insertIndexedPublicRagSource(db);
+  const model = streamingModel(projectDraft('agentic-trader', { citationIds: ['rag-public'] }));
+  const chunk = (score: number, text: string) => ({
+    ragSourceId: 'rag-public',
+    projectId: 'agentic-trader',
+    fileId: 'file_public',
+    filename: 'approved-readme.md',
+    score,
+    text,
+  });
+
+  const events = await readNdjson(
+    createDMChatStream({ message: 'Use source evidence about the agentic-trader trading automation project.' }, TEST_CONFIG, {
+      db,
+      model,
+      ragSearch: async () => ({
+        citations: [
+          chunk(0.93, 'Top-ranked approved chunk with enough detail to support a recruiter-facing answer.'),
+          chunk(0.71, 'Second chunk of the same approved source that must not expand the evidence block.'),
+          chunk(0.55, 'Third chunk of the same approved source that must not expand the evidence block.'),
+        ],
+      }),
+    }),
+  );
+
+  const evidenceBlocks = events.filter((event) => event.type === 'block' && event.block?.kind === 'evidence');
+  assert.equal(evidenceBlocks.length, 1);
+  assert.equal(evidenceBlocks[0]?.block?.ragSources?.length, 1);
+  assert.equal(evidenceBlocks[0]?.block?.ragSources?.[0]?.ragSourceId, 'rag-public');
+  assert.equal(evidenceBlocks[0]?.block?.ragSources?.[0]?.score, 0.93);
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /Top-ranked approved chunk/);
+  assert.doesNotMatch(answerText, /must not expand the evidence block/);
+});
+
 test('DM stream accepts project context ids from the explicit emergency catalog source', async () => withCatalogEmergency(async () => {
   const db = await publishedProjectDb();
   const events = await readNdjson(
