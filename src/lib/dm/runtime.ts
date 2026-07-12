@@ -411,9 +411,12 @@ async function deterministicBlocks(
   const zeroCardProjectRequest = requestExcludesProjectArtifacts(request.message);
   const asksResume = request.context?.resumeTrackIds?.length || (zeroCardProjectRequest
     ? /\b(?:resume|résumé|cv|experience|education|employment|degree)\b/.test(normalized)
+      || /\b(?:summarize|share|show|read|tell me about|what about)\b.{0,30}\b(?:his|dylan(?:'s|’s)) (?:career|background)\b/.test(normalized)
     : matchesAny(normalized, ['resume', 'experience', 'background', 'education', 'career']));
   const asksContact = zeroCardProjectRequest
     ? /\b(?:contact|email|reach|phone|location|availability|open to work)\b/.test(normalized)
+      || /\b(?:whether|is)\b.{0,20}\b(?:he|dylan)\b.{0,20}\b(?:available|open to opportunities)\b/.test(normalized)
+      || /\b(?:how|where)\b.{0,20}\b(?:contact|reach|hire)\b.{0,12}\b(?:dylan|him)\b/.test(normalized)
     : matchesAny(normalized, ['contact', 'email', 'reach', 'hire', 'available', 'opportunities']);
 
   if (!hasResume && asksResume) {
