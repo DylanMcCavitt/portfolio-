@@ -20,6 +20,7 @@ import {
   projectAnswerDisclosure,
   projectDraftBlocks,
   projectPacketPrompt,
+  requestExcludesProjectArtifacts,
   renderProjectDraft,
   retrieveProjectFactPacket,
   validateProjectDraft,
@@ -407,13 +408,20 @@ async function deterministicBlocks(
   const normalized = request.message.toLowerCase();
   const hasResume = existing.some((block) => block.kind === 'resume');
   const hasContact = existing.some((block) => block.kind === 'contact');
+  const zeroCardProjectRequest = requestExcludesProjectArtifacts(request.message);
+  const asksResume = request.context?.resumeTrackIds?.length || (zeroCardProjectRequest
+    ? /\b(?:resume|résumé|cv|experience|education|employment|degree)\b/.test(normalized)
+    : matchesAny(normalized, ['resume', 'experience', 'background', 'education', 'career']));
+  const asksContact = zeroCardProjectRequest
+    ? /\b(?:contact|email|reach|phone|location|availability|open to work)\b/.test(normalized)
+    : matchesAny(normalized, ['contact', 'email', 'reach', 'hire', 'available', 'opportunities']);
 
-  if (!hasResume && (request.context?.resumeTrackIds?.length || matchesAny(normalized, ['resume', 'experience', 'background', 'education', 'career']))) {
+  if (!hasResume && asksResume) {
     const trackIds = request.context?.resumeTrackIds ?? ['now', 'kroll', 'stevens', 'bella-era'];
     blocks.push({ kind: 'resume', trackIds });
   }
 
-  if (!hasContact && matchesAny(normalized, ['contact', 'email', 'reach', 'hire', 'available', 'opportunities'])) {
+  if (!hasContact && asksContact) {
     blocks.push(toAnswerContact(tools.getContact()));
   }
 

@@ -115,7 +115,7 @@ export function projectDraftBlocks(
   draft: ProjectDraft,
   packet: ProjectFactPacket,
 ): AnswerBlock[] {
-  if (requestedProjectArtifactLimit(request.message) === 0) return [];
+  if (requestExcludesProjectArtifacts(request.message)) return [];
   const selectedIds = new Set(draft.claims.map((claim) => claim.projectId));
   const items = packet.projects.filter((project) => selectedIds.has(project.id)).map(factSummary);
   if (items.length === 0) return [];
@@ -205,6 +205,10 @@ export function enforceProjectDraft(
   }
 
   return artifactLimit === 1 ? { claims: draft.claims.slice(0, 1) } : draft;
+}
+
+export function requestExcludesProjectArtifacts(value: string): boolean {
+  return requestedProjectArtifactLimit(value) === 0;
 }
 
 function budgetProjectDraft(draft: ProjectDraft, packet: ProjectFactPacket): ProjectDraft {

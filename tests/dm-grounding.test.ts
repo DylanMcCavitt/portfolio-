@@ -183,6 +183,21 @@ test('post-model enforcement limits selected-subset and answers over-selection w
   assert.match(text(excluded), /exit-manager/i);
   assert.match(text(excluded), /slurmlet/i);
   assert.doesNotMatch(text(excluded), /could not select a published project/i);
+
+  const misleadingKeyword = await readNdjsonEvents(createDMChatStream(
+    {
+      message: 'Which of these projects best helps teams hire without showing any project cards?',
+      context: { projectIds: ['agentic-trader', 'exit-manager', 'slurmlet'] },
+    },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: model(overSelectedPlan) },
+  ));
+  assert.deepEqual(
+    misleadingKeyword.filter((event) => event.type === 'block').map((event) => event.block.kind),
+    [],
+  );
+  assert.match(text(misleadingKeyword), /agentic-trader/i);
+  assert.doesNotMatch(text(misleadingKeyword), /could not select a published project/i);
 });
 
 test('explicit project coreference is enforced after a zero-selection model plan', async () => {
