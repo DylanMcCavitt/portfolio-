@@ -116,8 +116,13 @@ export function projectDraftBlocks(draft: ProjectDraft, packet: ProjectFactPacke
   if (items.length === 0) return [];
   const ids = items.map((project) => project.id);
   const blocks: AnswerBlock[] = [{ kind: 'projects', ids, items }];
-  const citationIds = new Set(draft.claims.flatMap((claim) => claim.citationIds));
-  const citations = packet.citations.filter((citation) => citationIds.has(citation.ragSourceId) && selectedIds.has(citation.projectId));
+  const citationById = topCitationById(packet);
+  const citations = draft.claims.flatMap((claim) =>
+    claim.citationIds.flatMap((id) => {
+      const citation = citationById.get(id);
+      return citation && citation.projectId === claim.projectId ? [citation] : [];
+    }),
+  );
   if (citations.length > 0) {
     blocks.push({ kind: 'evidence', ragSources: citations });
   }
@@ -148,7 +153,7 @@ export function validateProjectDraft(
   const packetProjects = new Map(packet.projects.map((project) => [project.id, project]));
   const metrics = new Map(packet.projects.flatMap((project) => project.metrics.map((metric) => [metric.id, metric] as const)));
   const links = new Map(packet.projects.flatMap((project) => project.links.map((link) => [link.id, link] as const)));
-  const citations = new Map(packet.citations.map((citation) => [citation.ragSourceId, citation] as const));
+  const citations = topCitationById(packet);
   const claimedProjects = new Set<string>();
 
   for (const claim of draft.claims) {
@@ -201,6 +206,18 @@ function uniqueProjectFields(fields: ProjectFactField[]): ProjectFactField[] {
   return [...new Set(fields)];
 }
 
+// Retrieval can return several chunks of one source under the same
+// ragSourceId. Prose and the evidence block must stay within the per-claim
+// citation-id budget, so every citation id resolves to exactly one chunk —
+// the first, which retrieval ranks highest.
+function topCitationById(packet: ProjectFactPacket): Map<string, PublicRagCitation> {
+  const byId = new Map<string, PublicRagCitation>();
+  for (const citation of packet.citations) {
+    if (!byId.has(citation.ragSourceId)) byId.set(citation.ragSourceId, citation);
+  }
+  return byId;
+}
+
 export function renderProjectDraft(draft: ProjectDraft, packet: ProjectFactPacket): string {
   if (draft.claims.length === 0) {
     return 'I could not select a published project that directly answers that question.';
@@ -208,7 +225,7 @@ export function renderProjectDraft(draft: ProjectDraft, packet: ProjectFactPacke
   const projects = new Map(packet.projects.map((project) => [project.id, project]));
   const metrics = new Map(packet.projects.flatMap((project) => project.metrics.map((metric) => [metric.id, metric] as const)));
   const links = new Map(packet.projects.flatMap((project) => project.links.map((link) => [link.id, link] as const)));
-  const citations = new Map(packet.citations.map((citation) => [citation.ragSourceId, citation] as const));
+  const citations = topCitationById(packet);
   const paragraphs = draft.claims.flatMap((claim) => {
     const project = projects.get(claim.projectId);
     if (!project) return [];
