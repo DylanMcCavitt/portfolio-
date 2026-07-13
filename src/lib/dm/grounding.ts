@@ -784,10 +784,10 @@ function isDistinctiveEvidenceAtom(atom: ProjectEvidenceAtom): boolean {
 
 function requiresDistinctiveEvidence(question: string, packet: ProjectFactPacket): boolean {
   const normalized = normalizeIdentityText(question);
-  if (latestTurnEvidenceKindGroups(question).length > 0) return false;
   if (/\b(?:evidence|proof|concrete|distinctive|specific fact|example)\b/.test(normalized)) {
     return true;
   }
+  if (latestTurnEvidenceKindGroups(question).length > 0) return false;
   if (packet.responseMode !== 'single-project') return false;
   if (/^(?:what is|what s)\b/.test(normalized)) return false;
   if (!/^(?:tell me(?: more)? about|give me an overview of|show me)\b/.test(normalized)) return false;
