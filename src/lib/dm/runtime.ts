@@ -217,6 +217,10 @@ export function createDMChatStream(
         let rejectionReason = '';
         for (let attempt = 0; attempt < 2; attempt += 1) {
           let finalText = '';
+          const attemptOutput: Array<
+            | { type: 'tool'; item: ToolTraceItem }
+            | { type: 'block'; block: AnswerBlock }
+          > = [];
           const retryInstruction = attempt === 0 ? '' : [
             'Your previous grounded answer draft was rejected by the server.',
             `Reason: ${rejectionReason}`,
@@ -238,14 +242,11 @@ export function createDMChatStream(
               if (delta) finalText += delta;
             } else if (part.type === 'tool-call') {
               const item = traceItem(part.toolName, toolSummary(part.toolName));
-              traceItems.push(item);
-              emit({ type: 'tool', name: item.tool, summary: item.label });
+              attemptOutput.push({ type: 'tool', item });
             } else if (part.type === 'tool-result') {
               const blocks = blocksFromToolResult(part.output);
               for (const block of blocks) {
-                answer.push(block);
-                emit({ type: 'block', index: blockIndex, block });
-                blockIndex += 1;
+                attemptOutput.push({ type: 'block', block });
               }
             } else if (part.type === 'tool-error') {
               throw new DMAgentError('tool_failed', `DM tool failed: ${part.toolName}`, safeToolError(part.error));
@@ -262,7 +263,19 @@ export function createDMChatStream(
           }
           metrics.setUsage(usage?.inputTokens ?? null, usage?.outputTokens ?? null);
           validated = validateProjectDraft(finalText.trim(), factPacket, normalizedRequest.message);
-          if (validated.ok) break;
+          if (validated.ok) {
+            for (const output of attemptOutput) {
+              if (output.type === 'tool') {
+                traceItems.push(output.item);
+                emit({ type: 'tool', name: output.item.tool, summary: output.item.label });
+              } else {
+                answer.push(output.block);
+                emit({ type: 'block', index: blockIndex, block: output.block });
+                blockIndex += 1;
+              }
+            }
+            break;
+          }
           rejectionReason = validated.reason;
         }
         metrics.setSource(

@@ -167,6 +167,27 @@ test('diff surfaces judge score movement on still-failing cases', () => {
   assert.match(entry?.detail ?? '', /judge mean \+2\.0/);
 });
 
+test('diffs legacy three-dimension judge baselines without producing NaN', () => {
+  const baseline = report([
+    run({
+      passed: false,
+      failure: 'stuck',
+      judge: { grounded: 2, honest: 2, useful: 2, notes: '' } as DMEvalRunRecord['judge'],
+    }),
+  ]);
+  const current = report([
+    run({
+      passed: false,
+      failure: 'stuck',
+      judge: { grounded: 4, honest: 4, useful: 4, relevant: 4, direct: 4, continuity: 4, nonRepetition: 4, notes: '' },
+    }),
+  ]);
+
+  const [entry] = diffEvalReports(baseline, current);
+  assert.doesNotMatch(entry?.detail ?? '', /NaN/);
+  assert.match(entry?.detail ?? '', /judge mean \+2\.0/);
+});
+
 test('html report escapes model output and contains triage, diff, and matrix sections', () => {
   const current = report(
     [

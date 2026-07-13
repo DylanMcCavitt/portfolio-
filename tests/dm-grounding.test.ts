@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { simulateReadableStream } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
-import type { DMChatRequest, DMStreamEvent } from '@/lib/dm/contract';
+import type { DMChatRequest, DMStreamEvent, ProjectFactPacket } from '@/lib/dm/contract';
 import { createEvalProjectSource, readNdjsonEvents } from '@/lib/dm/eval-fixtures';
+import { validateProjectDraft } from '@/lib/dm/grounding';
 import { buildCliJudgePrompt } from '@/lib/dm/judge';
 import { createDMChatStream } from '@/lib/dm/runtime';
 
@@ -614,6 +615,69 @@ test('empty answer claims retry once and fail honestly over an answerable packet
   assert.match(text(events), /could not produce a validated answer/i);
 });
 
+test('rejected retry attempts do not leak tool traces, blocks, or block indexes', async () => {
+  const source = await createEvalProjectSource();
+  let attempt = 0;
+  const retryingModel = new MockLanguageModelV4({
+    doStream: async () => {
+      attempt += 1;
+      const draft = attempt === 1
+        ? JSON.stringify({ claims: [], artifactProjectIds: [] })
+        : answerPlan('loom');
+      return {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start' as const, warnings: [] },
+            { type: 'response-metadata' as const, id: `retry-${attempt}`, modelId: 'grounding-test', timestamp: new Date(0) },
+            ...(attempt === 1 ? [
+              {
+                type: 'tool-call' as const,
+                toolCallId: 'rejected-contact',
+                toolName: 'getContact',
+                input: '{}',
+                providerExecuted: true,
+                dynamic: true,
+              },
+              {
+                type: 'tool-result' as const,
+                toolCallId: 'rejected-contact',
+                toolName: 'getContact',
+                result: { kind: 'contact', email: 'rejected@example.com' },
+                dynamic: true,
+              },
+            ] : []),
+            { type: 'text-start' as const, id: 'text-1' },
+            { type: 'text-delta' as const, id: 'text-1', delta: draft },
+            { type: 'text-end' as const, id: 'text-1' },
+            {
+              type: 'finish' as const,
+              finishReason: { unified: 'stop' as const, raw: 'stop' },
+              usage: {
+                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 8, text: 8, reasoning: undefined },
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Tell me about Loom.' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: retryingModel },
+  ));
+
+  assert.equal(retryingModel.doStreamCalls.length, 2);
+  assert.equal(events.filter((event) => event.type === 'tool').length, 0);
+  assert.equal(events.filter((event) => event.type === 'block' && event.block.kind === 'contact').length, 0);
+  const projectBlock = events.find((event) => event.type === 'block' && event.block.kind === 'projects');
+  assert.equal(projectBlock?.type === 'block' ? projectBlock.index : null, 0);
+  const done = events.find((event): event is Extract<DMStreamEvent, { type: 'done' }> => event.type === 'done');
+  assert.deepEqual(done?.trace.items, []);
+  assert.deepEqual(done?.answer.map((block) => block.kind), ['text', 'projects']);
+});
+
 test('duplicate natural-language claims render only once', async () => {
   const duplicate = JSON.stringify({
     claims: [
@@ -624,6 +688,111 @@ test('duplicate natural-language claims render only once', async () => {
   });
   const events = await run('Tell me about Loom.', duplicate);
   assert.equal(text(events).match(/Loom proves reviewed portfolio publishing\./g)?.length, 1);
+});
+
+test('claim budgeting preserves identical prose with distinct evidence references', () => {
+  const packet = validationPacket([
+    evidence('loom:summary', 'loom', 'summary', 'Reviewed publishing.'),
+    evidence('slurmlet:summary', 'slurmlet', 'summary', 'Repeatable compute workflows.'),
+  ], ['loom', 'slurmlet']);
+  const validated = validateProjectDraft(JSON.stringify({
+    claims: [
+      { text: 'This project has published evidence.', evidenceIds: ['loom:identity', 'loom:summary'] },
+      { text: 'This project has published evidence.', evidenceIds: ['slurmlet:summary', 'slurmlet:identity'] },
+    ],
+    artifactProjectIds: ['loom', 'slurmlet'],
+  }), packet);
+
+  assert.equal(validated.ok, true);
+  if (validated.ok) assert.equal(validated.draft.claims.length, 2);
+});
+
+test('claim budgeting still removes true duplicates regardless of evidence-id order', () => {
+  const packet = validationPacket([
+    evidence('loom:summary', 'loom', 'summary', 'Reviewed publishing.'),
+  ]);
+  const validated = validateProjectDraft(JSON.stringify({
+    claims: [
+      { text: 'Loom has published evidence.', evidenceIds: ['loom:identity', 'loom:summary'] },
+      { text: 'Loom has published evidence.', evidenceIds: ['loom:summary', 'loom:identity'] },
+    ],
+    artifactProjectIds: ['loom'],
+  }), packet);
+
+  assert.equal(validated.ok, true);
+  if (validated.ok) assert.equal(validated.draft.claims.length, 1);
+});
+
+test('numeric and URL grounding rejects substring-only support', () => {
+  const packet = validationPacket([
+    evidence('loom:metric:year', 'loom', 'metric', '2024', false),
+    evidence('loom:metric:decimal', 'loom', 'metric', '2.0', false),
+    evidence('loom:link:long', 'loom', 'link', 'https://example.com/report/2024', false),
+  ]);
+  for (const [claim, evidenceId] of [
+    ['Loom uses 2 workers.', 'loom:metric:year'],
+    ['Loom uses 2 workers.', 'loom:metric:decimal'],
+    ['Read https://example.com/report.', 'loom:link:long'],
+  ]) {
+    const validated = validateProjectDraft(JSON.stringify({
+      claims: [{ text: claim, evidenceIds: ['loom:identity', evidenceId] }],
+      artifactProjectIds: [],
+    }), packet);
+    assert.equal(validated.ok, false, `${claim} must not be grounded by ${evidenceId}`);
+  }
+});
+
+test('numeric and URL grounding accepts exact decimals, percentages, units, times, and URLs', () => {
+  const packet = validationPacket([
+    evidence('loom:metric:decimal', 'loom', 'metric', '2.0', false),
+    evidence('loom:metric:percent', 'loom', 'metric', '99.9%', false),
+    evidence('loom:metric:unit', 'loom', 'metric', '64 KiB', false),
+    evidence('loom:metric:time', 'loom', 'metric', '15:45 ET', false),
+    evidence('loom:link:exact', 'loom', 'link', 'https://example.com/report', false),
+  ]);
+  const validated = validateProjectDraft(JSON.stringify({
+    claims: [{
+      text: 'Loom reports 2.0, 99.9%, 64 KiB, and 15:45 ET at https://example.com/report.',
+      evidenceIds: [
+        'loom:identity',
+        'loom:metric:decimal',
+        'loom:metric:percent',
+        'loom:metric:unit',
+        'loom:metric:time',
+        'loom:link:exact',
+      ],
+    }],
+    artifactProjectIds: [],
+  }), packet);
+
+  assert.equal(validated.ok, true);
+});
+
+test('sensitive atom matching distinguishes exact tokens from containing values', () => {
+  const packet = validationPacket([
+    evidence('loom:metric:100', 'loom', 'metric', '100'),
+    evidence('loom:metric:1000', 'loom', 'metric', '1000'),
+    evidence('loom:notes:risk', 'loom', 'notes', 'risk'),
+    evidence('loom:summary', 'loom', 'summary', 'Published processing summary.', false),
+  ]);
+
+  const falseAcceptance = validateProjectDraft(JSON.stringify({
+    claims: [{ text: 'Loom processed 100 items.', evidenceIds: ['loom:identity', 'loom:metric:1000'] }],
+    artifactProjectIds: [],
+  }), packet);
+  assert.equal(falseAcceptance.ok, false);
+
+  const falseRejection = validateProjectDraft(JSON.stringify({
+    claims: [{ text: 'Loom supports riskier reviews.', evidenceIds: ['loom:identity', 'loom:summary'] }],
+    artifactProjectIds: [],
+  }), packet);
+  assert.equal(falseRejection.ok, true);
+
+  const exactSupport = validateProjectDraft(JSON.stringify({
+    claims: [{ text: 'Loom processed 100 items.', evidenceIds: ['loom:identity', 'loom:metric:100'] }],
+    artifactProjectIds: [],
+  }), packet);
+  assert.equal(exactSupport.ok, true);
 });
 
 async function run(prompt: string, modelText: string): Promise<DMStreamEvent[]> {
@@ -698,6 +867,54 @@ function model(modelText: string): MockLanguageModelV4 {
       }),
     }),
   });
+}
+
+function validationPacket(
+  extraEvidence: ProjectFactPacket['evidence'],
+  projectIds = ['loom'],
+): ProjectFactPacket {
+  const projects: ProjectFactPacket['projects'] = projectIds.map((id) => ({
+    id,
+    slug: id,
+    title: id === 'loom' ? 'Loom' : 'Slurmlet',
+    href: `/projects/${id}`,
+    area: 'experiments',
+    status: ['done', 'Published'],
+    year: 2026,
+    activity: 'Published',
+    tagline: 'Published project.',
+    summary: 'Published project evidence.',
+    about: [],
+    notes: [],
+    wip: false,
+    money: false,
+    stack: [],
+    metrics: [],
+    links: [],
+  }));
+  return {
+    operation: 'rankProjects',
+    status: 'complete',
+    responseMode: projectIds.length === 1 ? 'single-project' : undefined,
+    query: 'Tell me about these projects.',
+    fallbackUsed: false,
+    projects,
+    citations: [],
+    evidence: [
+      ...projectIds.map((id) => evidence(`${id}:identity`, id, 'identity', id === 'loom' ? 'Loom' : 'Slurmlet')),
+      ...extraEvidence,
+    ],
+  };
+}
+
+function evidence(
+  id: string,
+  projectId: string,
+  kind: ProjectFactPacket['evidence'][number]['kind'],
+  value: string,
+  sensitive = true,
+): ProjectFactPacket['evidence'][number] {
+  return { id, projectId, kind, label: id, value, sensitive };
 }
 
 function text(events: DMStreamEvent[]): string {

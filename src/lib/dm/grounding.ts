@@ -229,8 +229,9 @@ function budgetProjectDraft(draft: ProjectDraft, packet: ProjectFactPacket): Pro
   const seen = new Set<string>();
   const claims = draft.claims.filter((claim) => {
     const normalized = claim.text.replace(/\s+/g, ' ').trim().toLowerCase();
-    if (seen.has(normalized)) return false;
-    seen.add(normalized);
+    const key = JSON.stringify([normalized, [...claim.evidenceIds].sort()]);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   }).slice(0, deepDive ? 5 : 3);
   return {
@@ -513,15 +514,19 @@ function unsupportedSensitiveAtom(
   all: ProjectEvidenceAtom[],
 ): ProjectEvidenceAtom | null {
   const referencedIds = new Set(referenced.map((entry) => entry.id));
-  const normalized = text.toLowerCase();
-  const referencedSupport = referenced.map((entry) => `${entry.label} ${entry.value}`.toLowerCase()).join(' ');
+  const claimTokens = comparableTokens(text);
   for (const candidate of all) {
     if (!candidate.sensitive || referencedIds.has(candidate.id)) continue;
     if (candidate.kind === 'identity' && referenced.some((entry) => entry.projectId === candidate.projectId && entry.kind === 'identity')) continue;
     const value = candidate.value.trim().toLowerCase();
     if (['public', 'live', 'done', 'shipped', 'published', 'today'].includes(value)) continue;
-    if (value.length >= 3 && referencedSupport.includes(value)) continue;
-    if (value.length >= 3 && normalized.includes(value)) return candidate;
+    const valueTokens = comparableTokens(value);
+    if (value.length < 3 || valueTokens.length === 0) continue;
+    if (referenced.some((entry) => containsTokenSequence(
+      comparableTokens(`${entry.label} ${entry.value}`),
+      valueTokens,
+    ))) continue;
+    if (containsTokenSequence(claimTokens, valueTokens)) return candidate;
   }
   return null;
 }
@@ -540,9 +545,32 @@ function isPureIdentityClaim(text: string, referenced: ProjectEvidenceAtom[]): b
 }
 
 function numbersAndUrlsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]): boolean {
-  const support = referenced.map((entry) => `${entry.label} ${entry.value}`).join(' ').toLowerCase();
-  const tokens = text.match(/https?:\/\/\S+|\b\d+(?:[.:]\d+)*(?:\s*(?:kib|kb|mb|gb|%|et))?\b/gi) ?? [];
-  return tokens.every((token) => support.includes(token.replace(/[),.;]+$/, '').toLowerCase()));
+  const support = new Set(referenced.flatMap((entry) =>
+    numericAndUrlTokens(`${entry.label} ${entry.value}`)));
+  return numericAndUrlTokens(text).every((token) => support.has(token));
+}
+
+const COMPARABLE_TOKEN_PATTERN = /https?:\/\/[^\s]+|(?<![\p{L}\p{N}-])\d+(?:[.,:]\d+)*(?:\s*(?:kib|kb|mb|gb|%|et))?(?![\p{L}\p{N}-])|[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/giu;
+
+function comparableTokens(value: string): string[] {
+  return (value.match(COMPARABLE_TOKEN_PATTERN) ?? []).map((token) => {
+    const normalized = token.toLowerCase();
+    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+      return normalized.replace(/[),.;!?]+$/, '');
+    }
+    return normalized.replace(/\s+(?=%|kib|kb|mb|gb|et$)/, '');
+  });
+}
+
+function numericAndUrlTokens(value: string): string[] {
+  return comparableTokens(value).filter((token) =>
+    token.startsWith('http://') || token.startsWith('https://') || /^\d/.test(token));
+}
+
+function containsTokenSequence(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  return haystack.some((_, start) =>
+    needle.every((token, offset) => haystack[start + offset] === token));
 }
 
 function statusClaimsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]): boolean {

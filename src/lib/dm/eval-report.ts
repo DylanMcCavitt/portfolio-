@@ -216,15 +216,31 @@ function judgeDelta(before: DMEvalRunRecord, after: DMEvalRunRecord): string {
   const beforeJudge = before.judge;
   const afterJudge = after.judge;
   if (!beforeJudge || !afterJudge || 'error' in beforeJudge || 'error' in afterJudge) return '';
-  const beforeMean = judgeMean(beforeJudge);
-  const afterMean = judgeMean(afterJudge);
+  const dimensions = JUDGE_DIMENSIONS.filter((dimension) =>
+    Number.isFinite(beforeJudge[dimension]) && Number.isFinite(afterJudge[dimension]));
+  if (dimensions.length === 0) return '';
+  const beforeMean = judgeMean(beforeJudge, dimensions);
+  const afterMean = judgeMean(afterJudge, dimensions);
   const delta = afterMean - beforeMean;
   if (Math.abs(delta) < 0.05) return '';
   return ` (judge mean ${delta > 0 ? '+' : ''}${delta.toFixed(1)})`;
 }
 
-function judgeMean(judge: DMEvalJudgeScore): number {
-  return (judge.grounded + judge.honest + judge.useful + judge.relevant + judge.direct + judge.continuity + judge.nonRepetition) / 7;
+const JUDGE_DIMENSIONS = [
+  'grounded',
+  'honest',
+  'useful',
+  'relevant',
+  'direct',
+  'continuity',
+  'nonRepetition',
+] as const;
+
+function judgeMean(
+  judge: DMEvalJudgeScore,
+  dimensions: readonly (typeof JUDGE_DIMENSIONS)[number][],
+): number {
+  return dimensions.reduce((sum, dimension) => sum + judge[dimension], 0) / dimensions.length;
 }
 
 export interface DMEvalReportHtmlInput {
