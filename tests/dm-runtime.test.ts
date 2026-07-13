@@ -313,10 +313,39 @@ test('DM stream retrieves DB-backed project facts before synthesis and hides pro
   assert.equal(projectBlock?.block?.items?.[0]?.href, '/projects/agentic-trader');
 }));
 
-test('DM stream resolves requested RAG evidence before project synthesis', async () => {
+test('RAG citations cannot replace an applicable distinctive project fact', async () => {
   const db = await publishedProjectDb();
   await insertIndexedPublicRagSource(db);
-  const model = streamingModel(projectDraft('agentic-trader', { citationIds: ['rag-public'] }));
+  const model = streamingModel(JSON.stringify({
+    claims: [{
+      text: 'agentic-trader is a public project. Status: Dry-run. Approved public RAG source text with enough detail to support a recruiter-facing answer.',
+      evidenceIds: ['agentic-trader:identity', 'agentic-trader:status', 'citation:rag-public'],
+    }],
+    artifactProjectIds: ['agentic-trader'],
+  }));
+
+  const events = await readNdjson(
+    createDMChatStream({ message: 'Use source evidence about the agentic-trader trading automation project.' }, TEST_CONFIG, {
+      db,
+      model,
+      ragSearch: createMockRagSearch(),
+    }),
+  );
+
+  assert.equal(model.doStreamCalls.length, 2, 'citation-only synthesis should retry exactly once');
+  const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
+  assert.match(answerText, /could not produce a validated answer/i);
+  assert.equal(events.filter((event) => event.type === 'block' && event.block?.kind === 'evidence').length, 0);
+});
+
+test('DM stream resolves requested RAG evidence and a distinctive fact before project synthesis', async () => {
+  const db = await publishedProjectDb();
+  await insertIndexedPublicRagSource(db);
+  const model = streamingModel(projectDraft('agentic-trader', {
+    citationIds: ['rag-public'],
+    metricIds: ['agentic-trader:metric:0'],
+    metricText: 'It has a scheduled Claude Code session at 15:45 ET.',
+  }));
 
   const events = await readNdjson(
     createDMChatStream({ message: 'Use source evidence about the agentic-trader trading automation project.' }, TEST_CONFIG, {
@@ -342,6 +371,7 @@ test('DM stream resolves requested RAG evidence before project synthesis', async
   const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
   assert.match(answerText, /agentic-trader/i);
   assert.match(answerText, /Approved public RAG source text/);
+  assert.match(answerText, /scheduled Claude Code session at 15:45 ET/);
   assert.ok(!events.some((event) => event.type === 'block' && /not strong enough to cite/.test(String(event.block?.text))));
   assert.ok(events.some((event) => event.type === 'done'));
 });
@@ -349,7 +379,12 @@ test('DM stream resolves requested RAG evidence before project synthesis', async
 test('deep-dive evidence collapses repeated chunks to one entry per selected citation id', async () => {
   const db = await publishedProjectDb();
   await insertIndexedPublicRagSource(db);
-  const model = streamingModel(projectDraft('agentic-trader', { citationIds: ['rag-public'] }));
+  const model = streamingModel(projectDraft('agentic-trader', {
+    citationIds: ['rag-public'],
+    metricIds: ['agentic-trader:metric:0'],
+    metricText: 'It has a scheduled Claude Code session at 15:45 ET.',
+    citationText: 'Top-ranked approved chunk with enough detail to support a recruiter-facing answer.',
+  }));
   const chunk = (score: number, text: string) => ({
     ragSourceId: 'rag-public',
     projectId: 'agentic-trader',
@@ -379,7 +414,7 @@ test('deep-dive evidence collapses repeated chunks to one entry per selected cit
   assert.equal(evidenceBlocks[0]?.block?.ragSources?.[0]?.ragSourceId, 'rag-public');
   assert.equal(evidenceBlocks[0]?.block?.ragSources?.[0]?.score, 0.93);
   const answerText = events.filter((event) => event.type === 'text-delta').map((event) => event.delta).join('');
-  assert.match(answerText, /Approved public RAG source text/);
+  assert.match(answerText, /Top-ranked approved chunk/);
   assert.doesNotMatch(answerText, /must not expand the evidence block/);
 });
 
@@ -391,7 +426,11 @@ test('excluding project cards does not suppress selected approved-source citatio
     TEST_CONFIG,
     {
       db,
-      model: streamingModel(projectDraft('agentic-trader', { citationIds: ['rag-public'] })),
+      model: streamingModel(projectDraft('agentic-trader', {
+        citationIds: ['rag-public'],
+        metricIds: ['agentic-trader:metric:0'],
+        metricText: 'It has a scheduled Claude Code session at 15:45 ET.',
+      })),
       ragSearch: createMockRagSearch(),
     },
   ));
@@ -1095,7 +1134,13 @@ function throwingModel(): MockLanguageModelV4 {
 
 function projectDraft(
   projectId: string,
-  references: { metricIds?: string[]; linkIds?: string[]; citationIds?: string[] } = {},
+  references: {
+    metricIds?: string[];
+    linkIds?: string[];
+    citationIds?: string[];
+    metricText?: string;
+    citationText?: string;
+  } = {},
 ): string {
   const citationIds = references.citationIds ?? [];
   const identity: Record<string, { title: string; status: string }> = {
@@ -1105,7 +1150,7 @@ function projectDraft(
   const project = identity[projectId] ?? { title: projectId, status: 'Published' };
   return JSON.stringify({
     claims: [{
-      text: `${project.title} is a public project. Status: ${project.status}.${citationIds.length > 0 ? ' Approved public RAG source text with enough detail to support a recruiter-facing answer.' : ''}`,
+      text: `${project.title} is a public project. Status: ${project.status}.${references.metricText ? ` ${references.metricText}` : ''}${citationIds.length > 0 ? ` ${references.citationText ?? 'Approved public RAG source text with enough detail to support a recruiter-facing answer.'}` : ''}`,
       evidenceIds: [
         `${projectId}:identity`,
         `${projectId}:status`,

@@ -65,6 +65,98 @@ test('valid metric and link claims require and accept same-turn structured ids',
   assert.match(text(events), /https:\/\/github\.com\/DylanMcCavitt\/agentic-trader/);
 });
 
+test('an exact URL-only link claim does not require the link label', async () => {
+  const events = await run('Where can I find the repo for agentic-trader?', answerPlan('agentic-trader', {
+    evidenceIds: ['agentic-trader:link:0'],
+    text: 'Repository: https://github.com/DylanMcCavitt/agentic-trader',
+  }));
+
+  assert.equal(text(events), 'Repository: https://github.com/DylanMcCavitt/agentic-trader');
+});
+
+test('selected metric evidence cannot smuggle uncited or paraphrased execution semantics', async () => {
+  const source = await createEvalProjectSource();
+  const unsupportedJoins = [
+    'agentic-trader has a scheduled review session at 15:45 ET, so the workflow is reviewed before execution.',
+    'agentic-trader has a scheduled review session at 15:45 ET, so it initiates trading.',
+  ];
+
+  for (const unsupportedJoin of unsupportedJoins) {
+    const overclaim = model(JSON.stringify({
+      claims: [{
+        text: unsupportedJoin,
+        evidenceIds: ['agentic-trader:identity', 'agentic-trader:summary', 'agentic-trader:metric:0'],
+      }],
+      artifactProjectIds: ['agentic-trader'],
+    }));
+    const events = await readNdjsonEvents(createDMChatStream(
+      { message: 'Show practical AI-assisted workflow evidence.' },
+      CONFIG,
+      { db: source.db, projectLoader: source.projectLoader, model: overclaim },
+    ));
+
+    assert.equal(overclaim.doStreamCalls.length, 2, 'the semantic overclaim should retry exactly once');
+    assert.match(text(events), /could not produce a validated answer/i);
+    assert.doesNotMatch(text(events), /reviewed before execution|initiates trading/i);
+  }
+});
+
+test('exact cited metric and prose atoms are not falsely rejected', async () => {
+  const source = await createEvalProjectSource();
+  const exactControl = model(JSON.stringify({
+    claims: [{
+      text: 'agentic-trader has a scheduled review session at 15:45 ET. The workflow is reviewed before execution.',
+      evidenceIds: ['agentic-trader:identity', 'agentic-trader:metric:0', 'agentic-trader:notes:0'],
+    }],
+    artifactProjectIds: ['agentic-trader'],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Show practical AI-assisted workflow evidence.' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: exactControl },
+  ));
+
+  assert.equal(exactControl.doStreamCalls.length, 1);
+  assert.match(text(events), /scheduled review session at 15:45 ET/i);
+  assert.match(text(events), /reviewed before execution/i);
+  assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+});
+
+test('single-project synthesis requires an applicable distinctive metric or public link', async () => {
+  const source = await createEvalProjectSource();
+  const vague = model(JSON.stringify({
+    claims: [{
+      text: 'Loom proves that a reviewed project can become visible without entering the static catalog.',
+      evidenceIds: ['loom:identity', 'loom:summary'],
+    }],
+    artifactProjectIds: ['loom'],
+  }));
+  const vagueEvents = await readNdjsonEvents(createDMChatStream(
+    { message: "Tell me about Dylan's loom project." },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: vague },
+  ));
+  assert.equal(vague.doStreamCalls.length, 2, 'vague synthesis should retry exactly once');
+  assert.match(text(vagueEvents), /could not produce a validated answer/i);
+
+  const exact = model(JSON.stringify({
+    claims: [{
+      text: 'Loom proves that a reviewed project can become visible without entering the static catalog. Its manifest size ceiling is 64 KiB. View repo: https://github.com/DylanMcCavitt/loom.',
+      evidenceIds: ['loom:identity', 'loom:summary', 'loom:metric:0', 'loom:link:0'],
+    }],
+    artifactProjectIds: ['loom'],
+  }));
+  const exactEvents = await readNdjsonEvents(createDMChatStream(
+    { message: "Tell me about Dylan's loom project." },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: exact },
+  ));
+  assert.equal(exact.doStreamCalls.length, 1);
+  assert.match(text(exactEvents), /manifest size ceiling is 64 KiB/i);
+  assert.match(text(exactEvents), /https:\/\/github\.com\/DylanMcCavitt\/loom/);
+  assert.doesNotMatch(text(exactEvents), /could not produce a validated answer/i);
+});
+
 test('project alias questions cannot bypass the fact packet or prose validator', async () => {
   const malicious = JSON.stringify({
     claims: [{ text: 'Slurmlet processed 9999 jobs using a secret unpublished backend.', evidenceIds: ['slurmlet:identity'] }],
@@ -181,7 +273,7 @@ test('compound latest-turn questions require evidence for every requested aspect
   const complete = model(JSON.stringify({
     claims: [
       { text: 'Evalgate is built with TypeScript.', evidenceIds: ['evalgate:identity', 'evalgate:stack:0'] },
-      { text: "Evalgate's project page is available.", evidenceIds: ['evalgate:identity', 'evalgate:href'] },
+      { text: 'Evalgate project page: /projects/evalgate.', evidenceIds: ['evalgate:identity', 'evalgate:href'] },
     ],
     artifactProjectIds: [],
   }));
@@ -194,7 +286,7 @@ test('compound latest-turn questions require evidence for every requested aspect
   }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: complete }));
   assert.equal(complete.doStreamCalls.length, 1);
   assert.match(text(completeEvents), /TypeScript/);
-  assert.match(text(completeEvents), /project page is available/);
+  assert.match(text(completeEvents), /project page: \/projects\/evalgate/);
 });
 
 test('comparison claims must name every project whose evidence they cite', async () => {
@@ -617,13 +709,13 @@ test('empty answer claims retry once and fail honestly over an answerable packet
 test('duplicate natural-language claims render only once', async () => {
   const duplicate = JSON.stringify({
     claims: [
-      { text: 'Loom proves reviewed portfolio publishing.', evidenceIds: ['loom:identity', 'loom:summary'] },
-      { text: 'Loom proves reviewed portfolio publishing.', evidenceIds: ['loom:identity', 'loom:summary'] },
+      { text: 'Loom proves that a reviewed project can become visible without entering the static catalog.', evidenceIds: ['loom:identity', 'loom:summary'] },
+      { text: 'Loom proves that a reviewed project can become visible without entering the static catalog.', evidenceIds: ['loom:identity', 'loom:summary'] },
     ],
     artifactProjectIds: ['loom'],
   });
-  const events = await run('Tell me about Loom.', duplicate);
-  assert.equal(text(events).match(/Loom proves reviewed portfolio publishing\./g)?.length, 1);
+  const events = await run('What is Loom?', duplicate);
+  assert.equal(text(events).match(/Loom proves that a reviewed project can become visible without entering the static catalog\./g)?.length, 1);
 });
 
 async function run(prompt: string, modelText: string): Promise<DMStreamEvent[]> {
@@ -662,8 +754,8 @@ function answerPlan(projectId: string, references: {
       evidenceIds: ['slurmlet:identity', 'slurmlet:tagline', 'slurmlet:status'],
     },
     loom: {
-      text: 'loom proves reviewed portfolio publishing from a Published DB record.',
-      evidenceIds: ['loom:identity', 'loom:summary', 'loom:stack:0'],
+      text: 'Loom proves that a reviewed project can become visible without entering the static catalog. Its manifest size ceiling is 64 KiB. View repo: https://github.com/DylanMcCavitt/loom.',
+      evidenceIds: ['loom:identity', 'loom:summary', 'loom:metric:0', 'loom:link:0'],
     },
   };
   const selected = defaults[projectId] ?? { text: `${projectId} is a published project.`, evidenceIds: [`${projectId}:identity`] };

@@ -62,7 +62,7 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
       ],
     },
     answerPlan: {
-      claims: [{ text: 'Loom proves reviewed publishing through its public record.', evidenceIds: ['loom:identity', 'loom:summary'] }],
+      claims: [{ text: 'Loom proves that a reviewed project can become visible without entering the static catalog.', evidenceIds: ['loom:identity', 'loom:summary'] }],
       artifactProjectIds: [],
     },
     expect(events) {
@@ -215,11 +215,20 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
     name: 'quality: AI workflow evidence resolves through synonym search',
     prompt: 'Show practical AI-assisted workflow evidence.',
     modelText: 'Dylan has AI-assisted workflow evidence in the public portfolio.',
+    answerPlan: {
+      claims: [{
+        text: 'agentic-trader is reviewable trading automation with a deterministic gate, with a scheduled review session at 15:45 ET.',
+        evidenceIds: ['agentic-trader:identity', 'agentic-trader:tagline', 'agentic-trader:metric:0'],
+      }],
+      artifactProjectIds: ['agentic-trader'],
+    },
     expect(events) {
       const projectBlock = events.find((event) => event.type === 'block' && event.block.kind === 'projects');
       if (!projectBlock || projectBlock.type !== 'block' || projectBlock.block.kind !== 'projects') return 'missing projects answer block';
       const aiProjectIds = ['agentic-trader', 'slurmlet', 'evalgate', 'bellas-beads'];
       if (!projectBlock.block.ids.some((id) => aiProjectIds.includes(id))) return 'expected an AI/automation project in answer block';
+      const text = answerText(events);
+      if (!/scheduled review session at 15:45 ET/i.test(text)) return 'AI workflow answer omitted its selected distinctive metric';
       return null;
     },
   },
@@ -227,6 +236,13 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
     name: 'grounding: newly published DB-only Loom is available without leaking controls',
     prompt: "Tell me about Dylan's loom project.",
     modelText: 'Loom proves the reviewed publish path from a DB-only public record.',
+    answerPlan: {
+      claims: [{
+        text: 'Loom proves that a reviewed project can become visible without entering the static catalog. Its manifest size ceiling is 64 KiB. View repo: https://github.com/DylanMcCavitt/loom.',
+        evidenceIds: ['loom:identity', 'loom:summary', 'loom:metric:0', 'loom:link:0'],
+      }],
+      artifactProjectIds: ['loom'],
+    },
     expect(events) {
       if (JSON.stringify(events).includes('candidate-hidden')) return 'leaked candidate data';
       const projectBlocks = events.filter(
@@ -235,6 +251,9 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
       if (!projectBlocks.some(
         (event) => event.type === 'block' && event.block.kind === 'projects' && event.block.ids.includes('loom'),
       )) return 'expected published DB-only loom project';
+      const text = answerText(events);
+      if (!/manifest size ceiling is 64 KiB/i.test(text)) return 'Loom answer omitted its selected distinctive metric';
+      if (!text.includes('https://github.com/DylanMcCavitt/loom')) return 'Loom answer omitted its selected public repository link';
       if (!events.some((event) => event.type === 'done')) return 'stream did not complete';
       return null;
     },
