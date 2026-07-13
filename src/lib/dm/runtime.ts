@@ -186,7 +186,7 @@ export function createDMChatStream(
         }
 
         if (factPacket.operation === 'none') {
-          const responseText = deterministicPublicInfoAnswer(normalizedRequest);
+          const responseText = await deterministicPublicInfoAnswer(normalizedRequest, tools);
           emit({ type: 'text-delta', delta: responseText });
           answer.unshift({ kind: 'text', text: responseText });
           const supplementalBlocks = await deterministicBlocks(normalizedRequest, tools, answer);
@@ -443,15 +443,45 @@ async function deterministicBlocks(
   return blocks;
 }
 
-function deterministicPublicInfoAnswer(request: DMChatRequest): string {
+async function deterministicPublicInfoAnswer(request: DMChatRequest, tools: PublicDMDataTools): Promise<string> {
   const normalized = request.message.toLowerCase();
   const asksResume = Boolean(request.context?.resumeTrackIds?.length) ||
     matchesAny(normalized, ['resume', 'résumé', 'cv', 'experience', 'background', 'education', 'career', 'employment', 'degree']);
   const asksContact = matchesAny(normalized, ['contact', 'email', 'reach', 'phone', 'location', 'hire', 'available', 'availability', 'opportunities', 'open to work']);
-  if (asksResume && asksContact) return "Dylan's public resume highlights and contact details are included below.";
-  if (asksResume) return "Dylan's public resume highlights are included below.";
-  if (asksContact) return "Dylan's public contact details are included below.";
-  return "Ask me about Dylan's published projects, public resume, or contact details.";
+  if (!asksResume && !asksContact) return "Ask me about Dylan's published projects, public resume, or contact details.";
+
+  const requestedTrackIds = request.context?.resumeTrackIds;
+  const resume = asksResume
+    ? await tools.readResume(requestedTrackIds?.length ? { trackIds: requestedTrackIds } : {})
+    : { tracks: [] };
+  const resumeTracks = requestedTrackIds?.length
+    ? resume.tracks
+    : ['now', 'stevens', 'kroll']
+      .map((id) => resume.tracks.find((track) => track.id === id))
+      .filter((track): track is (typeof resume.tracks)[number] => Boolean(track));
+  const current = resumeTracks.find((track) => track.id === 'now');
+  const education = resumeTracks.find((track) => track.id === 'stevens');
+  const cyberRisk = resumeTracks.find((track) => track.id === 'kroll');
+  const resumeHighlights = requestedTrackIds?.length
+    ? resumeTracks.map((track) => [
+      `${track.title}: ${track.role} (${track.when}).`,
+      track.about[0] ?? '',
+    ].filter(Boolean).join(' ')).join(' ')
+    : [
+      current?.about[0] ?? (current ? `${current.title}: ${current.role}.` : ''),
+      education ? `${education.role} at ${education.title}.` : '',
+      cyberRisk ? `${cyberRisk.role} at ${cyberRisk.title}.` : '',
+    ].filter(Boolean).join(' ');
+  const contact = asksContact ? tools.getContact() : null;
+  const contactDetails = contact
+    ? `Recruiters can reach Dylan at ${contact.email}.`
+    : '';
+
+  if (asksResume && asksContact) {
+    return `Dylan's public resume highlights and contact details: ${resumeHighlights} ${contactDetails}`.trim();
+  }
+  if (asksResume) return `Dylan's public resume highlights: ${resumeHighlights}`.trim();
+  return `Dylan's public contact details: ${contactDetails} He is ${contact?.status ?? 'open to opportunities'} in ${contact?.location ?? 'New York City'}.`.trim();
 }
 
 async function buildSystemPrompt(tools: PublicDMDataTools, packet: ProjectFactPacket): Promise<string> {
