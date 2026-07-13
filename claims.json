@@ -1,0 +1,47 @@
+{
+  "history": ".attest/history.json",
+  "claims": [
+    {
+      "id": "exact-csp",
+      "statement": "vercel.json ships the exact byte-for-byte global Content-Security-Policy (no wildcards, no unsafe-eval)",
+      "subjectRefs": ["vercel.json"],
+      "check": "npm run test:release"
+    },
+    {
+      "id": "admin-session",
+      "statement": "admin auth enforces session, origin, and readiness gates before any admin database or client work",
+      "subjectRefs": ["src/lib/admin/auth.ts"],
+      "check": "npm run test:admin"
+    },
+    {
+      "id": "dm-rate-limit",
+      "statement": "the DM chat endpoint enforces the DM rate limit before model work",
+      "subjectRefs": ["src/lib/dm/rate-limit.ts", "src/pages/api/dm/chat.ts"],
+      "check": "npm run test:dm"
+    },
+    {
+      "id": "filter-slugs",
+      "statement": "PLAYLIST_SLUGS defines exactly 6 library filter slugs backing /library/[filter]",
+      "subjectRefs": ["src/data/catalog.ts", "src/pages/library/[filter].astro"],
+      "check": "node --import tsx -e 'import(\"./src/data/catalog.ts\").then((m) => { const n = Object.keys(m.PLAYLIST_SLUGS).length; if (n !== 6) { console.error(\"expected 6 playlist slugs, got \" + n); process.exit(1); } })'"
+    },
+    {
+      "id": "db-source",
+      "statement": "resolvePublicProjectSourceModeFromEnv returns database for real Vercel execution (build and runtime) and catalog_development offline",
+      "subjectRefs": ["src/lib/public-project-source-mode.ts"],
+      "check": "node --import tsx -e 'import(\"./src/lib/public-project-source-mode.ts\").then((m) => { const a = m.resolvePublicProjectSourceModeFromEnv({ VERCEL: \"1\", CI: \"1\" }); const b = m.resolvePublicProjectSourceModeFromEnv({ VERCEL: \"1\", VERCEL_REGION: \"iad1\" }); const c = m.resolvePublicProjectSourceModeFromEnv({}); process.exit(a === \"database\" && b === \"database\" && c === \"catalog_development\" ? 0 : 1); })'"
+    },
+    {
+      "id": "adr-projects-redirect",
+      "statement": "ADR 0001's decision that /projects 301-redirects to /library is still wired in vercel.json",
+      "subjectRefs": ["adr/0001-landing-and-entry-ia.md", "vercel.json"],
+      "check": "node -e 'const fs = require(\"node:fs\"); const adr = fs.readFileSync(\"adr/0001-landing-and-entry-ia.md\", \"utf8\"); const documented = /\\|\\s*`\\/projects`\\s*\\|\\s*`\\/library`\\s*\\|\\s*301\\s*\\|/.test(adr); const config = JSON.parse(fs.readFileSync(\"vercel.json\", \"utf8\")); const rule = (config.redirects || []).find((r) => r.source === \"/projects\"); const wired = Boolean(rule) && rule.destination === \"/library\" && rule.permanent === true; process.exit(documented && wired ? 0 : 1);'"
+    },
+    {
+      "id": "adr-no-all-slug",
+      "statement": "ADR 0001's rule that \"all\" is never added to PLAYLIST_SLUGS still holds in catalog.ts",
+      "subjectRefs": ["adr/0001-landing-and-entry-ia.md", "src/data/catalog.ts"],
+      "check": "node --import tsx -e 'Promise.all([import(\"node:fs\"), import(\"./src/data/catalog.ts\")]).then(([fs, m]) => { const adr = fs.readFileSync(\"adr/0001-landing-and-entry-ia.md\", \"utf8\"); const documented = /Do \\*\\*not\\*\\* add [^\\n]*PLAYLIST_SLUGS/.test(adr); const codeHonors = !Object.hasOwn(m.PLAYLIST_SLUGS, \"all\"); process.exit(documented && codeHonors ? 0 : 1); })'"
+    }
+  ]
+}
