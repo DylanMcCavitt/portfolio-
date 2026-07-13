@@ -162,6 +162,32 @@ export const DM_EVAL_CASES: DMEvalCase[] = [
       if (!hasResume) return 'missing public resume answer block';
       if (!contactBlock || contactBlock.type !== 'block' || contactBlock.block.kind !== 'contact') return 'missing public contact answer block';
       if (contactBlock.block.email !== 'dylanmccavitt@outlook.com') return 'contact email did not match canonical resume data';
+      const answer = answerText(events);
+      if (!/Stevens Institute of Technology/.test(answer)) return 'prose omitted a public resume highlight';
+      if (!/dylanmccavitt@outlook\.com/.test(answer)) return 'prose omitted the public contact method';
+      if (/included below/i.test(answer)) return 'prose only pointed to the structured blocks';
+      return null;
+    },
+  },
+  {
+    name: 'grounding: public resume single-aspect prose is direct',
+    prompt: "What is Dylan's public resume background?",
+    expect(events) {
+      const answer = answerText(events);
+      if (!/software engineering roles/i.test(answer)) return 'resume prose omitted current public role';
+      if (!/Stevens Institute of Technology/.test(answer)) return 'resume prose omitted education';
+      if (!events.some((event) => event.type === 'block' && event.block.kind === 'resume')) return 'missing public resume answer block';
+      return null;
+    },
+  },
+  {
+    name: 'grounding: public contact single-aspect prose is direct',
+    prompt: 'How can a recruiter contact Dylan?',
+    expect(events) {
+      const answer = answerText(events);
+      if (!/dylanmccavitt@outlook\.com/.test(answer)) return 'contact prose omitted the public email';
+      if (!/open to opportunities/i.test(answer)) return 'contact prose omitted public availability';
+      if (!events.some((event) => event.type === 'block' && event.block.kind === 'contact')) return 'missing public contact answer block';
       return null;
     },
   },

@@ -44,6 +44,45 @@ test('resume and contact turns never stream unconstrained model project prose', 
   assert.ok(!text(events).includes('9999'));
   assert.ok(!text(events).includes('private.example'));
   assert.match(text(events), /public resume highlights and contact details/);
+  assert.match(text(events), /Stevens Institute of Technology/);
+  assert.match(text(events), /dylanmccavitt@outlook\.com/);
+  assert.doesNotMatch(text(events), /included below/);
+});
+
+test('resume and contact single-aspect turns state public facts in prose', async () => {
+  const source = await createEvalProjectSource();
+  const resumeModel = model('candidate-hidden 9999 https://private.example/secret');
+  const resumeEvents = await readNdjsonEvents(createDMChatStream(
+    { message: "What is Dylan's public resume background?" },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: resumeModel },
+  ));
+  assert.equal(resumeModel.doStreamCalls.length, 0);
+  assert.match(text(resumeEvents), /software engineering roles/i);
+  assert.match(text(resumeEvents), /Stevens Institute of Technology/);
+  assert.ok(resumeEvents.some((event) => event.type === 'block' && event.block.kind === 'resume'));
+
+  const scopedModel = model('candidate-hidden 9999 https://private.example/secret');
+  const scopedEvents = await readNdjsonEvents(createDMChatStream(
+    { message: 'Tell me about this resume entry.', context: { resumeTrackIds: ['bella-era'] } },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: scopedModel },
+  ));
+  assert.equal(scopedModel.doStreamCalls.length, 0);
+  assert.match(text(scopedEvents), /freelance full-stack contract/i);
+  assert.doesNotMatch(text(scopedEvents), /Stevens Institute|Kroll|software engineering roles/i);
+  assert.ok(scopedEvents.some((event) => event.type === 'block' && event.block.kind === 'resume' && event.block.trackIds.length === 1 && event.block.trackIds[0] === 'bella-era'));
+
+  const contactModel = model('candidate-hidden 9999 https://private.example/secret');
+  const contactEvents = await readNdjsonEvents(createDMChatStream(
+    { message: 'How can a recruiter contact Dylan?' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: contactModel },
+  ));
+  assert.equal(contactModel.doStreamCalls.length, 0);
+  assert.match(text(contactEvents), /dylanmccavitt@outlook\.com/);
+  assert.match(text(contactEvents), /open to opportunities/i);
+  assert.ok(contactEvents.some((event) => event.type === 'block' && event.block.kind === 'contact'));
 });
 
 test('server-rendered project prose is emitted before its answer-selected artifact blocks', async () => {
