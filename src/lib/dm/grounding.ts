@@ -142,6 +142,8 @@ export function projectPacketPrompt(packet: ProjectFactPacket): string {
     'When PROJECT_FACT_PACKET.projects is non-empty and its evidence answers the question, claims must be non-empty. Do not return a refusal or an empty plan for an answerable packet.',
     'Answer the latest user question directly. Conversation history may identify the subject, but never inherit an older information need.',
     'Each claim must cite every fact it uses with ids from PROJECT_FACT_PACKET.evidence. Every substantive claim must cite at least one non-identity atom; identity-only evidence is allowed only when the entire claim is the project name. Do not write a name, number, status, date, technology, metric, or URL without citing its atom in that same claim.',
+    'Treat every evidence atom as an independent fact. Do not infer causal, timing, review, publication, or execution relationships by combining a label, value, status, or prose atom. Cite the prose atom that states a relationship or omit that relationship.',
+    'When you use a metric, include its exact label and value. When you use a link, include its exact URL. For an evidence-seeking question, include an applicable distinctive metric or public link for each discussed project when its packet provides one. For a general single-project overview, include one when available.',
     'Use natural recruiter-friendly prose. Do not merely list fields or answer a different aspect of the selected project.',
     `For a representative overview unless the latest request explicitly requires exactly one project card, cover every selected project. Keep total representative-overview claim prose at or below ${REPRESENTATIVE_OVERVIEW_PROSE_MAX_CHARS} characters. For a project list, name only projects supported by claims in this draft.`,
     artifactInstruction,
@@ -166,6 +168,8 @@ export function validateProjectDraft(
   const packetProjectIds = new Set(packet.projects.map((project) => project.id));
   const discussedProjectIds = new Set(draft.claims.flatMap((claim) =>
     claim.evidenceIds.flatMap((id) => atoms.get(id)?.projectId ?? [])));
+  const explicitlyUsedKinds = new Set<ProjectEvidenceAtomKind>();
+  const usedDistinctiveEvidenceProjectIds = new Set<string>();
 
   if (packet.projects.length > 0 && refusalOnlyProjectDraft(draft, packet)) {
     return { ok: false, reason: 'project draft returned only a refusal over an answerable fact packet' };
@@ -223,14 +227,31 @@ export function validateProjectDraft(
     if (!statusClaimsAreGrounded(claim.text, referenced)) {
       return { ok: false, reason: 'claim included an unsupported project status' };
     }
+    const semanticBoundaryFailure = exactSemanticBoundaryFailure(claim.text, referenced, packet.evidence);
+    if (semanticBoundaryFailure) return { ok: false, reason: semanticBoundaryFailure };
+    for (const entry of referenced) {
+      if (entry.kind === 'metric' || entry.kind === 'link') {
+        if (!structuredAtomIsExplicitInClaim(claim.text, entry)) continue;
+      }
+      explicitlyUsedKinds.add(entry.kind);
+      if (isDistinctiveEvidenceAtom(entry) && structuredAtomIsExplicitInClaim(claim.text, entry)) {
+        usedDistinctiveEvidenceProjectIds.add(entry.projectId);
+      }
+    }
   }
   const requiredKindGroups = latestTurnEvidenceKindGroups(request.message);
-  const citedKinds = new Set(draft.claims.flatMap((claim) =>
-    claim.evidenceIds.flatMap((id) => atoms.get(id)?.kind ?? [])));
-  const missingKindGroups = requiredKindGroups.filter((group) => !group.some((kind) => citedKinds.has(kind)));
+  const missingKindGroups = requiredKindGroups.filter((group) => !group.some((kind) => explicitlyUsedKinds.has(kind)));
   if (missingKindGroups.length > 0) {
     const missing = missingKindGroups.map((group) => group.join(' or ')).join(' and ');
     return { ok: false, reason: `answer did not address every latest-turn information need (${missing})` };
+  }
+  if (requiresDistinctiveEvidence(request.message, packet)) {
+    const missingDistinctiveEvidenceProjectIds = [...discussedProjectIds].filter((projectId) =>
+      packet.evidence.some((entry) => entry.projectId === projectId && isDistinctiveEvidenceAtom(entry))
+      && !usedDistinctiveEvidenceProjectIds.has(projectId));
+    if (missingDistinctiveEvidenceProjectIds.length > 0) {
+      return { ok: false, reason: 'answer omitted an applicable distinctive metric or public link for a discussed project' };
+    }
   }
   if (requestedProjectArtifactLimit(request.message) === 1 && !selectOneCardProject(draft, packet, request.message, publishedProjects)) {
     return { ok: false, reason: 'one-card answer did not contain a complete claim for one selected project' };
@@ -676,6 +697,131 @@ function numbersAndUrlsAreGrounded(text: string, referenced: ProjectEvidenceAtom
   const tokens = text.match(/https?:\/\/\S+|\b\d+(?:[.:]\d+)*(?:\s*(?:kib|kb|mb|gb|%|et))?\b/gi) ?? [];
   return tokens.every((token) => support.includes(token.replace(/[),.;]+$/, '').toLowerCase()));
 }
+
+function exactSemanticBoundaryFailure(
+  text: string,
+  referenced: ProjectEvidenceAtom[],
+  all: ProjectEvidenceAtom[],
+): string | null {
+  for (const entry of referenced) {
+    if (entry.kind === 'metric') {
+      const mentionsLabel = containsSemanticPhrase(text, entry.label);
+      const mentionsValue = containsSemanticPhrase(text, entry.value);
+      if (mentionsLabel !== mentionsValue) {
+        return 'metric claim did not preserve its exact label and value';
+      }
+    }
+    if (
+      entry.kind === 'link'
+      && containsSemanticPhrase(text, entry.label)
+      && !containsSemanticPhrase(text, entry.value)
+    ) {
+      return 'link claim did not include its exact URL';
+    }
+  }
+
+  const explicitlyUsedStructuredAtoms = referenced.filter((entry) =>
+    (entry.kind === 'metric' || entry.kind === 'link') && structuredAtomIsExplicitInClaim(text, entry));
+  if (explicitlyUsedStructuredAtoms.length > 0) {
+    const claimTokens = semanticTokens(text);
+    const covered = claimTokens.map(() => false);
+    for (const entry of referenced) {
+      markSemanticPhraseOccurrences(claimTokens, semanticTokens(entry.value), covered);
+      if (entry.kind === 'status') {
+        for (const value of entry.value.split('/')) {
+          markSemanticPhraseOccurrences(claimTokens, semanticTokens(value), covered);
+        }
+      }
+      markSemanticPhraseOccurrences(claimTokens, semanticTokens(entry.label), covered);
+    }
+    const unsupportedToken = claimTokens.find((token, index) =>
+      !covered[index] && !STRUCTURED_CLAIM_GLUE_TOKENS.has(token));
+    if (unsupportedToken) {
+      return `structured claim added semantics outside its selected evidence: ${unsupportedToken}`;
+    }
+  }
+
+  const supportTokens = new Set(referenced.flatMap((entry) => semanticTokens(`${entry.label} ${entry.value}`)));
+  const referencedIds = new Set(referenced.map((entry) => entry.id));
+  const referencedProjectIds = new Set(referenced.map((entry) => entry.projectId));
+  const claimTokens = new Set(semanticTokens(text));
+  for (const candidate of all) {
+    if (
+      referencedIds.has(candidate.id)
+      || !referencedProjectIds.has(candidate.projectId)
+      || !PROSE_ATOM_KINDS.has(candidate.kind)
+    ) continue;
+    const novelTokens = [...new Set(semanticTokens(candidate.value).filter((token) =>
+      !SEMANTIC_STOP_WORDS.has(token) && !supportTokens.has(token)))];
+    if (novelTokens.length < 2) continue;
+    const overlap = novelTokens.filter((token) => claimTokens.has(token));
+    if (overlap.length >= 2 && overlap.length / novelTokens.length >= 0.6) {
+      return `claim used semantics from uncited evidence atom: ${candidate.id}`;
+    }
+  }
+  return null;
+}
+
+function markSemanticPhraseOccurrences(haystack: string[], needle: string[], covered: boolean[]): void {
+  if (needle.length === 0 || needle.length > haystack.length) return;
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    if (!needle.every((token, offset) => haystack[start + offset] === token)) continue;
+    for (let offset = 0; offset < needle.length; offset += 1) covered[start + offset] = true;
+  }
+}
+
+function structuredAtomIsExplicitInClaim(text: string, atom: ProjectEvidenceAtom): boolean {
+  if (atom.kind === 'metric') {
+    return containsSemanticPhrase(text, atom.label) && containsSemanticPhrase(text, atom.value);
+  }
+  if (atom.kind === 'link') return containsSemanticPhrase(text, atom.value);
+  return false;
+}
+
+function isDistinctiveEvidenceAtom(atom: ProjectEvidenceAtom): boolean {
+  return atom.kind === 'metric' || (atom.kind === 'link' && /:link:\d+$/.test(atom.id));
+}
+
+function requiresDistinctiveEvidence(question: string, packet: ProjectFactPacket): boolean {
+  const normalized = normalizeIdentityText(question);
+  if (/\b(?:evidence|proof|concrete|distinctive|specific fact|example)\b/.test(normalized)) {
+    return true;
+  }
+  if (latestTurnEvidenceKindGroups(question).length > 0) return false;
+  if (packet.responseMode !== 'single-project') return false;
+  if (/^(?:what is|what s)\b/.test(normalized)) return false;
+  if (!/^(?:tell me(?: more)? about|give me an overview of|show me)\b/.test(normalized)) return false;
+  const namesPublishedRecord = packet.projects.some((project) =>
+    claimNamesProject(question, project.id, packet.projects)
+    && (
+      project.status.some((value) => /\bpublished\b/i.test(value))
+      || project.stack.some((entry) => /\bpublished db\b/i.test(`${entry.label} ${entry.value}`))
+    ));
+  return namesPublishedRecord;
+}
+
+function containsSemanticPhrase(text: string, phrase: string): boolean {
+  const haystack = semanticTokens(text);
+  const needle = semanticTokens(phrase);
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  return haystack.some((_, start) => needle.every((token, offset) => haystack[start + offset] === token));
+}
+
+function semanticTokens(value: string): string[] {
+  return (value.normalize('NFKC').toLowerCase().match(/https?:\/\/[^\s]+|[\p{L}\p{N}]+(?:[.:·/-][\p{L}\p{N}]+)*/gu) ?? [])
+    .map((token) => token.startsWith('http') ? token.replace(/[),.;!?]+$/, '') : token);
+}
+
+const PROSE_ATOM_KINDS = new Set<ProjectEvidenceAtomKind>(['summary', 'tagline', 'about', 'notes', 'citation']);
+const SEMANTIC_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'by', 'can', 'for', 'from', 'has', 'have', 'in', 'is', 'it',
+  'its', 'of', 'on', 'or', 'project', 'projects', 'public', 'record', 'records', 'that', 'the', 'this', 'to', 'was',
+  'were', 'with', 'work', 'workflow',
+]);
+const STRUCTURED_CLAIM_GLUE_TOKENS = new Set([
+  ...SEMANTIC_STOP_WORDS,
+  'also', 'features', 'has', 'have', 'here', 'includes', 'link', 'repo', 'repository', 'runs', 'see', 'so', 'uses',
+]);
 
 function statusClaimsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]): boolean {
   const statuses = text.toLowerCase().match(/\b(?:live|dry-run|dry run|shipped|done|complete|completed|wip|in progress)\b/g) ?? [];

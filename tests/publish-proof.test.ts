@@ -595,8 +595,8 @@ test('fixture-based publish proof gate covers scan to public DM/RAG path', async
         db,
         model: streamingModel(JSON.stringify({
           claims: [{
-            text: 'The published workflow is documented in the public project summary.',
-            evidenceIds: [`${publishedProjectId}:summary`],
+            text: 'Publish Proof Published Project was published via admin review from a hidden Slack draft fixture candidate. It has 5 proof steps.',
+            evidenceIds: [`${publishedProjectId}:identity`, `${publishedProjectId}:summary`, `${publishedProjectId}:metric:0`],
           }],
           artifactProjectIds: [publishedProjectId],
         })),
