@@ -784,6 +784,7 @@ function isDistinctiveEvidenceAtom(atom: ProjectEvidenceAtom): boolean {
 
 function requiresDistinctiveEvidence(question: string, packet: ProjectFactPacket): boolean {
   const normalized = normalizeIdentityText(question);
+  if (latestTurnEvidenceKindGroups(question).length > 0) return false;
   if (/\b(?:evidence|proof|concrete|distinctive|specific fact|example)\b/.test(normalized)) {
     return true;
   }
@@ -819,7 +820,7 @@ const SEMANTIC_STOP_WORDS = new Set([
 ]);
 const STRUCTURED_CLAIM_GLUE_TOKENS = new Set([
   ...SEMANTIC_STOP_WORDS,
-  'also', 'has', 'have', 'here', 'link', 'repo', 'repository', 'see', 'so',
+  'also', 'features', 'has', 'have', 'here', 'includes', 'link', 'repo', 'repository', 'runs', 'see', 'so', 'uses',
 ]);
 
 function statusClaimsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]): boolean {

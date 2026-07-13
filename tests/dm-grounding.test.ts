@@ -161,6 +161,50 @@ test('exact cited metric and prose atoms are not falsely rejected', async () => 
   assert.doesNotMatch(text(events), /could not produce a validated answer/i);
 });
 
+for (const verb of ['includes', 'features', 'runs', 'uses']) {
+  test(`exact metric wording accepts the light verb ${verb}`, async () => {
+    const source = await createEvalProjectSource();
+    const exactMetric = model(JSON.stringify({
+      claims: [{
+        text: `agentic-trader ${verb} a scheduled review session at 15:45 ET.`,
+        evidenceIds: ['agentic-trader:identity', 'agentic-trader:metric:0'],
+      }],
+      artifactProjectIds: ['agentic-trader'],
+    }));
+    const events = await readNdjsonEvents(createDMChatStream(
+      { message: 'Show practical AI-assisted workflow evidence.' },
+      CONFIG,
+      { db: source.db, projectLoader: source.projectLoader, model: exactMetric },
+    ));
+
+    assert.equal(exactMetric.doStreamCalls.length, 1);
+    assert.match(text(events), new RegExp(`agentic-trader ${verb} a scheduled review session at 15:45 ET`, 'i'));
+    assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+  });
+}
+
+for (const prompt of ["Show me Loom's stack.", "Tell me about Loom's stack.", 'What is Loom built with?']) {
+  test(`a specific project aspect does not require an unrelated distinctive atom: ${prompt}`, async () => {
+    const source = await createEvalProjectSource();
+    const stackAnswer = model(JSON.stringify({
+      claims: [{
+        text: 'Loom uses a Published DB record.',
+        evidenceIds: ['loom:identity', 'loom:stack:0'],
+      }],
+      artifactProjectIds: ['loom'],
+    }));
+    const events = await readNdjsonEvents(createDMChatStream(
+      { message: prompt },
+      CONFIG,
+      { db: source.db, projectLoader: source.projectLoader, model: stackAnswer },
+    ));
+
+    assert.equal(stackAnswer.doStreamCalls.length, 1);
+    assert.match(text(events), /Loom uses a Published DB record/i);
+    assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+  });
+}
+
 test('single-project synthesis requires an applicable distinctive metric or public link', async () => {
   const source = await createEvalProjectSource();
   const vague = model(JSON.stringify({
