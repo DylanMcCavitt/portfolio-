@@ -448,6 +448,24 @@ test('representative overviews reject a one-of-three draft after budgeting', asy
   assert.doesNotMatch(answer, /agentic-trader is a scheduled/i);
 });
 
+test('no-card representative overviews still require complete prose coverage', async () => {
+  const source = await createEvalProjectSource();
+  const incompleteModel = model(JSON.stringify({
+    claims: [{ text: 'agentic-trader is a scheduled, inspectable trading workflow.', evidenceIds: ['agentic-trader:identity', 'agentic-trader:summary'] }],
+    artifactProjectIds: ['agentic-trader'],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Tell me about Dylan\'s projects without showing any project cards.' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: incompleteModel },
+  ));
+
+  assert.equal(incompleteModel.doStreamCalls.length, 2, 'incomplete prose-only coverage should retry exactly once');
+  assert.match(text(events), /could not produce a validated answer/i);
+  assert.doesNotMatch(text(events), /agentic-trader is a scheduled/i);
+  assert.equal(events.filter((event) => event.type === 'block' && event.block.kind === 'projects').length, 0);
+});
+
 test('ordinary project answers materialize missing blocks from validated claims across retrieval routes', async () => {
   const cases = [
     {
@@ -745,6 +763,26 @@ test('refusal-only non-empty claims retry once and fail honestly over an answera
   assert.equal(events.filter((event) => event.type === 'block' && event.block.kind === 'projects').length, 0);
 });
 
+test('naming a project does not rescue a pure refusal without grounded answer content', async () => {
+  const source = await createEvalProjectSource();
+  const refusal = model(JSON.stringify({
+    claims: [{
+      text: 'I cannot answer questions about Loom.',
+      evidenceIds: ['loom:identity', 'loom:summary'],
+    }],
+    artifactProjectIds: [],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Tell me about Loom.' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: refusal },
+  ));
+
+  assert.equal(refusal.doStreamCalls.length, 2);
+  assert.match(text(events), /could not produce a validated answer/i);
+  assert.doesNotMatch(text(events), /cannot answer questions about Loom/i);
+});
+
 test('grounded limitation prose remains valid when it answers from an answerable packet', async () => {
   const source = await createEvalProjectSource();
   const limitation = model(JSON.stringify({
@@ -762,6 +800,46 @@ test('grounded limitation prose remains valid when it answers from an answerable
 
   assert.equal(limitation.doStreamCalls.length, 1);
   assert.match(text(events), /manages exits but cannot open positions/i);
+  assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+});
+
+test('a boundary clause does not erase grounded project substance in the same claim', async () => {
+  const source = await createEvalProjectSource();
+  const boundaryAnswer = model(JSON.stringify({
+    claims: [{
+      text: 'I cannot discuss private evidence; Loom proves reviewed portfolio publishing through its public record.',
+      evidenceIds: ['loom:identity', 'loom:summary'],
+    }],
+    artifactProjectIds: [],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Tell me about Loom.' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: boundaryAnswer },
+  ));
+
+  assert.equal(boundaryAnswer.doStreamCalls.length, 1);
+  assert.match(text(events), /Loom proves reviewed portfolio publishing/i);
+  assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+});
+
+test('named grounded uncertainty is not treated as a refusal-only claim', async () => {
+  const source = await createEvalProjectSource();
+  const groundedUncertainty = model(JSON.stringify({
+    claims: [{
+      text: 'I do not see evidence of a mobile client in the published Loom record.',
+      evidenceIds: ['loom:identity', 'loom:summary'],
+    }],
+    artifactProjectIds: [],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream(
+    { message: 'Does Loom include a mobile client?' },
+    CONFIG,
+    { db: source.db, projectLoader: source.projectLoader, model: groundedUncertainty },
+  ));
+
+  assert.equal(groundedUncertainty.doStreamCalls.length, 1);
+  assert.match(text(events), /do not see evidence of a mobile client/i);
   assert.doesNotMatch(text(events), /could not produce a validated answer/i);
 });
 

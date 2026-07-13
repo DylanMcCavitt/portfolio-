@@ -163,7 +163,7 @@ export function validateProjectDraft(
     return { ok: false, reason: 'project draft returned only a refusal over an answerable fact packet' };
   }
   if (packet.responseMode === 'representative-overview') {
-    if (requestedProjectArtifactLimit(request.message) === null) {
+    if (requestedProjectArtifactLimit(request.message) !== 1) {
       const missingProjectIds = packet.projects
         .map((project) => project.id)
         .filter((id) => !discussedProjectIds.has(id));
@@ -272,15 +272,27 @@ function projectDraftProseLength(draft: ProjectDraft): number {
 }
 
 function refusalOnlyProjectDraft(draft: ProjectDraft, packet: ProjectFactPacket): boolean {
-  return draft.claims.length > 0 && draft.claims.every((claim) => {
-    const namesProject = packet.projects.some((project) => claimNamesProject(claim.text, project.id, packet.projects));
-    return refusalOnlyProjectClaim(claim.text, namesProject);
+  return draft.claims.length > 0 && draft.claims.every((claim) => refusalOnlyProjectClaim(claim.text, packet.projects));
+}
+
+function refusalOnlyProjectClaim(text: string, projects: ProjectFact[]): boolean {
+  const clauses = text
+    .split(/[;.!?]+|\b(?:but|however|yet)\b/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  return clauses.length > 0 && clauses.every((clause) => {
+    const namesProject = projects.some((project) => claimNamesProject(clause, project.id, projects));
+    return refusalOnlyProjectClause(clause, namesProject);
   });
 }
 
-function refusalOnlyProjectClaim(text: string, namesProject: boolean): boolean {
+function refusalOnlyProjectClause(text: string, namesProject: boolean): boolean {
   const normalized = text.toLowerCase().replaceAll('’', "'").replace(/\s+/g, ' ').trim();
-  if (/\b(?:but|however|yet)\b/.test(normalized)) return false;
+  const groundedUncertainty = [
+    /\b(?:i|we)\s+(?:can(?:not|'t)|could(?: not|n't)|(?:am|are) unable to)\s+(?:confirm|determine|find|identify)\b.{0,160}\b(?:evidence|information|details?|data|records?)\b/,
+    /\b(?:i|we)\s+(?:do(?: not|n't))\s+(?:find|have|see)\b.{0,160}\b(?:evidence|information|details?|data|records?)\b/,
+  ].some((pattern) => pattern.test(normalized));
+  if (groundedUncertainty) return !namesProject;
   const firstPersonRefusal = [
     /\b(?:i|we)\s+(?:can(?:not|'t)|could(?: not|n't)|(?:am|are) unable to)\s+(?:answer|confirm|describe|determine|discuss|find|identify|provide|say|tell)\b/,
     /\b(?:i|we)\s+(?:do(?: not|n't))\s+(?:find|have|see)\b.{0,80}\b(?:evidence|information|details?|data|records?)\b/,
