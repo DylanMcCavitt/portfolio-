@@ -148,20 +148,48 @@ export async function runCliJudge(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const settle = (result: { ok: boolean; text: string }) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-    const timer = setTimeout(() => {
+    let terminated = false;
+    const terminateChild = () => {
+      if (terminated) return;
+      terminated = true;
       terminateProcessTree(child);
       child.stdin.destroy();
       child.stdout.destroy();
       child.stderr.destroy();
       child.unref();
+    };
+    const removeParentCleanup = () => {
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      process.removeListener('exit', onExit);
+    };
+    const forwardParentSignal = (signal: NodeJS.Signals, fallbackExitCode: number) => {
+      removeParentCleanup();
+      terminateChild();
+      try {
+        process.kill(process.pid, signal);
+      } catch {
+        process.exit(fallbackExitCode);
+      }
+    };
+    const onSigint = () => forwardParentSignal('SIGINT', 130);
+    const onSigterm = () => forwardParentSignal('SIGTERM', 143);
+    const onExit = () => terminateChild();
+    const settle = (result: { ok: boolean; text: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      removeParentCleanup();
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      terminateChild();
       settle({ ok: false, text: `timed out after ${timeoutMs}ms` });
     }, timeoutMs);
+
+    process.once('SIGINT', onSigint);
+    process.once('SIGTERM', onSigterm);
+    process.once('exit', onExit);
 
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));

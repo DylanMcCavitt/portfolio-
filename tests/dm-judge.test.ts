@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -153,6 +154,7 @@ test('score extraction takes the last valid JSON object out of noisy CLI output'
 });
 
 test('runCliJudge captures scores from a real subprocess and reports failures', async () => {
+  const listenerCounts = parentCleanupListenerCounts();
   const fake: DMCliJudge = {
     kind: 'cli',
     label: 'fake-cli',
@@ -167,6 +169,7 @@ test('runCliJudge captures scores from a real subprocess and reports failures', 
   const missing: DMCliJudge = { kind: 'cli', label: 'missing-cli', command: ['definitely-not-a-real-binary-xyz'] };
   const notFound = await runCliJudge(missing, 'prompt');
   assert.ok('error' in notFound);
+  assert.deepEqual(parentCleanupListenerCounts(), listenerCounts, 'completed judges must remove parent cleanup listeners');
 });
 
 test('runCliJudge timeout kills the spawned process group before report writing continues', async () => {
@@ -202,6 +205,96 @@ test('runCliJudge timeout kills the spawned process group before report writing 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('runCliJudge kills its process group when the parent receives SIGTERM', { skip: process.platform === 'win32' }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dm-judge-parent-abort-'));
+  const pidsPath = join(directory, 'judge-pids.json');
+  let harness: ChildProcess | undefined;
+  let judgePids: { launcherPid: number; descendantPid: number } | undefined;
+
+  try {
+    const descendantScript = 'setInterval(() => {}, 1000)';
+    const launcherScript = [
+      "const { spawn } = require('node:child_process')",
+      "const { writeFileSync } = require('node:fs')",
+      `const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'inherit' })`,
+      `writeFileSync(${JSON.stringify(pidsPath)}, JSON.stringify({ launcherPid: process.pid, descendantPid: descendant.pid }))`,
+      'setInterval(() => {}, 1000)',
+    ].join(';');
+    const judgeModuleUrl = new URL('../src/lib/dm/judge.ts', import.meta.url).href;
+    const harnessScript = [
+      `import { runCliJudge } from ${JSON.stringify(judgeModuleUrl)}`,
+      `const judge = ${JSON.stringify({
+        kind: 'cli',
+        label: 'parent-abort-cli',
+        command: [process.execPath, '-e', launcherScript],
+      })}`,
+      "await runCliJudge(judge, 'prompt', 30_000)",
+    ].join(';');
+
+    harness = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', harnessScript], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let harnessStderr = '';
+    harness.stderr?.on('data', (chunk: Buffer) => (harnessStderr += chunk.toString()));
+    const runningJudgePids = JSON.parse(await waitForFileContents(pidsPath)) as {
+      launcherPid: number;
+      descendantPid: number;
+    };
+    judgePids = runningJudgePids;
+
+    const harnessExit = waitForChildExit(harness);
+    assert.equal(harness.kill('SIGTERM'), true);
+    const exit = await harnessExit;
+    assert.equal(exit.signal, 'SIGTERM', `harness did not preserve SIGTERM semantics: ${harnessStderr}`);
+    assert.equal(
+      await waitForProcessExit(runningJudgePids.launcherPid),
+      true,
+      `judge launcher ${runningJudgePids.launcherPid} survived parent abort`,
+    );
+    assert.equal(
+      await waitForProcessExit(runningJudgePids.descendantPid),
+      true,
+      `judge descendant ${runningJudgePids.descendantPid} survived parent abort`,
+    );
+  } finally {
+    if (harness?.pid && isProcessRunning(harness.pid)) harness.kill('SIGKILL');
+    if (judgePids?.launcherPid && isProcessRunning(judgePids.launcherPid)) process.kill(judgePids.launcherPid, 'SIGKILL');
+    if (judgePids?.descendantPid && isProcessRunning(judgePids.descendantPid)) process.kill(judgePids.descendantPid, 'SIGKILL');
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function parentCleanupListenerCounts(): Record<string, number> {
+  return {
+    SIGINT: process.listenerCount('SIGINT'),
+    SIGTERM: process.listenerCount('SIGTERM'),
+    exit: process.listenerCount('exit'),
+  };
+}
+
+async function waitForFileContents(path: string): Promise<string> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      return await readFile(path, 'utf8');
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${path}`);
+}
+
+function waitForChildExit(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`child ${child.pid ?? 'unknown'} did not exit`)), 5_000);
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
 
 async function waitForProcessExit(pid: number): Promise<boolean> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
