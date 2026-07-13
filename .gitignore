@@ -44,3 +44,6 @@ docs/handoffs/*.md
 # local DM eval reports (comparison artifacts, never committed)
 .dm-evals/
 .env*.local
+
+# attest drift ledger state (regenerable; claims.json is the contract and IS tracked)
+.attest/
