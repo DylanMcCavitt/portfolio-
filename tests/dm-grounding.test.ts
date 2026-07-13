@@ -138,6 +138,65 @@ test('correct project selection still fails when the answer addresses the wrong 
   assert.doesNotMatch(text(events), /Shipped/);
 });
 
+test('identity-only evidence cannot support invented qualitative project prose', async () => {
+  const source = await createEvalProjectSource();
+  const unsupported = model(JSON.stringify({
+    claims: [{ text: 'Loom delivered safer releases for every visitor.', evidenceIds: ['loom:identity'] }],
+    artifactProjectIds: [],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream({
+    message: 'Tell me about Loom.',
+  }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: unsupported }));
+  assert.equal(unsupported.doStreamCalls.length, 2, 'unsupported prose should retry exactly once');
+  assert.match(text(events), /could not produce a validated answer/i);
+  assert.doesNotMatch(text(events), /safer releases/);
+});
+
+test('identity-only evidence remains valid for a pure project-name response', async () => {
+  const events = await run('What is Loom?', JSON.stringify({
+    claims: [{ text: 'Loom.', evidenceIds: ['loom:identity'] }],
+    artifactProjectIds: [],
+  }));
+  assert.match(text(events), /Loom\./);
+  assert.doesNotMatch(text(events), /could not produce a validated answer/i);
+});
+
+test('compound latest-turn questions require evidence for every requested aspect', async () => {
+  const source = await createEvalProjectSource();
+  const partial = model(JSON.stringify({
+    claims: [{ text: 'Evalgate is built with TypeScript.', evidenceIds: ['evalgate:identity', 'evalgate:stack:0'] }],
+    artifactProjectIds: [],
+  }));
+  const events = await readNdjsonEvents(createDMChatStream({
+    message: 'What language and repo is it?',
+    conversation: [
+      { role: 'user', content: 'Tell me about Evalgate.' },
+      { role: 'assistant', content: 'Evalgate tests grounded agent behavior before release.' },
+    ],
+  }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: partial }));
+  assert.equal(partial.doStreamCalls.length, 2, 'a partial compound answer should retry exactly once');
+  assert.match(text(events), /could not produce a validated answer/i);
+  assert.doesNotMatch(text(events), /built with TypeScript/);
+
+  const complete = model(JSON.stringify({
+    claims: [
+      { text: 'Evalgate is built with TypeScript.', evidenceIds: ['evalgate:identity', 'evalgate:stack:0'] },
+      { text: "Evalgate's project page is available.", evidenceIds: ['evalgate:identity', 'evalgate:href'] },
+    ],
+    artifactProjectIds: [],
+  }));
+  const completeEvents = await readNdjsonEvents(createDMChatStream({
+    message: 'What language and repo is it?',
+    conversation: [
+      { role: 'user', content: 'Tell me about Evalgate.' },
+      { role: 'assistant', content: 'Evalgate tests grounded agent behavior before release.' },
+    ],
+  }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: complete }));
+  assert.equal(complete.doStreamCalls.length, 1);
+  assert.match(text(completeEvents), /TypeScript/);
+  assert.match(text(completeEvents), /project page is available/);
+});
+
 test('comparison claims must name every project whose evidence they cite', async () => {
   const source = await createEvalProjectSource();
   const misleading = model(JSON.stringify({

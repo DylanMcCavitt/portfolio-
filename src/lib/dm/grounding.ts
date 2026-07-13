@@ -132,7 +132,7 @@ export function projectPacketPrompt(packet: ProjectFactPacket): string {
     'For project questions, return exactly one JSON grounded answer draft and no markdown outside it.',
     'Shape: {"claims":[{"text":"Direct natural-language answer sentence.","evidenceIds":["project-id:summary"]}],"artifactProjectIds":[]}.',
     'Answer the latest user question directly. Conversation history may identify the subject, but never inherit an older information need.',
-    'Each claim must cite every fact it uses with ids from PROJECT_FACT_PACKET.evidence. Do not write a name, number, status, date, technology, metric, or URL without citing its atom in that same claim.',
+    'Each claim must cite every fact it uses with ids from PROJECT_FACT_PACKET.evidence. Every substantive claim must cite at least one non-identity atom; identity-only evidence is allowed only when the entire claim is the project name. Do not write a name, number, status, date, technology, metric, or URL without citing its atom in that same claim.',
     'Use natural recruiter-friendly prose. Do not merely list fields or answer a different aspect of the selected project.',
     'artifactProjectIds is independent of claims. Keep it empty for terse factual follow-ups unless the user asks to show a card; otherwise select only useful, discussed projects.',
     'RAG citations are optional and only available for explicit deep dives. Never imply missing source evidence exists.',
@@ -170,6 +170,9 @@ export function validateProjectDraft(
     if (new Set(claim.evidenceIds).size !== claim.evidenceIds.length) return { ok: false, reason: 'duplicate evidence reference' };
     const referenced = claim.evidenceIds.flatMap((id) => atoms.get(id) ?? []);
     if (referenced.length !== claim.evidenceIds.length) return { ok: false, reason: 'evidence reference escaped fact packet' };
+    if (referenced.every((entry) => entry.kind === 'identity') && !isPureIdentityClaim(claim.text, referenced)) {
+      return { ok: false, reason: 'substantive claim cited only project identity evidence' };
+    }
     const claimProjects = new Set(referenced.map((entry) => entry.projectId));
     if (claimProjects.size > 1 && !/\b(?:both|compare|compared|comparison|versus|vs\.?|while|than)\b/i.test(claim.text)) {
       return { ok: false, reason: 'claim mixed project evidence without explicit comparison' };
@@ -189,10 +192,13 @@ export function validateProjectDraft(
       return { ok: false, reason: 'claim included an unsupported project status' };
     }
   }
-  const neededKinds = latestTurnEvidenceKinds(latestQuestion);
-  if (neededKinds.length > 0 && !draft.claims.some((claim) =>
-    claim.evidenceIds.some((id) => neededKinds.includes(atoms.get(id)?.kind as ProjectEvidenceAtomKind)))) {
-    return { ok: false, reason: `answer did not address the latest-turn information need (${neededKinds.join(' or ')})` };
+  const requiredKindGroups = latestTurnEvidenceKindGroups(latestQuestion);
+  const citedKinds = new Set(draft.claims.flatMap((claim) =>
+    claim.evidenceIds.flatMap((id) => atoms.get(id)?.kind ?? [])));
+  const missingKindGroups = requiredKindGroups.filter((group) => !group.some((kind) => citedKinds.has(kind)));
+  if (missingKindGroups.length > 0) {
+    const missing = missingKindGroups.map((group) => group.join(' or ')).join(' and ');
+    return { ok: false, reason: `answer did not address every latest-turn information need (${missing})` };
   }
   return { ok: true, draft };
 }
@@ -526,6 +532,13 @@ function identityLikeTokensAreGrounded(text: string, referenced: ProjectEvidence
   return tokens.every((token) => support.includes(token));
 }
 
+function isPureIdentityClaim(text: string, referenced: ProjectEvidenceAtom[]): boolean {
+  const normalized = normalizeIdentityText(text);
+  return referenced
+    .filter((entry) => entry.kind === 'identity')
+    .some((entry) => normalizeIdentityText(entry.value) === normalized);
+}
+
 function numbersAndUrlsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]): boolean {
   const support = referenced.map((entry) => `${entry.label} ${entry.value}`).join(' ').toLowerCase();
   const tokens = text.match(/https?:\/\/\S+|\b\d+(?:[.:]\d+)*(?:\s*(?:kib|kb|mb|gb|%|et))?\b/gi) ?? [];
@@ -540,17 +553,18 @@ function statusClaimsAreGrounded(text: string, referenced: ProjectEvidenceAtom[]
   return statuses.every((status) => support.includes(status.replaceAll('-', ' ')));
 }
 
-function latestTurnEvidenceKinds(question: string): ProjectEvidenceAtomKind[] {
+function latestTurnEvidenceKindGroups(question: string): ProjectEvidenceAtomKind[][] {
   const normalized = question.toLowerCase();
-  if (/\b(?:stack|language|framework|runtime|built with|technology|technologies)\b/.test(normalized)) return ['stack'];
-  if (/\b(?:status|live|shipped|done|complete|in progress|wip)\b/.test(normalized)) return ['status'];
-  if (/\b(?:when|year|date)\b/.test(normalized)) return ['year', 'activity'];
-  if (/\b(?:metric|number|how many|result|outcome)\b/.test(normalized)) return ['metric'];
-  if (/\b(?:link|repo|repository|url|where can i)\b/.test(normalized)) return ['link'];
-  if (/\b(?:area|category|field)\b/.test(normalized)) return ['area'];
-  if (/\b(?:source|citation)\b/.test(normalized)) return ['citation'];
-  if (/\b(?:architecture|implementation|technical|how\s+(?:it|this|the project)\s+works)\b/.test(normalized)) return ['about', 'notes', 'summary'];
-  return [];
+  const groups: ProjectEvidenceAtomKind[][] = [];
+  if (/\b(?:stack|language|framework|runtime|built with|technology|technologies)\b/.test(normalized)) groups.push(['stack']);
+  if (/\b(?:status|live|shipped|done|complete|in progress|wip)\b/.test(normalized)) groups.push(['status']);
+  if (/\b(?:when|year|date)\b/.test(normalized)) groups.push(['year', 'activity']);
+  if (/\b(?:metric|number|how many|result|outcome)\b/.test(normalized)) groups.push(['metric']);
+  if (/\b(?:link|repo|repository|url|where can i)\b/.test(normalized)) groups.push(['link']);
+  if (/\b(?:area|category|field)\b/.test(normalized)) groups.push(['area']);
+  if (/\b(?:source|citation)\b/.test(normalized)) groups.push(['citation']);
+  if (/\b(?:architecture|implementation|technical|how\s+(?:it|this|the project)\s+works)\b/.test(normalized)) groups.push(['about', 'notes', 'summary']);
+  return groups;
 }
 
 function parseDraft(raw: string) {
