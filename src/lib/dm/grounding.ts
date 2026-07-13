@@ -134,7 +134,7 @@ export function projectPacketPrompt(packet: ProjectFactPacket): string {
     'Answer the latest user question directly. Conversation history may identify the subject, but never inherit an older information need.',
     'Each claim must cite every fact it uses with ids from PROJECT_FACT_PACKET.evidence. Every substantive claim must cite at least one non-identity atom; identity-only evidence is allowed only when the entire claim is the project name. Do not write a name, number, status, date, technology, metric, or URL without citing its atom in that same claim.',
     'Treat every evidence atom as an independent fact. Do not infer causal, timing, review, publication, or execution relationships by combining a label, value, status, or prose atom. Cite the prose atom that states a relationship or omit that relationship.',
-    'When you use a metric, include its exact label and value. When you use a link, include its exact URL. For an evidence-seeking question or a general single-project overview, include an applicable distinctive metric or public link when the packet provides one.',
+    'When you use a metric, include its exact label and value. When you use a link, include its exact URL. For an evidence-seeking question, include an applicable distinctive metric or public link for each discussed project when its packet provides one. For a general single-project overview, include one when available.',
     'Use natural recruiter-friendly prose. Do not merely list fields or answer a different aspect of the selected project.',
     'artifactProjectIds is independent of claims. Keep it empty for terse factual follow-ups unless the user asks to show a card; otherwise select only useful, discussed projects.',
     'RAG citations are optional and only available for explicit deep dives. Never imply missing source evidence exists.',
@@ -158,7 +158,7 @@ export function validateProjectDraft(
   const discussedProjectIds = new Set(draft.claims.flatMap((claim) =>
     claim.evidenceIds.flatMap((id) => atoms.get(id)?.projectId ?? [])));
   const explicitlyUsedKinds = new Set<ProjectEvidenceAtomKind>();
-  let usedDistinctiveEvidence = false;
+  const usedDistinctiveEvidenceProjectIds = new Set<string>();
 
   if (new Set(draft.artifactProjectIds).size !== draft.artifactProjectIds.length) {
     return { ok: false, reason: 'duplicate artifact project reference' };
@@ -203,7 +203,7 @@ export function validateProjectDraft(
       }
       explicitlyUsedKinds.add(entry.kind);
       if (isDistinctiveEvidenceAtom(entry) && structuredAtomIsExplicitInClaim(claim.text, entry)) {
-        usedDistinctiveEvidence = true;
+        usedDistinctiveEvidenceProjectIds.add(entry.projectId);
       }
     }
   }
@@ -213,14 +213,13 @@ export function validateProjectDraft(
     const missing = missingKindGroups.map((group) => group.join(' or ')).join(' and ');
     return { ok: false, reason: `answer did not address every latest-turn information need (${missing})` };
   }
-  const applicableDistinctiveEvidence = packet.evidence.some((entry) =>
-    discussedProjectIds.has(entry.projectId) && isDistinctiveEvidenceAtom(entry));
-  if (
-    applicableDistinctiveEvidence
-    && requiresDistinctiveEvidence(latestQuestion, packet)
-    && !usedDistinctiveEvidence
-  ) {
-    return { ok: false, reason: 'answer omitted an applicable distinctive metric or public link' };
+  if (requiresDistinctiveEvidence(latestQuestion, packet)) {
+    const missingDistinctiveEvidenceProjectIds = [...discussedProjectIds].filter((projectId) =>
+      packet.evidence.some((entry) => entry.projectId === projectId && isDistinctiveEvidenceAtom(entry))
+      && !usedDistinctiveEvidenceProjectIds.has(projectId));
+    if (missingDistinctiveEvidenceProjectIds.length > 0) {
+      return { ok: false, reason: 'answer omitted an applicable distinctive metric or public link for a discussed project' };
+    }
   }
   return { ok: true, draft };
 }

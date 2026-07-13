@@ -157,6 +157,54 @@ test('single-project synthesis requires an applicable distinctive metric or publ
   assert.doesNotMatch(text(exactEvents), /could not produce a validated answer/i);
 });
 
+test('evidence synthesis requires applicable distinctive evidence for every discussed project', async () => {
+  const source = await createEvalProjectSource();
+  const incomplete = model(JSON.stringify({
+    claims: [
+      {
+        text: 'agentic-trader has a scheduled review session at 15:45 ET.',
+        evidenceIds: ['agentic-trader:identity', 'agentic-trader:metric:0'],
+      },
+      {
+        text: 'Loom proves that a reviewed project can become visible without entering the static catalog.',
+        evidenceIds: ['loom:identity', 'loom:summary'],
+      },
+    ],
+    artifactProjectIds: ['agentic-trader', 'loom'],
+  }));
+  const incompleteEvents = await readNdjsonEvents(createDMChatStream({
+    message: 'Show concrete evidence for agentic-trader and Loom.',
+    context: { projectIds: ['agentic-trader', 'loom'] },
+  }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: incomplete }));
+
+  assert.equal(incomplete.doStreamCalls.length, 2, 'each discussed project should require its own distinctive evidence');
+  assert.match(text(incompleteEvents), /could not produce a validated answer/i);
+  assert.doesNotMatch(text(incompleteEvents), /manifest size ceiling/i);
+
+  const complete = model(JSON.stringify({
+    claims: [
+      {
+        text: 'agentic-trader has a scheduled review session at 15:45 ET.',
+        evidenceIds: ['agentic-trader:identity', 'agentic-trader:metric:0'],
+      },
+      {
+        text: 'Loom has a manifest size ceiling of 64 KiB.',
+        evidenceIds: ['loom:identity', 'loom:metric:0'],
+      },
+    ],
+    artifactProjectIds: ['agentic-trader', 'loom'],
+  }));
+  const completeEvents = await readNdjsonEvents(createDMChatStream({
+    message: 'Show concrete evidence for agentic-trader and Loom.',
+    context: { projectIds: ['agentic-trader', 'loom'] },
+  }, CONFIG, { db: source.db, projectLoader: source.projectLoader, model: complete }));
+
+  assert.equal(complete.doStreamCalls.length, 1);
+  assert.match(text(completeEvents), /scheduled review session at 15:45 ET/i);
+  assert.match(text(completeEvents), /manifest size ceiling of 64 KiB/i);
+  assert.doesNotMatch(text(completeEvents), /could not produce a validated answer/i);
+});
+
 test('project alias questions cannot bypass the fact packet or prose validator', async () => {
   const malicious = JSON.stringify({
     claims: [{ text: 'Slurmlet processed 9999 jobs using a secret unpublished backend.', evidenceIds: ['slurmlet:identity'] }],
