@@ -320,12 +320,40 @@ test('the endpoint accepts bounded UIMessage input and returns the standard type
   assert.match(observation.answerText, /published projects/);
 });
 
+test('the endpoint never puts unvalidated model prose on the wire', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('What can you help with?');
+  const sentinel = 'UNVALIDATED_MODEL_PROSE_SENTINEL';
+  const handler = createDMPostHandler({
+    config,
+    db: source.db,
+    model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
+      segments: [{ kind: 'conversational', act: 'capabilities' }],
+      artifacts: [],
+      limitations: [],
+    }, prose: sentinel }]),
+  });
+  const response = await handler({
+    request: new Request('https://portfolio.test/api/dm/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    }),
+  } as never);
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(body, new RegExp(sentinel));
+  assert.match(body, /data-dm-answer/);
+  assert.match(body, /published projects/);
+});
+
 function chatRequest(text: string): DMChatRequest {
   return { messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text }] }] };
 }
 
 function toolSequenceModel(
-  calls: Array<{ toolName: string; input: unknown }>,
+  calls: Array<{ toolName: string; input: unknown; prose?: string }>,
   observedPrompts: LanguageModelV4CallOptions[] = [],
 ): LanguageModel {
   let index = 0;
@@ -335,11 +363,17 @@ function toolSequenceModel(
       const call = calls[index++];
       if (!call) throw new Error('mock model received an unexpected extra step');
       const id = `call-${index}`;
+      const textId = `text-${index}`;
       return {
         stream: simulateReadableStream({
           chunks: [
             { type: 'stream-start' as const, warnings: [] },
             { type: 'response-metadata' as const, id: `response-${index}`, modelId: 'mock-tool-loop', timestamp: new Date(0) },
+            ...(call.prose ? [
+              { type: 'text-start' as const, id: textId },
+              { type: 'text-delta' as const, id: textId, delta: call.prose },
+              { type: 'text-end' as const, id: textId },
+            ] : []),
             { type: 'tool-call' as const, toolCallId: id, toolName: call.toolName, input: JSON.stringify(call.input) },
             {
               type: 'finish' as const,

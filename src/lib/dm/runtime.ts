@@ -318,6 +318,7 @@ export function createDMChatResponse(
             streamFailed = true;
             metrics.error();
           }
+          if (!isAllowedAgentStreamChunk(chunk)) continue;
           writer.write(chunk as UIMessageChunk);
         }
 
@@ -358,6 +359,28 @@ export function createDMChatResponse(
       'X-DM-Trace-Id': deps.traceId ?? 'unknown',
     },
   });
+}
+
+function isAllowedAgentStreamChunk(chunk: UIMessageChunk): boolean {
+  switch (chunk.type) {
+    case 'start':
+    case 'start-step':
+    case 'finish-step':
+    case 'tool-input-start':
+    case 'tool-input-delta':
+    case 'tool-input-available':
+    case 'tool-input-error':
+    case 'tool-output-available':
+    case 'tool-output-error':
+    case 'tool-output-denied':
+    case 'tool-approval-request':
+    case 'tool-approval-response':
+    case 'error':
+    case 'abort':
+      return true;
+    default:
+      return false;
+  }
 }
 
 function createRuntimePublicTools(
