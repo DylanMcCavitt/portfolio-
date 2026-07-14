@@ -502,6 +502,34 @@ test('the endpoint accepts bounded UIMessage input and returns the standard type
   assert.match(observation.answerText, /published projects/);
 });
 
+test('the endpoint never puts unvalidated model text chunks on the wire', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('What can you help with?');
+  const sentinel = 'UNVALIDATED_MODEL_TEXT_SENTINEL';
+  const handler = createDMPostHandler({
+    config,
+    db: source.db,
+    model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
+      segments: [{ kind: 'conversational', act: 'capabilities' }],
+      artifacts: [],
+      limitations: [],
+    }, prose: sentinel }]),
+  });
+  const response = await handler({
+    request: new Request('https://portfolio.test/api/dm/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    }),
+  } as never);
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(body, new RegExp(sentinel));
+  assert.match(body, /data-dm-answer/);
+  assert.match(body, /published projects/);
+});
+
 test('the endpoint never puts invalid finalization prose on the wire', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest('What can you help with?');
