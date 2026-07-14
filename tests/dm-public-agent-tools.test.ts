@@ -57,6 +57,14 @@ test('project, resume, and contact tools return sanitized public records with st
   assert.deepEqual(resume.artifactIds, ['now']);
   assert.ok(resume.evidenceIds.includes('resume:now:role'));
 
+  const allResumeTracks = await run.readResume({});
+  const emptyResumeFilter = await run.readResume({ trackIds: [] });
+  assert.equal(emptyResumeFilter.status, 'complete');
+  assert.deepEqual(
+    emptyResumeFilter.tracks.map((track) => track.id),
+    allResumeTracks.tracks.map((track) => track.id),
+  );
+
   const contact = await run.getContact({});
   assert.equal(contact.status, 'complete');
   assert.equal(contact.contact?.email, 'dylanmccavitt@outlook.com');
@@ -147,6 +155,13 @@ test('approved public-source search composes with project tools and rechecks eve
   assert.doesNotMatch(JSON.stringify(sources), /candidate-hidden|private\.md|file-private/);
   assert.equal(run.evidenceLedger.has('citation:rag-public'), true);
   assert.equal(run.evidenceLedger.has('citation:rag-private'), false);
+
+  const omittedProjectFilter = await run.searchPublicSources({ query: 'public evidence' });
+  const emptyProjectFilter = await run.searchPublicSources({ query: 'public evidence', projectIds: [] });
+  assert.deepEqual(
+    emptyProjectFilter.sources.map((source) => source.id),
+    omittedProjectFilter.sources.map((source) => source.id),
+  );
 
   const missingConfig = createPublicAgentTools({
     db: unusedDb(),

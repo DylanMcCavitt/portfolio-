@@ -320,7 +320,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
     'Read canonical public resume entries, optionally filtered by a query or stable track ids.',
     ReadResumeInputSchema,
     async (input, signal) => {
-      const requested = input.trackIds ? new Set(input.trackIds) : null;
+      const requested = input.trackIds?.length ? new Set(input.trackIds) : null;
       const knownRequested = requested
         ? RESUME.tracks.filter((track) => requested.has(track.id))
         : RESUME.tracks;
@@ -396,8 +396,10 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
       const published = await loadProjects();
       throwIfAborted(signal);
       const publishedIds = new Set(published.map((project) => project.id));
-      const requestedIds = input.projectIds?.filter((id) => publishedIds.has(id));
-      if (input.projectIds && requestedIds?.length === 0) {
+      const requestedIds = input.projectIds?.length
+        ? input.projectIds.filter((id) => publishedIds.has(id))
+        : undefined;
+      if (input.projectIds?.length && requestedIds?.length === 0) {
         return resultWithEvidence({
           status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [], limitations: [],
         });
