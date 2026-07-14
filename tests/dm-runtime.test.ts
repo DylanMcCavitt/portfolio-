@@ -7,6 +7,7 @@ import { createEvalProjectSource, createUnavailableEvalPublicSourceSearch } from
 import { observeDMResponse } from '@/lib/dm/response-observer';
 import { createDMChatResponse, readDMBudgetConfig, readDMRuntimeConfig } from '@/lib/dm/runtime';
 import type { DMChatRequest } from '@/lib/dm/contract';
+import type { DMMetricsRecord } from '@/lib/dm/metrics';
 import { createDMPostHandler } from '@/pages/api/dm/chat';
 
 const config = { provider: 'openai' as const, model: 'openai/test-model' };
@@ -59,6 +60,44 @@ test('one ToolLoopAgent run calls public tools and accepts only same-run evidenc
   assert.ok(observation.evidenceIds.includes('agentic-trader:identity'));
   assert.match(observation.answerText, /trading automation/i);
   assert.equal(observation.result?.status, 'accepted');
+});
+
+test('runtime metrics mark the first visible public-tool state before completion', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('Which project shows trading automation?');
+  const metricsLines: string[] = [];
+  const model = toolSequenceModel([
+    { toolName: 'searchProjects', input: { query: 'trading automation', limit: 1 } },
+    {
+      toolName: 'finalizeAnswer',
+      input: {
+        segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      },
+    },
+  ]);
+
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    db: source.db,
+    projectLoader: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      return source.projectLoader();
+    },
+    model,
+    metricsLogger: (line) => metricsLines.push(line),
+  }), request);
+  const metrics = parseMetricsRecord(metricsLines);
+
+  assert.equal(observation.outcome, 'completed');
+  assert.equal(metrics.outcome, 'completed');
+  assert.equal(metrics.toolCount, 1);
+  assert.equal(typeof metrics.firstTokenMs, 'number');
+  assert.equal(typeof metrics.completionMs, 'number');
+  assert.ok(
+    (metrics.completionMs as number) - (metrics.firstTokenMs as number) >= 25,
+    `expected visible tool state before completion, got ${metrics.firstTokenMs}ms and ${metrics.completionMs}ms`,
+  );
 });
 
 test('same-step finalization waits for public evidence and artifacts to settle', async () => {
@@ -493,6 +532,13 @@ test('the endpoint never puts unvalidated model prose on the wire', async () => 
 
 function chatRequest(text: string): DMChatRequest {
   return { messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text }] }] };
+}
+
+function parseMetricsRecord(lines: string[]): DMMetricsRecord {
+  assert.equal(lines.length, 1);
+  const prefix = '[dm-metrics] ';
+  assert.ok(lines[0].startsWith(prefix));
+  return JSON.parse(lines[0].slice(prefix.length)) as DMMetricsRecord;
 }
 
 type MockToolCall = { toolName: string; input: unknown; prose?: string };

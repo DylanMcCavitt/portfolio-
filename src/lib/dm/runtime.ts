@@ -328,13 +328,16 @@ export function createDMChatResponse(
           onError: (error) => safeErrorMessage(error),
         });
         let streamFailed = false;
+        const finalizationToolCalls = new Set<string>();
         for await (const chunk of uiStream) {
+          if (!isAllowedAgentStreamChunk(chunk)) continue;
+          rememberFinalizationToolCall(chunk, finalizationToolCalls);
+          writer.write(chunk as UIMessageChunk);
+          if (isVisitorVisibleAgentStreamChunk(chunk, finalizationToolCalls)) metrics.visibleOutput();
           if (chunk.type === 'error') {
             streamFailed = true;
             metrics.error();
           }
-          if (!isAllowedAgentStreamChunk(chunk)) continue;
-          writer.write(chunk as UIMessageChunk);
         }
 
         if (abort.signal.aborted) {
@@ -347,10 +350,10 @@ export function createDMChatResponse(
         const evidence = publicRun.evidenceLedger.snapshot();
         metrics.setSource(sourceMode(evidence.map((item) => item.source)), evidence.length, finalizationResult.status === 'limited');
         metrics.setUsage(inputTokens, outputTokens);
-        metrics.visibleOutput();
-        metrics.finish('completed');
         writer.write({ type: 'data-dm-answer', data: finalizationResult });
+        metrics.visibleOutput();
         writer.write({ type: 'finish' });
+        metrics.finish('completed');
       } catch (error) {
         if (abort.signal.aborted) {
           metrics.finish(abort.timedOut() ? 'timeout' : 'aborted');
@@ -396,6 +399,35 @@ function isAllowedAgentStreamChunk(chunk: UIMessageChunk): boolean {
     default:
       return false;
   }
+}
+
+function rememberFinalizationToolCall(chunk: UIMessageChunk, finalizationToolCalls: Set<string>): void {
+  if (
+    (chunk.type === 'tool-input-start' || chunk.type === 'tool-input-available' || chunk.type === 'tool-input-error')
+    && chunk.toolName === 'finalizeAnswer'
+  ) {
+    finalizationToolCalls.add(chunk.toolCallId);
+  }
+}
+
+function isVisitorVisibleAgentStreamChunk(
+  chunk: UIMessageChunk,
+  finalizationToolCalls: ReadonlySet<string>,
+): boolean {
+  if (chunk.type === 'tool-input-start' || chunk.type === 'tool-input-available') {
+    return chunk.toolName !== 'finalizeAnswer';
+  }
+  if (chunk.type === 'tool-output-available' && finalizationToolCalls.has(chunk.toolCallId)) {
+    return isVisibleFinalizationResult(chunk.output);
+  }
+  return chunk.type === 'error';
+}
+
+function isVisibleFinalizationResult(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && 'status' in value
+    && (value.status === 'accepted' || value.status === 'limited');
 }
 
 function createRuntimePublicTools(
