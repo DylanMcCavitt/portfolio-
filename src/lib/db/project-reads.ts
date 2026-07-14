@@ -44,7 +44,6 @@ export interface ProjectSeoReadModel {
 export interface DmProjectArtifactReadModel {
   kind: 'project';
   id: string;
-  slug: string;
   title: string;
   area: ProjectArea;
   status: ProjectStatus;
@@ -286,7 +285,6 @@ export function projectRecordToReadModels(record: ProjectReadRecord | CatalogSha
   const dmArtifact: DmProjectArtifactReadModel = {
     kind: 'project',
     id: record.id,
-    slug: record.slug,
     title: publicFields.title,
     area: publicFields.area,
     status,

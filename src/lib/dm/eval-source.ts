@@ -96,7 +96,7 @@ function corpusProjectModel(project: z.infer<typeof CorpusProjectSchema>): Proje
     source: 'test_seed',
     seo: { title: `${project.title} · Dylan McCavitt`, description: project.summary, ogImage: `/og/projects/${project.slug}.png`, sitemapPath: `${href}/` },
     dmArtifact: {
-      kind: 'project', id: project.id, slug: project.slug, title: project.title,
+      kind: 'project', id: project.id, title: project.title,
       area: project.area as ProjectDetailReadModel['area'], status: project.status, year: project.year,
       activity: project.activity, line: project.line, href, wip: project.wip, money: project.money,
       links, metrics, about: project.about, notes: project.notes, stack, source: 'portfolio-db',

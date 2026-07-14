@@ -107,7 +107,7 @@ export function readDMBudgetConfig(env: DMRuntimeEnv = process.env): DMBudgetCon
   return {
     deadlineMs: readBoundedInteger(env.DM_REQUEST_DEADLINE_MS, 45_000, 5_000, 120_000),
     maxOutputTokens: readBoundedInteger(env.DM_MAX_OUTPUT_TOKENS, 1_200, 128, 4_096),
-    maxSteps: readBoundedInteger(env.DM_MAX_STEPS, 8, 2, 12),
+    maxSteps: readBoundedInteger(env.DM_MAX_STEPS, 6, 2, 8),
   };
 }
 
