@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { simulateReadableStream, type LanguageModel } from 'ai';
+import { simulateReadableStream, type LanguageModel, type UIMessageChunk } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
+import { validateFinalizationResult } from '@/lib/dm/client';
 import { createEvalProjectSource, createUnavailableEvalPublicSourceSearch } from '@/lib/dm/eval-source';
 import { observeDMResponse } from '@/lib/dm/response-observer';
 import { createDMChatResponse, readDMBudgetConfig, readDMRuntimeConfig } from '@/lib/dm/runtime';
-import type { DMChatRequest } from '@/lib/dm/contract';
+import type { DMChatRequest, DMFinalizationResult, DMUIData } from '@/lib/dm/contract';
 import type { DMMetricsRecord } from '@/lib/dm/metrics';
 import { createDMPostHandler } from '@/pages/api/dm/chat';
 
@@ -522,12 +523,17 @@ test('the endpoint never puts unvalidated model text chunks on the wire', async 
       body: JSON.stringify(request),
     }),
   } as never);
+  const observation = await observeDMResponse(response.clone(), request);
   const body = await response.text();
+  const chunks = observation.timedChunks.map(({ chunk }) => chunk);
 
   assert.equal(response.status, 200);
   assert.doesNotMatch(body, new RegExp(sentinel));
   assert.match(body, /data-dm-answer/);
   assert.match(body, /published projects/);
+  assert.equal(chunks.filter(isFinalizationInputStart).length, 1);
+  assert.equal(chunks.some(isFinalizationInputAvailable), false);
+  assert.equal(fallbackFinalizationResult(chunks)?.status, 'accepted');
 });
 
 test('the endpoint never puts invalid finalization prose on the wire', async () => {
@@ -542,7 +548,7 @@ test('the endpoint never puts invalid finalization prose on the wire', async () 
   const handler = createDMPostHandler({
     config,
     db: source.db,
-    model: toolSequenceModel([
+    model: streamedToolSequenceModel([
       { toolName: 'finalizeAnswer', input: invalidFinalization },
       { toolName: 'finalizeAnswer', input: invalidFinalization },
     ]),
@@ -556,13 +562,49 @@ test('the endpoint never puts invalid finalization prose on the wire', async () 
   } as never);
   const observation = await observeDMResponse(response.clone(), request);
   const body = await response.text();
+  const chunks = observation.timedChunks.map(({ chunk }) => chunk);
+  const finalizationToolCallIds = new Set(chunks.filter(isFinalizationInputStart).map((chunk) => chunk.toolCallId));
 
   assert.equal(response.status, 200);
   assert.doesNotMatch(body, new RegExp(sentinel));
   assert.match(body, /data-dm-answer/);
+  assert.equal(finalizationToolCallIds.size, 2);
+  assert.equal(chunks.some(isFinalizationInputAvailable), false);
+  assert.equal(
+    chunks.some((chunk) => chunk.type === 'tool-input-delta' && finalizationToolCallIds.has(chunk.toolCallId)),
+    false,
+  );
+  assert.equal(fallbackFinalizationResult(chunks)?.status, 'limited');
   assert.equal(observation.result?.status, 'limited');
   assert.match(observation.answerText, /could not verify/i);
 });
+
+function isFinalizationInputStart(
+  chunk: UIMessageChunk<unknown, DMUIData>,
+): chunk is Extract<UIMessageChunk<unknown, DMUIData>, { type: 'tool-input-start' }> {
+  return chunk.type === 'tool-input-start' && chunk.toolName === 'finalizeAnswer';
+}
+
+function isFinalizationInputAvailable(chunk: UIMessageChunk<unknown, DMUIData>): boolean {
+  return chunk.type === 'tool-input-available' && chunk.toolName === 'finalizeAnswer';
+}
+
+function fallbackFinalizationResult(
+  chunks: UIMessageChunk<unknown, DMUIData>[],
+): Exclude<DMFinalizationResult, { status: 'rejected' }> | null {
+  const toolCalls = new Map<string, string>();
+  let finalizationResult: Exclude<DMFinalizationResult, { status: 'rejected' }> | null = null;
+  for (const chunk of chunks) {
+    if (chunk.type === 'tool-input-start' || chunk.type === 'tool-input-available') {
+      toolCalls.set(chunk.toolCallId, chunk.toolName);
+      continue;
+    }
+    if (chunk.type !== 'tool-output-available' || toolCalls.get(chunk.toolCallId) !== 'finalizeAnswer') continue;
+    const result = validateFinalizationResult(chunk.output);
+    if (result && result.status !== 'rejected') finalizationResult = result;
+  }
+  return finalizationResult;
+}
 
 function chatRequest(text: string): DMChatRequest {
   return { messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text }] }] };
@@ -582,6 +624,40 @@ function toolSequenceModel(
   observedPrompts: LanguageModelV4CallOptions[] = [],
 ): LanguageModel {
   return toolStepModel(calls.map((call) => [call]), observedPrompts);
+}
+
+function streamedToolSequenceModel(calls: MockToolCall[]): LanguageModel {
+  let index = 0;
+  return new MockLanguageModelV4({
+    doStream: async () => {
+      const call = calls[index++];
+      if (!call) throw new Error('mock model received an unexpected extra step');
+      const id = `streamed-call-${index}`;
+      const input = JSON.stringify(call.input);
+      const splitAt = Math.max(1, Math.floor(input.length / 2));
+      return {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start' as const, warnings: [] },
+            { type: 'response-metadata' as const, id: `streamed-response-${index}`, modelId: 'mock-streamed-tool-loop', timestamp: new Date(0) },
+            { type: 'tool-input-start' as const, id, toolName: call.toolName },
+            { type: 'tool-input-delta' as const, id, delta: input.slice(0, splitAt) },
+            { type: 'tool-input-delta' as const, id, delta: input.slice(splitAt) },
+            { type: 'tool-input-end' as const, id },
+            { type: 'tool-call' as const, toolCallId: id, toolName: call.toolName, input },
+            {
+              type: 'finish' as const,
+              finishReason: { unified: 'tool-calls' as const, raw: 'tool-calls' },
+              usage: {
+                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 8, text: 8, reasoning: undefined },
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
 }
 
 function toolStepModel(

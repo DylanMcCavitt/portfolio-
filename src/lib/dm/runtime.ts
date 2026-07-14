@@ -329,10 +329,21 @@ export function createDMChatResponse(
         });
         let streamFailed = false;
         const finalizationToolCalls = new Set<string>();
+        const mappedFinalizationToolCalls = new Set<string>();
         for await (const chunk of uiStream) {
           if (!isAllowedAgentStreamChunk(chunk)) continue;
           rememberFinalizationToolCall(chunk, finalizationToolCalls);
-          if (isFinalizationInputLifecycleChunk(chunk, finalizationToolCalls)) continue;
+          if (isFinalizationInputLifecycleChunk(chunk, finalizationToolCalls)) {
+            if (!mappedFinalizationToolCalls.has(chunk.toolCallId)) {
+              mappedFinalizationToolCalls.add(chunk.toolCallId);
+              writer.write({
+                type: 'tool-input-start',
+                toolCallId: chunk.toolCallId,
+                toolName: 'finalizeAnswer',
+              });
+            }
+            continue;
+          }
           writer.write(chunk as UIMessageChunk);
           if (isVisitorVisibleAgentStreamChunk(chunk, finalizationToolCalls)) metrics.visibleOutput();
           if (chunk.type === 'error') {
@@ -414,7 +425,9 @@ function rememberFinalizationToolCall(chunk: UIMessageChunk, finalizationToolCal
 function isFinalizationInputLifecycleChunk(
   chunk: UIMessageChunk,
   finalizationToolCalls: ReadonlySet<string>,
-): boolean {
+): chunk is Extract<UIMessageChunk, {
+  type: 'tool-input-start' | 'tool-input-delta' | 'tool-input-available' | 'tool-input-error';
+}> {
   switch (chunk.type) {
     case 'tool-input-start':
     case 'tool-input-delta':
