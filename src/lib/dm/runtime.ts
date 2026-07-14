@@ -332,6 +332,7 @@ export function createDMChatResponse(
         for await (const chunk of uiStream) {
           if (!isAllowedAgentStreamChunk(chunk)) continue;
           rememberFinalizationToolCall(chunk, finalizationToolCalls);
+          if (isFinalizationInputLifecycleChunk(chunk, finalizationToolCalls)) continue;
           writer.write(chunk as UIMessageChunk);
           if (isVisitorVisibleAgentStreamChunk(chunk, finalizationToolCalls)) metrics.visibleOutput();
           if (chunk.type === 'error') {
@@ -407,6 +408,21 @@ function rememberFinalizationToolCall(chunk: UIMessageChunk, finalizationToolCal
     && chunk.toolName === 'finalizeAnswer'
   ) {
     finalizationToolCalls.add(chunk.toolCallId);
+  }
+}
+
+function isFinalizationInputLifecycleChunk(
+  chunk: UIMessageChunk,
+  finalizationToolCalls: ReadonlySet<string>,
+): boolean {
+  switch (chunk.type) {
+    case 'tool-input-start':
+    case 'tool-input-delta':
+    case 'tool-input-available':
+    case 'tool-input-error':
+      return finalizationToolCalls.has(chunk.toolCallId);
+    default:
+      return false;
   }
 }
 

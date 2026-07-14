@@ -502,18 +502,22 @@ test('the endpoint accepts bounded UIMessage input and returns the standard type
   assert.match(observation.answerText, /published projects/);
 });
 
-test('the endpoint never puts unvalidated model prose on the wire', async () => {
+test('the endpoint never puts invalid finalization prose on the wire', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest('What can you help with?');
   const sentinel = 'UNVALIDATED_MODEL_PROSE_SENTINEL';
+  const invalidFinalization = {
+    segments: [{ kind: 'factual', text: sentinel, evidenceIds: ['invented:evidence'] }],
+    artifacts: [],
+    limitations: [],
+  };
   const handler = createDMPostHandler({
     config,
     db: source.db,
-    model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
-      segments: [{ kind: 'conversational', act: 'capabilities' }],
-      artifacts: [],
-      limitations: [],
-    }, prose: sentinel }]),
+    model: toolSequenceModel([
+      { toolName: 'finalizeAnswer', input: invalidFinalization },
+      { toolName: 'finalizeAnswer', input: invalidFinalization },
+    ]),
   });
   const response = await handler({
     request: new Request('https://portfolio.test/api/dm/chat', {
@@ -522,12 +526,14 @@ test('the endpoint never puts unvalidated model prose on the wire', async () => 
       body: JSON.stringify(request),
     }),
   } as never);
+  const observation = await observeDMResponse(response.clone(), request);
   const body = await response.text();
 
   assert.equal(response.status, 200);
   assert.doesNotMatch(body, new RegExp(sentinel));
   assert.match(body, /data-dm-answer/);
-  assert.match(body, /published projects/);
+  assert.equal(observation.result?.status, 'limited');
+  assert.match(observation.answerText, /could not verify/i);
 });
 
 function chatRequest(text: string): DMChatRequest {
