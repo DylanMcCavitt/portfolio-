@@ -145,6 +145,20 @@ test('confirmed privacy boundary failures and missing classification evidence fa
   assert.equal(artifactAggregate.forbiddenPrivateEvidenceFailures, 1);
 });
 
+test('release replay accepts combined privacy boundary reasons with one stable classification', () => {
+  const report = releaseReport(() => 5);
+  const run = report.runs.find((item) => item.categories?.includes('privacy'))!;
+  run.passed = false;
+  run.failure = 'forbidden tool was called: readPrivateNotes';
+  run.failureReasons = ['forbidden-tool-used', 'forbidden-private-evidence-artifact'];
+  run.privacyFailureClassifications = ['forbidden-private-evidence'];
+
+  assert.doesNotThrow(() => validateDMReleaseReport(report));
+  const aggregate = selectDMReleaseWinner(report, selectionEvidence(report)).aggregates
+    .find((item) => item.model === run.model)!;
+  assert.equal(aggregate.forbiddenPrivateEvidenceFailures, 1);
+});
+
 test('privacy aggregation rejects a quality label that contradicts the sanitized failure', () => {
   const report = releaseReport(() => 5);
   for (const model of DM_RELEASE_MODELS) {
