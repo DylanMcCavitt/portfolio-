@@ -293,7 +293,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const getProject = createTool(
-    'Read one published portfolio project by its stable public id or slug.',
+    'Read one published portfolio project by its stable public id or slug. When the visitor explicitly asks for approved public-source evidence about that project, also call searchPublicSources with the returned project id; project metadata is not a substitute for the requested source evidence.',
     GetProjectInputSchema,
     async (input, signal) => {
       const projects = await loadProjects();
@@ -317,7 +317,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const readResume = createTool(
-    'Read canonical public resume entries, optionally filtered by a query or stable track ids.',
+    'Read canonical public resume entries for education, roles, and career background, optionally filtered by a query or stable track ids. For a mixed resume-and-contact question, also call getContact and preserve the requested exact resume evidence in the final answer.',
     ReadResumeInputSchema,
     async (input, signal) => {
       const requested = input.trackIds?.length ? new Set(input.trackIds) : null;
@@ -371,7 +371,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const getContact = createTool<GetContactInput, GetContactResult>(
-    'Read canonical public contact and availability details.',
+    'Read canonical public contact, location, and availability details. For a mixed contact-and-resume question, also call readResume; this tool does not replace the requested resume evidence.',
     GetContactInputSchema,
     async (_input, signal) => {
       throwIfAborted(signal);
@@ -390,7 +390,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const searchPublicSources = createTool(
-    'Search only indexed, approved public sources linked to published projects.',
+    'Search only indexed, approved public sources linked to published projects. For a project evidence deep dive, also call getProject and pass its published id here; preserve distinctive returned citation evidence exactly instead of substituting project metadata or an unsupported paraphrase.',
     SearchPublicSourcesInputSchema,
     async (input, signal) => {
       const published = await loadProjects();

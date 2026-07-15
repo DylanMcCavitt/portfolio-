@@ -32,6 +32,16 @@ test('public agent tool schemas are strict and bound their required inputs', () 
   assert.equal(SearchProfileInputSchema.safeParse({ query: 'leadership', categories: ['work'] }).success, true);
 });
 
+test('composition tool descriptions require every requested public source', () => {
+  const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
+
+  assert.match(run.readResume.description, /getContact/);
+  assert.match(run.getContact.description, /readResume/);
+  assert.match(run.getProject.description, /searchPublicSources/);
+  assert.match(run.searchPublicSources.description, /getProject/);
+  assert.match(run.searchPublicSources.description, /approved public/i);
+});
+
 test('project, resume, and contact tools return sanitized public records with stable evidence and artifact ids', async () => {
   const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
 

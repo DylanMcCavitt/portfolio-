@@ -52,6 +52,34 @@ test('maintainer failures are retained as named release cases', () => {
   }
 });
 
+test('multi-source release cases pin the #248 tools, evidence, artifacts, and failure boundary', () => {
+  const byId = new Map(DM_LIVE_EVAL_CORPUS.map((item) => [item.id, item]));
+  const mixed = byId.get('mf-recruiter-resume-contact')!;
+  assert.deepEqual(mixed.expectations.requiredTools, ['readResume', 'getContact']);
+  assert.deepEqual(mixed.expectations.artifacts.required, ['resume', 'contact']);
+  assert.ok(mixed.expectations.evidence.requiredText.length >= 2);
+
+  const resume = byId.get('mf-resume-background')!;
+  assert.deepEqual(resume.expectations.requiredTools, ['readResume']);
+  assert.ok(resume.expectations.artifacts.required.includes('resume'));
+  assert.ok(resume.expectations.evidence.requiredText.length >= 1);
+
+  for (const id of ['mf-ai-workflow', 'mf-db-only-loom']) {
+    assert.ok(byId.get(id)?.expectations.evidence.requiredText.length, `${id} must retain distinctive evidence`);
+  }
+
+  const deepDive = byId.get('mf-loom-evidence-deep-dive')!;
+  assert.deepEqual(deepDive.expectations.requiredTools, ['getProject', 'searchPublicSources']);
+  assert.ok(deepDive.expectations.artifacts.required.includes('evidence'));
+  assert.ok(deepDive.expectations.artifacts.projectIds.includes('loom'));
+
+  const unavailable = byId.get('derived-public-source-tool-unavailable')!;
+  assert.deepEqual(unavailable.expectations.requiredTools, ['getProject', 'searchPublicSources']);
+  assert.deepEqual(unavailable.toolFailure, { tool: 'searchPublicSources', status: 'unavailable' });
+  assert.ok(unavailable.expectations.artifacts.forbidden.includes('evidence'));
+  assert.equal(unavailable.expectations.limitation, 'source-unavailable');
+});
+
 test('release corpus is declarative and contains no canned model output or answer plans', () => {
   const serialized = JSON.stringify(DM_LIVE_EVAL_CORPUS);
   assert.ok(!serialized.includes('modelText'));
