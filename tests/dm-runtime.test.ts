@@ -236,6 +236,75 @@ test('a second invalid finalization fails closed with a limited answer', async (
 test('finalization enforces zero, one, and bounded project artifact cardinality', async (t) => {
   const source = await createEvalProjectSource();
 
+  await t.test('the current request binds intent before model-selected finalization', async () => {
+    const cases = [
+      { prompt: 'Tell me about exactly one project. Render one project card.', intent: 'one_project' },
+      { prompt: 'Tell me about three projects but do not render any artifact cards.', intent: 'none' },
+      { prompt: 'Tell me about projects and return zero project cards.', intent: 'none' },
+      { prompt: 'Tell me about projects and return 0 project cards.', intent: 'none' },
+      { prompt: 'Which projects are live right now?', intent: 'project_set' },
+      { prompt: 'List all live projects.', intent: 'project_set' },
+      { prompt: "Give me a broad overview of Dylan's projects.", intent: 'project_set' },
+      { prompt: "Tell me about Dylan's most impressive project.", intent: 'one_project' },
+      { prompt: 'Which project best shows client software work?', intent: 'one_project' },
+      { prompt: "Show one card for one of Dylan's projects.", intent: 'one_project' },
+      { prompt: 'Without screenshots, show me a project card.', intent: 'one_project' },
+      { prompt: 'Show me a project card without links.', intent: 'one_project' },
+    ] as const;
+
+    for (const testCase of cases) {
+      const request = chatRequest(testCase.prompt);
+      const wrongIntent = testCase.intent === 'one_project'
+        ? 'project_set'
+        : testCase.intent === 'project_set'
+          ? 'none'
+          : 'one_project';
+      const wrongArtifacts = wrongIntent === 'none'
+        ? []
+        : wrongIntent === 'one_project'
+          ? [{ kind: 'project', id: 'agentic-trader' }]
+          : [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }];
+      const correctedArtifacts = testCase.intent === 'none'
+        ? []
+        : testCase.intent === 'one_project'
+          ? [{ kind: 'project', id: 'agentic-trader' }]
+          : [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }];
+      const model = toolSequenceModel([
+        { toolName: 'getProject', input: { id: 'agentic-trader' } },
+        { toolName: 'getProject', input: { id: 'loom' } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{
+            kind: 'factual',
+            text: 'Published project evidence supports the answer.',
+            evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+          }],
+          artifactIntent: wrongIntent,
+          artifacts: wrongArtifacts,
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{
+            kind: 'factual',
+            text: 'Published project evidence supports the answer.',
+            evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+          }],
+          artifactIntent: testCase.intent,
+          artifacts: correctedArtifacts,
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
+
+      assert.equal(observation.result?.status, 'accepted', testCase.prompt);
+      assert.equal(observation.result?.repairAttempted, true, testCase.prompt);
+      assert.equal(observation.projectIds.length, correctedArtifacts.length, testCase.prompt);
+    }
+  });
+
   await t.test('zero artifacts preserves grounded prose after one repair', async () => {
     const request = chatRequest('Return grounded project prose without artifact cards.');
     const model = toolSequenceModel([
@@ -408,26 +477,37 @@ test('finalization enforces zero, one, and bounded project artifact cardinality'
   });
 
   await t.test('non-project intent accepts same-run project links without a project card', async () => {
-    const request = chatRequest('Return published project links without a project card.');
-    const model = toolSequenceModel([
-      { toolName: 'getProject', input: { id: 'loom' } },
-      { toolName: 'finalizeAnswer', input: {
-        segments: [{ kind: 'factual', text: 'Published project links are available.', evidenceIds: ['loom:identity'] }],
-        artifactIntent: 'non_project',
-        artifacts: [{ kind: 'links', id: 'loom' }],
-        limitations: [],
-      } },
-    ]);
-    const observation = await observeDMResponse(createDMChatResponse(request, config, {
-      db: source.db,
-      projectLoader: source.projectLoader,
-      model,
-    }), request);
+    for (const prompt of [
+      'Return published project links without a project card.',
+      'Return project links, not cards.',
+    ]) {
+      const request = chatRequest(prompt);
+      const model = toolSequenceModel([
+        { toolName: 'getProject', input: { id: 'loom' } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['loom:identity'] }],
+          artifactIntent: 'project_set',
+          artifacts: [{ kind: 'project', id: 'loom' }],
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'factual', text: 'Published project links are available.', evidenceIds: ['loom:identity'] }],
+          artifactIntent: 'non_project',
+          artifacts: [{ kind: 'links', id: 'loom' }],
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
 
-    assert.equal(observation.result?.status, 'accepted');
-    assert.equal(observation.result?.repairAttempted, false);
-    assert.deepEqual(observation.blockKinds, ['links']);
-    assert.deepEqual(observation.projectIds, []);
+      assert.equal(observation.result?.status, 'accepted', prompt);
+      assert.equal(observation.result?.repairAttempted, true, prompt);
+      assert.deepEqual(observation.blockKinds, ['links'], prompt);
+      assert.deepEqual(observation.projectIds, [], prompt);
+    }
   });
 
   await t.test('duplicate project references normalize to one card', async () => {

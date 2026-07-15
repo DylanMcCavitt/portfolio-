@@ -253,7 +253,7 @@ export function createDMChatResponse(
     ...(deps.ragSearch ? { ragSearch: deps.ragSearch } : {}),
     ragApiKey: deps.env?.OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim(),
   });
-  const artifacts = emptyArtifacts();
+  const artifacts = emptyArtifacts(requestedArtifactIntent(request));
   const publicToolGate = createPublicToolGate();
   let finalizationAttempts = 0;
   let finalizationResult: Exclude<DMFinalizationResult, { status: 'rejected' }> | null = null;
@@ -265,7 +265,7 @@ export function createDMChatResponse(
   const agentTools = {
     ...publicTools,
     finalizeAnswer: tool({
-      description: 'Submit the complete structured visitor answer and its requested artifact intent. Use exactly once after gathering any needed public evidence; retry once only when rejected.',
+      description: 'Submit the complete structured visitor answer and its requested artifact intent. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
       inputSchema: FinalAnswerInputSchema,
       execute: async (input: FinalAnswerInput) => {
         await publicToolGate.waitForIdle();
@@ -574,9 +574,12 @@ function validateFinalAnswer(
 ): { ok: true; answer: DMValidatedAnswer } | { ok: false; errors: string[] } {
   const changedIntent = artifacts.boundArtifactIntent !== null
     && input.artifactIntent !== artifacts.boundArtifactIntent;
+  const unavailableProjectFallback = artifacts.projects.size === 0
+    && input.artifactIntent === 'none'
+    && (artifacts.boundArtifactIntent === 'one_project' || artifacts.boundArtifactIntent === 'project_set');
   artifacts.boundArtifactIntent ??= input.artifactIntent;
-  if (changedIntent) {
-    return { ok: false, errors: ['artifact intent cannot change during finalization repair'] };
+  if (changedIntent && !unavailableProjectFallback) {
+    return { ok: false, errors: ['artifact intent must match the current request and cannot change during repair'] };
   }
   const errors: string[] = [];
   const artifactReferences = deduplicateArtifactReferences(input.artifacts);
@@ -690,15 +693,99 @@ function resolveArtifact(reference: ArtifactReference, artifacts: RunArtifacts):
   return project ? [{ kind: 'links', id: `links:${project.id}`, projectId: project.id, items: project.links }] : [];
 }
 
-function emptyArtifacts(): RunArtifacts {
+function emptyArtifacts(boundArtifactIntent: ArtifactIntent | null = null): RunArtifacts {
   return {
     projects: new Map(),
     resumeTracks: new Map(),
     contact: null,
     sources: new Map(),
     limitations: new Set(),
-    boundArtifactIntent: null,
+    boundArtifactIntent,
   };
+}
+
+function requestedArtifactIntent(request: DMChatRequest): ArtifactIntent | null {
+  const latestUser = request.messages.findLast((message) => message.role === 'user');
+  const text = latestUser?.parts
+    .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join(' ') ?? '';
+  const tokens = artifactIntentTokens(text);
+
+  // This policy sets only the artifact envelope. Tool choice, project
+  // selection, evidence, subject resolution, and answer prose stay model-led.
+  if (requestsProjectLinksWithoutCards(tokens)) return 'non_project';
+  if (requestsNoArtifacts(tokens)) return 'none';
+  if (requestsOneProject(tokens)) return 'one_project';
+  if (requestsProjectSet(tokens)) return 'project_set';
+  return null;
+}
+
+function artifactIntentTokens(value: string): string[] {
+  let folded = '';
+  for (const character of value.normalize('NFKD').toLowerCase()) {
+    const code = character.codePointAt(0) ?? 0;
+    const isAsciiLetter = code >= 97 && code <= 122;
+    const isDigit = code >= 48 && code <= 57;
+    folded += isAsciiLetter || isDigit ? character : ' ';
+  }
+  return folded.split(' ').filter(Boolean);
+}
+
+function requestsProjectLinksWithoutCards(tokens: string[]): boolean {
+  return tokens.some((token) => token === 'link' || token === 'links')
+    && tokens.some((token, index) => (
+      (token === 'card' || token === 'cards') && artifactDirectiveNegator(tokens, index) !== null
+    ));
+}
+
+function requestsNoArtifacts(tokens: string[]): boolean {
+  for (const [index, token] of tokens.entries()) {
+    if (token !== 'card' && token !== 'cards' && token !== 'artifact' && token !== 'artifacts') continue;
+    if (artifactDirectiveNegator(tokens, index) !== null) return true;
+  }
+  return false;
+}
+
+function artifactDirectiveNegator(tokens: string[], nounIndex: number): 'no' | 'without' | 'do_not' | 'zero' | null {
+  let cursor = nounIndex - 1;
+  if (tokens[cursor] === 'project') cursor -= 1;
+  if (tokens[cursor] === 'a' || tokens[cursor] === 'any' || tokens[cursor] === 'the') cursor -= 1;
+  if (['show', 'showing', 'render', 'rendering', 'open', 'opening', 'include', 'including'].includes(tokens[cursor] ?? '')) {
+    cursor -= 1;
+  }
+  if (tokens[cursor] === 'no') return 'no';
+  if (tokens[cursor] === 'without') return 'without';
+  if (tokens[cursor] === 'not' && tokens[cursor - 1] === 'do') return 'do_not';
+  if (tokens[cursor] === 't' && tokens[cursor - 1] === 'don') return 'do_not';
+  if (tokens[cursor] === 'not') return 'no';
+  if (tokens[cursor] === 'zero' || tokens[cursor] === '0') return 'zero';
+  return null;
+}
+
+function requestsOneProject(tokens: string[]): boolean {
+  const projectContext = tokens.includes('project') || tokens.includes('projects');
+  const cardContext = tokens.some((token) => token === 'card' || token === 'cards' || token === 'artifact' || token === 'artifacts');
+  const explicitOne = tokens.some((token) => token === 'one' || token === '1' || token === 'single' || token === 'sole');
+  if (projectContext && cardContext && explicitOne) return true;
+  const singularProject = tokens.includes('project') && !tokens.includes('projects');
+  if (!singularProject) return false;
+  if (tokens.includes('card') || tokens.includes('artifact')) return true;
+  if (explicitOne) return true;
+  if (includesTokenSequence(tokens, ['most', 'impressive'])) return true;
+  return tokens.some((token) => ['best', 'strongest', 'top', 'favorite'].includes(token));
+}
+
+function requestsProjectSet(tokens: string[]): boolean {
+  if (tokens.includes('project') && tokens.includes('set')) return true;
+  if (!tokens.includes('projects')) return false;
+  if (tokens.some((token) => ['list', 'overview', 'all', 'broad'].includes(token))) return true;
+  return tokens.includes('which') && tokens.some((token) => ['live', 'done', 'shipped', 'public', 'available'].includes(token));
+}
+
+function includesTokenSequence(tokens: string[], sequence: string[]): boolean {
+  if (sequence.length === 0 || sequence.length > tokens.length) return false;
+  return tokens.some((_, start) => sequence.every((token, offset) => tokens[start + offset] === token));
 }
 
 function rememberLimitations(artifacts: RunArtifacts, limitations: string[]): void {
@@ -849,7 +936,7 @@ const DM_SYSTEM_INSTRUCTIONS = [
   'Only factual segments accept free text. For no-evidence output, select a server-controlled conversational act, limitation code, and optional follow-up code; never place arbitrary prose in those fields.',
   'Artifact references must use artifact ids returned by tools in this same run. Do not copy or invent artifact payloads.',
   'Set artifactIntent from the latest request: none for explicitly no artifacts, one_project for exactly one or a best-project card, project_set for a project list or overview, and non_project only when rendering resume, contact, evidence, or link artifacts without project cards.',
-  'Artifact intent is fixed on the first finalization attempt and cannot change during repair.',
+  'The server derives explicit zero, one-project, and project-set intent from the current request. Your artifactIntent must match that policy and cannot change during repair.',
   `Project sets are server-bounded to ${MAX_PROJECT_SET_ARTIFACTS} cards. If a requested project artifact is unavailable, finalize honestly without inventing one.`,
   'Call finalizeAnswer with the complete visitor answer. Do not emit visitor-facing prose outside finalizeAnswer.',
   'If finalizeAnswer rejects the structure, repair it exactly once using the rejection errors. Never retry it more than once.',
