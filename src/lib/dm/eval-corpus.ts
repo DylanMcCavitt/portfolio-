@@ -42,6 +42,7 @@ export interface DMEvalExpectations {
     required: DMEvalArtifactKind[];
     forbidden: DMEvalArtifactKind[];
     projectIds: string[];
+    linkProjectIds: string[];
     maxProjectCards?: number;
   };
   limitation: DMEvalLimitation;
@@ -57,6 +58,7 @@ export interface DMLiveEvalCase {
   id: string;
   name: string;
   source: 'maintainer-failure' | 'derived';
+  critical: boolean;
   categories: DMEvalCategory[];
   prompt: string;
   history: DMConversationMessage[];
@@ -64,7 +66,8 @@ export interface DMLiveEvalCase {
   toolFailure?: DMEvalToolFailure;
 }
 
-type CaseInput = Omit<DMLiveEvalCase, 'history' | 'expectations'> & {
+type CaseInput = Omit<DMLiveEvalCase, 'critical' | 'history' | 'expectations'> & {
+  critical?: boolean;
   history?: DMConversationMessage[];
   expectations?: Omit<Partial<DMEvalExpectations>, 'evidence' | 'artifacts'> & {
     evidence?: Partial<DMEvalExpectations['evidence']>;
@@ -83,6 +86,7 @@ const PRIVATE_TOOL_NAMES: DMEvalToolName[] = [
 function evalCase(input: CaseInput): DMLiveEvalCase {
   return {
     ...input,
+    critical: input.critical ?? input.source === 'maintainer-failure',
     history: input.history ?? [],
     expectations: {
       requiredTools: input.expectations?.requiredTools ?? [],
@@ -95,6 +99,7 @@ function evalCase(input: CaseInput): DMLiveEvalCase {
         required: input.expectations?.artifacts?.required ?? [],
         forbidden: input.expectations?.artifacts?.forbidden ?? [],
         projectIds: input.expectations?.artifacts?.projectIds ?? [],
+        linkProjectIds: input.expectations?.artifacts?.linkProjectIds ?? [],
         maxProjectCards: input.expectations?.artifacts?.maxProjectCards,
       },
       limitation: input.expectations?.limitation ?? 'none',
@@ -123,13 +128,13 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
     id: 'mf-loom-coreference', name: 'Project coreference uses the referenced subject', source: 'maintainer-failure', categories: ['factual', 'multi-turn'],
     prompt: 'What about its architecture?',
     history: [{ role: 'user', content: 'Tell me about Loom.' }, { role: 'assistant', content: 'Loom coordinates reviewed delivery work.' }],
-    expectations: { requiredTools: ['getProject'], evidence: { requiredText: ['Loom'] }, artifacts: { forbidden: ['projects'], maxProjectCards: 0 } },
+    expectations: { requiredTools: ['getProject'], forbiddenTools: ['searchProjects'], evidence: { requiredText: ['Loom', 'reviewed publish path'] }, artifacts: { forbidden: ['projects'], maxProjectCards: 0 } },
   }),
   evalCase({
     id: 'mf-evalgate-stack-followup', name: 'Latest stack follow-up answers the requested aspect', source: 'maintainer-failure', categories: ['factual', 'multi-turn'],
     prompt: 'What language is it built with?',
     history: [{ role: 'user', content: 'Tell me about Evalgate.' }, { role: 'assistant', content: 'Evalgate tests grounded agent behavior before release.' }],
-    expectations: { requiredTools: ['getProject'], evidence: { requiredText: ['TypeScript'] }, artifacts: { forbidden: ['projects'], maxProjectCards: 0 } },
+    expectations: { requiredTools: ['getProject'], forbiddenTools: ['searchProjects'], evidence: { requiredText: ['TypeScript'] }, artifacts: { forbidden: ['projects'], maxProjectCards: 0 } },
   }),
   evalCase({
     id: 'mf-one-project-card', name: 'One-card request emits one matching project', source: 'maintainer-failure', categories: ['factual'],
@@ -139,7 +144,7 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
   evalCase({
     id: 'mf-zero-project-cards', name: 'Zero-card request still receives grounded prose', source: 'maintainer-failure', categories: ['factual'],
     prompt: "Tell me about Dylan's projects without showing any project cards.",
-    expectations: { requiredTools: PROJECT_TOOLS, artifacts: { forbidden: ['projects', 'resume', 'contact'], maxProjectCards: 0 } },
+    expectations: { requiredTools: PROJECT_TOOLS, artifacts: { forbidden: ['projects', 'resume', 'contact', 'evidence', 'links'], maxProjectCards: 0 } },
   }),
   evalCase({
     id: 'mf-trading-automation', name: 'Trading automation resolves to public project evidence', source: 'maintainer-failure', categories: ['factual'],
@@ -161,15 +166,15 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
   }),
   evalCase({
     id: 'mf-live-projects', name: 'Live projects do not become an empty refusal', source: 'maintainer-failure', categories: ['factual'],
-    prompt: 'What live projects are available?', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] } },
+    prompt: 'What live projects are available?', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 } },
   }),
   evalCase({
     id: 'mf-list-live-projects', name: 'Project list stays grounded to returned artifacts', source: 'maintainer-failure', categories: ['factual'],
-    prompt: 'List the live projects Dylan can discuss.', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] } },
+    prompt: 'List the live projects Dylan can discuss.', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 } },
   }),
   evalCase({
     id: 'mf-broad-project-overview', name: 'Broad project overview stays representative and concise', source: 'maintainer-failure', categories: ['interpretive'],
-    prompt: 'tell me about dylans projects', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] }, followUp: 'useful' },
+    prompt: 'tell me about dylans projects', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 }, followUp: 'useful' },
   }),
   evalCase({
     id: 'mf-most-impressive-project', name: 'Impact comparison answers most impressive project', source: 'maintainer-failure', categories: ['comparative', 'interpretive'],
@@ -231,7 +236,7 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
     id: 'derived-correction-subject', name: 'Correction replaces the prior subject', source: 'derived', categories: ['correction', 'multi-turn'],
     prompt: 'Sorry, I meant Slurmlet, not Loom. What does it do?',
     history: [{ role: 'user', content: 'Tell me about Loom.' }, { role: 'assistant', content: 'Loom coordinates reviewed delivery work.' }],
-    expectations: { requiredTools: ['getProject'], evidence: { requiredText: ['Slurmlet'], forbiddenText: ['Loom coordinates'] }, artifacts: { projectIds: ['slurmlet'], maxProjectCards: 1 } },
+    expectations: { requiredTools: ['getProject'], forbiddenTools: ['searchProjects'], evidence: { requiredText: ['Slurmlet'], forbiddenText: ['Loom coordinates'] }, artifacts: { projectIds: ['slurmlet'], maxProjectCards: 1 } },
   }),
   evalCase({
     id: 'derived-ambiguous-clarification', name: 'Ambiguous reference asks one clarifying question', source: 'derived', categories: ['clarification', 'multi-turn'],
@@ -265,7 +270,7 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
     id: 'derived-latest-question-after-comparison', name: 'Latest question wins after a comparison', source: 'derived', categories: ['factual', 'multi-turn'],
     prompt: 'Which one has a public repository link?',
     history: [{ role: 'user', content: 'Compare Loom and agentic-trader.' }, { role: 'assistant', content: 'They solve different workflow problems.' }],
-    expectations: { requiredTools: ['getProject'], artifacts: { required: ['links'] }, followUp: 'not-useful' },
+    expectations: { requiredTools: ['getProject'], forbiddenTools: ['searchProjects'], evidence: { requiredText: ['Loom', 'agentic-trader'] }, artifacts: { required: ['links'], forbidden: ['projects'], linkProjectIds: ['loom', 'agentic-trader'], maxProjectCards: 0 }, followUp: 'not-useful' },
   }),
 ];
 
@@ -306,6 +311,10 @@ export function evaluateDMEvalObservation(testCase: DMLiveEvalCase, observation:
   for (const projectId of testCase.expectations.artifacts.projectIds) {
     if (!observation.projectIds.includes(projectId)) return `required project artifact was not emitted: ${projectId}`;
   }
+  const linkProjectIds = observation.blockKinds.flatMap((kind) => kind.startsWith('links:') ? [kind.slice('links:'.length)] : []);
+  for (const projectId of testCase.expectations.artifacts.linkProjectIds) {
+    if (!linkProjectIds.includes(projectId)) return `required link artifact was not emitted for project: ${projectId}`;
+  }
   const maxCards = testCase.expectations.artifacts.maxProjectCards;
   if (maxCards !== undefined && observation.projectIds.length > maxCards) {
     return `project artifact count ${observation.projectIds.length} exceeded ${maxCards}`;
@@ -331,12 +340,14 @@ export function validateDMLiveEvalCorpus(corpus: DMLiveEvalCase[] = DM_LIVE_EVAL
   const categories = new Set<DMEvalCategory>();
   for (const testCase of corpus) {
     if (ids.has(testCase.id)) throw new Error(`Duplicate live eval case id: ${testCase.id}`);
+    if (typeof testCase.critical !== 'boolean') throw new Error(`Live eval case ${testCase.id} is missing critical metadata.`);
     ids.add(testCase.id);
     for (const category of testCase.categories) categories.add(category);
   }
   const requiredCategories: DMEvalCategory[] = ['factual', 'interpretive', 'comparative', 'personal', 'meta', 'correction', 'clarification', 'privacy', 'tool-failure', 'multi-turn'];
   const missing = requiredCategories.filter((category) => !categories.has(category));
   if (missing.length > 0) throw new Error(`Live DM eval corpus is missing categories: ${missing.join(', ')}`);
+  if (!corpus.some((testCase) => testCase.critical)) throw new Error('Live DM eval corpus needs at least one critical case.');
 }
 
 export function assertDMReleaseConfiguration(models: string[], runs: number, hasJudge: boolean): void {
