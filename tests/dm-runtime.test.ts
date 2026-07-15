@@ -46,6 +46,7 @@ test('one ToolLoopAgent run calls public tools and accepts only same-run evidenc
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'agentic-trader' }],
         limitations: [],
       },
@@ -78,6 +79,7 @@ test('runtime metrics mark the first visible public-tool state before completion
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'agentic-trader' }],
         limitations: [],
       },
@@ -115,6 +117,7 @@ test('same-step finalization waits for public evidence and artifacts to settle',
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'agentic-trader' }],
         limitations: [],
       },
@@ -145,6 +148,7 @@ test('the first accepted same-step finalization is immutable', async () => {
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'conversational', act: 'capabilities' }],
+        artifactIntent: 'none',
         artifacts: [],
         limitations: [],
       },
@@ -153,6 +157,7 @@ test('the first accepted same-step finalization is immutable', async () => {
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'A hidden project exists.', evidenceIds: ['private:hidden'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'private-hidden' }],
         limitations: [],
       },
@@ -180,6 +185,7 @@ test('an invalid finalization is repaired exactly once', async () => {
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'Unverified first attempt.', evidenceIds: ['invented:evidence'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'invented-project' }],
         limitations: [],
       },
@@ -188,6 +194,7 @@ test('an invalid finalization is repaired exactly once', async () => {
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'factual', text: 'agentic-trader is a published portfolio project.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'agentic-trader' }],
         limitations: [],
       },
@@ -210,6 +217,7 @@ test('a second invalid finalization fails closed with a limited answer', async (
   const request = chatRequest('Invent a hidden project.');
   const invalid = {
     segments: [{ kind: 'factual', text: 'Hidden project exists.', evidenceIds: ['private:hidden'] }],
+    artifactIntent: 'one_project',
     artifacts: [{ kind: 'project', id: 'private-hidden' }],
     limitations: [],
   };
@@ -230,6 +238,458 @@ test('a second invalid finalization fails closed with a limited answer', async (
   assert.match(observation.answerText, /could not verify/i);
 });
 
+test('schema-invalid finalization input consumes the single repair budget', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('What can you help with?');
+  const invalid = {
+    segments: [{ kind: 'conversational', act: 'capabilities' }],
+    artifacts: [],
+    limitations: [],
+  };
+  const prompts: LanguageModelV4CallOptions[] = [];
+  const model = toolSequenceModel([
+    { toolName: 'finalizeAnswer', input: invalid },
+    { toolName: 'finalizeAnswer', input: invalid },
+    { toolName: 'finalizeAnswer', input: invalid },
+  ], prompts);
+
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model,
+    budgets: { deadlineMs: 45_000, maxOutputTokens: 1_200, maxSteps: 4 },
+  }), request);
+
+  assert.equal(observation.result?.status, 'limited');
+  assert.equal(observation.result?.repairAttempted, true);
+  assert.equal(prompts.length, 2);
+});
+
+test('finalization enforces zero, one, and bounded project artifact cardinality', async (t) => {
+  const source = await createEvalProjectSource();
+
+  await t.test('the current request binds intent before model-selected finalization', async () => {
+    const cases = [
+      { prompt: "Tell me about Dylan's projects, but show only one project card.", intent: 'one_project' },
+      { prompt: "Tell me about Dylan's projects without showing any project cards.", intent: 'none' },
+      { prompt: 'Tell me about projects and return zero project cards.', intent: 'none' },
+      { prompt: 'Tell me about projects and return 0 project cards.', intent: 'none' },
+      { prompt: 'What live projects are available?', intent: 'project_set' },
+      { prompt: 'List the live projects Dylan can discuss.', intent: 'project_set' },
+      { prompt: 'tell me about dylans projects', intent: 'project_set' },
+      { prompt: "Tell me about Dylan's most impressive project.", intent: 'one_project' },
+      { prompt: 'Which project best shows client software work?', intent: 'one_project' },
+      { prompt: "Which of Dylan's projects is most impressive?", intent: 'one_project' },
+      { prompt: "Which of Dylan's projects best shows client software work?", intent: 'one_project' },
+      { prompt: "Which is best among Dylan's projects?", intent: 'one_project' },
+      { prompt: "Show me one of Dylan's projects.", intent: 'one_project' },
+      { prompt: "Which one of Dylan's projects uses TypeScript?", intent: 'one_project' },
+      { prompt: 'Show me one project that uses TypeScript.', intent: 'one_project' },
+      { prompt: "Tell me about a single project from Dylan's portfolio.", intent: 'one_project' },
+      { prompt: 'Just one card.', intent: 'one_project' },
+      { prompt: "List Dylan's best projects.", intent: 'project_set' },
+      { prompt: "What are Dylan's most impressive projects?", intent: 'project_set' },
+      { prompt: "Which of Dylan's projects are most impressive?", intent: 'project_set' },
+      { prompt: "List Dylan's projects from most impressive to least impressive.", intent: 'project_set' },
+      { prompt: 'Show me two project cards.', intent: 'project_set' },
+      { prompt: 'Show a few project cards.', intent: 'project_set' },
+      { prompt: "Don't show a single project card.", intent: 'none' },
+      { prompt: 'Without showing a single project card, tell me about the work.', intent: 'none' },
+      { prompt: 'Project cards are not needed.', intent: 'none' },
+      { prompt: 'A project card is unnecessary.', intent: 'none' },
+      { prompt: "Project cards aren't needed.", intent: 'none' },
+      { prompt: "A project card isn't necessary.", intent: 'none' },
+      { prompt: 'I want project links only.', intent: 'non_project' },
+      { prompt: 'Give me links instead of project cards.', intent: 'non_project' },
+      { prompt: 'Give me only the project links.', intent: 'non_project' },
+      { prompt: 'Only return the links.', intent: 'non_project' },
+      { prompt: "Show one card for one of Dylan's projects.", intent: 'one_project' },
+      { prompt: 'Without screenshots, show me a project card.', intent: 'one_project' },
+      { prompt: 'Show me a project card without links.', intent: 'one_project' },
+      { prompt: 'Only show a project card with links.', intent: 'one_project' },
+      { prompt: 'Only show project links on the card.', intent: 'one_project' },
+      { prompt: 'Show a project card with GitHub links only.', intent: 'one_project' },
+      { prompt: "Give me a one-paragraph overview of Dylan's projects.", intent: 'project_set' },
+      { prompt: 'Show project cards one at a time.', intent: 'project_set' },
+    ] as const;
+
+    for (const testCase of cases) {
+      const request = chatRequest(testCase.prompt);
+      const wrongIntent = testCase.intent === 'one_project'
+        ? 'project_set'
+        : testCase.intent === 'project_set'
+          ? 'none'
+          : testCase.intent === 'non_project'
+            ? 'project_set'
+            : 'one_project';
+      const wrongArtifacts = wrongIntent === 'none'
+        ? []
+        : wrongIntent === 'one_project'
+          ? [{ kind: 'project', id: 'agentic-trader' }]
+          : [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }];
+      const correctedArtifacts = testCase.intent === 'none'
+        ? []
+        : testCase.intent === 'one_project'
+          ? [{ kind: 'project', id: 'agentic-trader' }]
+          : testCase.intent === 'project_set'
+            ? [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }]
+            : [{ kind: 'links', id: 'loom' }];
+      const model = toolSequenceModel([
+        { toolName: 'getProject', input: { id: 'agentic-trader' } },
+        { toolName: 'getProject', input: { id: 'loom' } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{
+            kind: 'factual',
+            text: 'Published project evidence supports the answer.',
+            evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+          }],
+          artifactIntent: wrongIntent,
+          artifacts: wrongArtifacts,
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{
+            kind: 'factual',
+            text: 'Published project evidence supports the answer.',
+            evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+          }],
+          artifactIntent: testCase.intent,
+          artifacts: correctedArtifacts,
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
+
+      assert.equal(observation.result?.status, 'accepted', testCase.prompt);
+      assert.equal(observation.result?.repairAttempted, true, testCase.prompt);
+      const expectedProjectCards = testCase.intent === 'one_project' ? 1 : testCase.intent === 'project_set' ? 2 : 0;
+      assert.equal(observation.projectIds.length, expectedProjectCards, testCase.prompt);
+    }
+  });
+
+  await t.test('request-bound project intent cannot bypass lookup and required artifacts', async () => {
+    for (const testCase of [
+      { prompt: 'Return one project card.', intent: 'one_project' },
+      { prompt: 'Return a bounded set of projects.', intent: 'project_set' },
+    ] as const) {
+      const request = chatRequest(testCase.prompt);
+      const model = toolSequenceModel([
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+          artifactIntent: testCase.intent,
+          artifacts: [],
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+          artifactIntent: 'none',
+          artifacts: [],
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
+
+      assert.equal(observation.result?.status, 'limited', testCase.prompt);
+      assert.equal(observation.result?.repairAttempted, true, testCase.prompt);
+      assert.deepEqual(observation.projectIds, [], testCase.prompt);
+    }
+  });
+
+  await t.test('a completed empty project lookup permits an honest zero-artifact answer', async () => {
+    const request = chatRequest('Return one project card for missing-project.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'missing-project' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+        artifactIntent: 'one_project',
+        artifacts: [],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, false);
+    assert.deepEqual(observation.projectIds, []);
+  });
+
+  await t.test('zero artifacts preserves grounded prose after one repair', async () => {
+    const request = chatRequest('Return grounded project prose without artifact cards.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'none',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'none',
+        artifacts: [],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.blockKinds, []);
+    assert.deepEqual(observation.projectIds, []);
+    assert.ok(observation.evidenceIds.includes('agentic-trader:identity'));
+  });
+
+  await t.test('one project rejects two distinct cards and accepts one on repair', async () => {
+    const request = chatRequest('Return one project card.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'getProject', input: { id: 'loom' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports the selection.',
+          evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+        }],
+        artifactIntent: 'one_project',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }],
+        limitations: [],
+      } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports the selection.',
+          evidenceIds: ['agentic-trader:identity'],
+        }],
+        artifactIntent: 'one_project',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.projectIds, ['agentic-trader']);
+  });
+
+  await t.test('project set cannot omit all returned matches', async () => {
+    const request = chatRequest('Return a bounded project set.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'getProject', input: { id: 'loom' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports this overview.',
+          evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+        }],
+        artifactIntent: 'project_set',
+        artifacts: [],
+        limitations: [],
+      } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports this overview.',
+          evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+        }],
+        artifactIntent: 'project_set',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.projectIds, ['agentic-trader', 'loom']);
+  });
+
+  await t.test('repair cannot relabel intent to bypass the one-project cap', async () => {
+    const request = chatRequest('Return one project card.');
+    const overLimitArtifacts = [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }];
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'getProject', input: { id: 'loom' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports the selection.',
+          evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+        }],
+        artifactIntent: 'one_project',
+        artifacts: overLimitArtifacts,
+        limitations: [],
+      } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published project evidence supports the selection.',
+          evidenceIds: ['agentic-trader:identity', 'loom:identity'],
+        }],
+        artifactIntent: 'non_project',
+        artifacts: overLimitArtifacts,
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'limited');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.projectIds, []);
+  });
+
+  await t.test('non-project intent rejects project cards and accepts a contact artifact on repair', async () => {
+    const request = chatRequest('Return a public contact artifact.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'getContact', input: {} },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'non_project',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'factual', text: 'Public contact evidence is available.', evidenceIds: ['contact:email'] }],
+        artifactIntent: 'non_project',
+        artifacts: [{ kind: 'contact', id: 'contact' }],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.blockKinds, ['contact']);
+  });
+
+  await t.test('non-project intent accepts same-run project links without a project card', async () => {
+    for (const prompt of [
+      'Return published project links without a project card.',
+      'Return project links, not cards.',
+    ]) {
+      const request = chatRequest(prompt);
+      const model = toolSequenceModel([
+        { toolName: 'getProject', input: { id: 'loom' } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['loom:identity'] }],
+          artifactIntent: 'project_set',
+          artifacts: [{ kind: 'project', id: 'loom' }],
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'factual', text: 'Published project links are available.', evidenceIds: ['loom:identity'] }],
+          artifactIntent: 'non_project',
+          artifacts: [{ kind: 'links', id: 'loom' }],
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
+
+      assert.equal(observation.result?.status, 'accepted', prompt);
+      assert.equal(observation.result?.repairAttempted, true, prompt);
+      assert.deepEqual(observation.blockKinds, ['links:loom'], prompt);
+      assert.deepEqual(observation.projectIds, [], prompt);
+    }
+  });
+
+  await t.test('duplicate project references normalize to one card', async () => {
+    const request = chatRequest('Return one project card.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'agentic-trader' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'factual', text: 'A published project is available.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, false);
+    assert.deepEqual(observation.projectIds, ['agentic-trader']);
+  });
+
+  await t.test('project sets are capped at four cards', async () => {
+    const request = chatRequest('Return a bounded project set.');
+    const projectIds = ['agentic-trader', 'exit-manager', 'slurmlet', 'loom', 'evalgate'];
+    const model = toolStepModel([
+      projectIds.map((id) => ({ toolName: 'getProject', input: { id } })),
+      [{ toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published evidence supports this bounded overview.',
+          evidenceIds: projectIds.map((id) => `${id}:identity`),
+        }],
+        artifactIntent: 'project_set',
+        artifacts: projectIds.map((id) => ({ kind: 'project', id })),
+        limitations: [],
+      } }],
+      [{ toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Published evidence supports this bounded overview.',
+          evidenceIds: projectIds.slice(0, 4).map((id) => `${id}:identity`),
+        }],
+        artifactIntent: 'project_set',
+        artifacts: projectIds.slice(0, 4).map((id) => ({ kind: 'project', id })),
+        limitations: [],
+      } }],
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.deepEqual(observation.projectIds, projectIds.slice(0, 4));
+  });
+});
+
 test('model-authored factual prose cannot bypass evidence validation with a conversational label', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest('Tell me about Dylan\'s unreleased projects.');
@@ -239,6 +699,7 @@ test('model-authored factual prose cannot bypass evidence validation with a conv
       text: 'Dylan built a secret unreleased project called Blackbird.',
       evidenceIds: [],
     }],
+    artifactIntent: 'none',
     artifacts: [],
     limitations: [],
   };
@@ -268,6 +729,7 @@ test('private-boundary prompts have no private tool surface and can finish witho
       toolName: 'finalizeAnswer',
       input: {
         segments: [{ kind: 'limitation', code: 'private_sources' }],
+        artifactIntent: 'none',
         artifacts: [],
         limitations: ['private_sources'],
       },
@@ -300,6 +762,7 @@ test('bounded conversation reaches the model while the latest question controls 
   const prompts: LanguageModelV4CallOptions[] = [];
   const model = toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
     segments: [{ kind: 'conversational', act: 'capabilities' }],
+    artifactIntent: 'none',
     artifacts: [],
     limitations: [],
     followUp: 'project_overview',
@@ -330,6 +793,7 @@ test('latest-turn project references use direct reads and scoped follow-up artif
             text: 'Loom uses a reviewed publish path represented by its published database record.',
             evidenceIds: ['loom:identity', 'loom:about:0', 'loom:stack:0'],
           }],
+          artifactIntent: 'none',
           artifacts: [],
           limitations: [],
         } },
@@ -345,6 +809,7 @@ test('latest-turn project references use direct reads and scoped follow-up artif
             text: 'Evalgate is built with TypeScript.',
             evidenceIds: ['evalgate:identity', 'evalgate:stack:0'],
           }],
+          artifactIntent: 'none',
           artifacts: [],
           limitations: [],
         } },
@@ -360,6 +825,7 @@ test('latest-turn project references use direct reads and scoped follow-up artif
             text: 'Slurmlet is a developer tool for repeatable, inspectable compute workflows.',
             evidenceIds: ['slurmlet:identity', 'slurmlet:summary'],
           }],
+          artifactIntent: 'one_project',
           artifacts: [{ kind: 'project', id: 'slurmlet' }],
           limitations: [],
         } },
@@ -376,6 +842,7 @@ test('latest-turn project references use direct reads and scoped follow-up artif
             text: 'Both Loom and agentic-trader have public repository links.',
             evidenceIds: ['loom:link:0', 'agentic-trader:link:0'],
           }],
+          artifactIntent: 'non_project',
           artifacts: [{ kind: 'links', id: 'loom' }, { kind: 'links', id: 'agentic-trader' }],
           limitations: [],
         } },
@@ -413,6 +880,7 @@ test('the latest-turn control and tool descriptions distinguish direct reads fro
       { toolName: 'getProject', input: { id: 'loom' } },
       { toolName: 'finalizeAnswer', input: {
         segments: [{ kind: 'factual', text: 'Loom uses a reviewed publish path.', evidenceIds: ['loom:identity', 'loom:about:0'] }],
+        artifactIntent: 'none',
         artifacts: [],
         limitations: [],
       } },
@@ -466,6 +934,7 @@ test('a title-only project name can use search before later direct coreference',
           text: 'No Hard Feelings is a low-maintenance public band site.',
           evidenceIds: ['nhf:identity', 'nhf:summary'],
         }],
+        artifactIntent: 'one_project',
         artifacts: [{ kind: 'project', id: 'nhf' }],
         limitations: [],
       } },
@@ -485,6 +954,7 @@ test('public tool failure becomes an explicit sanitized limitation', async () =>
     { toolName: 'searchProjects', input: { query: 'public projects' } },
     { toolName: 'finalizeAnswer', input: {
       segments: [{ kind: 'limitation', code: 'public_data_unavailable' }],
+      artifactIntent: 'project_set',
       artifacts: [],
       limitations: ['public_data_unavailable'],
       followUp: 'try_resume',
@@ -512,6 +982,7 @@ test('the live eval source can produce a same-run approved evidence artifact', a
         text: 'Loom separates planning, bounded implementation, independent review, and verification into explicit delivery phases.',
         evidenceIds: ['citation:loom-architecture'],
       }],
+      artifactIntent: 'one_project',
       artifacts: [{ kind: 'project', id: 'loom' }, { kind: 'evidence', id: 'loom-architecture' }],
       limitations: [],
     } },
@@ -546,6 +1017,7 @@ test('the live eval unavailable-source override exercises a sanitized no-evidenc
     { toolName: 'searchPublicSources', input: { query: 'Loom public architecture evidence', projectIds: ['loom'] } },
     { toolName: 'finalizeAnswer', input: {
       segments: [{ kind: 'limitation', code: 'public_source_unavailable' }],
+      artifactIntent: 'one_project',
       artifacts: [{ kind: 'project', id: 'loom' }],
       limitations: ['public_source_unavailable'],
       followUp: 'project_overview',
@@ -650,6 +1122,7 @@ test('the endpoint accepts bounded UIMessage input and returns the standard type
     db: source.db,
     model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
       segments: [{ kind: 'conversational', act: 'capabilities' }],
+      artifactIntent: 'none',
       artifacts: [],
       limitations: [],
     } }]),
@@ -678,6 +1151,7 @@ test('the endpoint never puts unvalidated model text chunks on the wire', async 
     db: source.db,
     model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
       segments: [{ kind: 'conversational', act: 'capabilities' }],
+      artifactIntent: 'none',
       artifacts: [],
       limitations: [],
     }, prose: sentinel }]),
@@ -708,6 +1182,7 @@ test('the endpoint never puts invalid finalization prose on the wire', async () 
   const sentinel = 'UNVALIDATED_MODEL_PROSE_SENTINEL';
   const invalidFinalization = {
     segments: [{ kind: 'factual', text: sentinel, evidenceIds: ['invented:evidence'] }],
+    artifactIntent: 'none',
     artifacts: [],
     limitations: [],
   };

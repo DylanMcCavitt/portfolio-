@@ -36,6 +36,8 @@ test('maintainer failures are retained as named release cases', () => {
     'mf-evalgate-stack-followup',
     'mf-one-project-card',
     'mf-zero-project-cards',
+    'mf-live-projects',
+    'mf-list-live-projects',
     'mf-trading-automation',
     'mf-recruiter-resume-contact',
     'mf-broad-project-overview',
@@ -49,6 +51,31 @@ test('maintainer failures are retained as named release cases', () => {
     'mf-loom-evidence-deep-dive',
   ]) {
     assert.ok(maintainerIds.has(id), `missing maintainer failure ${id}`);
+  }
+});
+
+test('artifact-cardinality cases declare deterministic project-card bounds', () => {
+  const byId = new Map(DM_LIVE_EVAL_CORPUS.map((item) => [item.id, item]));
+  const zero = byId.get('mf-zero-project-cards');
+  assert.ok(zero);
+  assert.equal(zero.expectations.artifacts.maxProjectCards, 0);
+  assert.deepEqual(
+    new Set(zero.expectations.artifacts.forbidden),
+    new Set(['projects', 'resume', 'contact', 'evidence', 'links']),
+  );
+
+  for (const id of ['mf-one-project-card', 'mf-most-impressive-project', 'mf-client-software-selection']) {
+    const testCase = byId.get(id);
+    assert.ok(testCase, `missing ${id}`);
+    assert.ok(testCase.expectations.artifacts.required.includes('projects'), id);
+    assert.equal(testCase.expectations.artifacts.maxProjectCards, 1, id);
+  }
+
+  for (const id of ['mf-live-projects', 'mf-list-live-projects', 'mf-broad-project-overview']) {
+    const testCase = byId.get(id);
+    assert.ok(testCase, `missing ${id}`);
+    assert.ok(testCase.expectations.artifacts.required.includes('projects'), id);
+    assert.equal(testCase.expectations.artifacts.maxProjectCards, 4, id);
   }
 });
 

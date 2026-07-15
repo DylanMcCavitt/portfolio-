@@ -144,7 +144,7 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
   evalCase({
     id: 'mf-zero-project-cards', name: 'Zero-card request still receives grounded prose', source: 'maintainer-failure', categories: ['factual'],
     prompt: "Tell me about Dylan's projects without showing any project cards.",
-    expectations: { requiredTools: PROJECT_TOOLS, artifacts: { forbidden: ['projects', 'resume', 'contact'], maxProjectCards: 0 } },
+    expectations: { requiredTools: PROJECT_TOOLS, artifacts: { forbidden: ['projects', 'resume', 'contact', 'evidence', 'links'], maxProjectCards: 0 } },
   }),
   evalCase({
     id: 'mf-trading-automation', name: 'Trading automation resolves to public project evidence', source: 'maintainer-failure', categories: ['factual'],
@@ -166,15 +166,15 @@ export const DM_LIVE_EVAL_CORPUS: DMLiveEvalCase[] = [
   }),
   evalCase({
     id: 'mf-live-projects', name: 'Live projects do not become an empty refusal', source: 'maintainer-failure', categories: ['factual'],
-    prompt: 'What live projects are available?', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] } },
+    prompt: 'What live projects are available?', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 } },
   }),
   evalCase({
     id: 'mf-list-live-projects', name: 'Project list stays grounded to returned artifacts', source: 'maintainer-failure', categories: ['factual'],
-    prompt: 'List the live projects Dylan can discuss.', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] } },
+    prompt: 'List the live projects Dylan can discuss.', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 } },
   }),
   evalCase({
     id: 'mf-broad-project-overview', name: 'Broad project overview stays representative and concise', source: 'maintainer-failure', categories: ['interpretive'],
-    prompt: 'tell me about dylans projects', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'] }, followUp: 'useful' },
+    prompt: 'tell me about dylans projects', expectations: { requiredTools: PROJECT_TOOLS, artifacts: { required: ['projects'], maxProjectCards: 4 }, followUp: 'useful' },
   }),
   evalCase({
     id: 'mf-most-impressive-project', name: 'Impact comparison answers most impressive project', source: 'maintainer-failure', categories: ['comparative', 'interpretive'],
