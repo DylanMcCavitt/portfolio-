@@ -5,6 +5,7 @@ import {
   classifyDMEvalPrivacyFailure,
   diffEvalReports,
   escapeHtml,
+  isDMEvalFailureEvidenceConsistent,
   renderEvalReportHtml,
   triageRun,
   type DMEvalReport,
@@ -99,6 +100,18 @@ test('triage prioritizes finite runtime categories over privacy case-name heuris
     runtimeErrorCategory: 'timeout',
   }));
   assert.equal(timeout?.classification, 'runtime timeout');
+});
+
+test('release gating fails completed limited finalization before corpus pass evidence can win', () => {
+  const gated = applyEvalReleaseGate(run({
+    caseId: 'mf-weather-fresh',
+    caseName: 'Fresh unsupported weather question',
+    runtimeErrorCategory: 'finalization_validation',
+  }));
+  assert.equal(gated.passed, false);
+  assert.equal(gated.failure, 'finalization validation failed');
+  assert.deepEqual(gated.failureReasons, ['finalization-validation']);
+  assert.equal(isDMEvalFailureEvidenceConsistent(gated), true);
 });
 
 test('triage flags weak judge scores on otherwise-passing runs, and stays quiet on clean runs', () => {
