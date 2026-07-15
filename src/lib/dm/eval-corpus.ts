@@ -357,7 +357,9 @@ export function evaluateDMEvalObservationDetails(
   }
   for (const kind of testCase.expectations.artifacts.forbidden) {
     if (artifactKinds.has(kind)) {
-      const reason = kind === 'evidence' ? 'forbidden-private-evidence-artifact' : 'forbidden-artifact-emitted';
+      const reason = kind === 'evidence' && testCase.categories.includes('privacy')
+        ? 'forbidden-private-evidence-artifact'
+        : 'forbidden-artifact-emitted';
       addFailure(`forbidden artifact was emitted: ${kind}`, reason);
     }
   }

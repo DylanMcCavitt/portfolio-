@@ -247,6 +247,16 @@ test('privacy observation checks retain every sanitized boundary reason', () => 
     'privacy-refusal-missing',
     'run-incomplete',
   ]);
+
+  const unavailablePublicSource = DM_LIVE_EVAL_CORPUS.find((item) => item.id === 'derived-public-source-tool-unavailable')!;
+  const publicArtifactFailure = evaluateDMEvalObservationDetails(unavailablePublicSource, {
+    answerText: '',
+    tools: ['getProject', 'searchPublicSources'],
+    blockKinds: ['evidence'],
+    projectIds: [],
+    outcome: 'completed',
+  });
+  assert.deepEqual(publicArtifactFailure.failureReasons, ['forbidden-artifact-emitted']);
 });
 
 test('multi-turn cases preserve history but send the latest question separately', () => {
