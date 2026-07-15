@@ -365,9 +365,9 @@ test('mixed resume and contact composition repairs a dropped same-run source', a
         },
         {
           kind: 'factual',
-          text: 'Recruiters can use dylanmccavitt@outlook.com.',
-          evidenceIds: ['contact:email'],
-          evidenceQuotes: [{ evidenceId: 'contact:email', quote: 'dylanmccavitt@outlook.com' }],
+          text: 'Dylan is based in New York City.',
+          evidenceIds: ['contact:location'],
+          evidenceQuotes: [{ evidenceId: 'contact:location', quote: 'new york city' }],
         },
       ],
       artifacts: [{ kind: 'resume', id: 'stevens' }, { kind: 'contact', id: 'contact' }],
@@ -386,7 +386,8 @@ test('mixed resume and contact composition repairs a dropped same-run source', a
   assert.deepEqual(observation.tools, ['readResume', 'getContact']);
   assert.deepEqual(observation.blockKinds, ['resume:stevens', 'contact']);
   assert.ok(observation.evidenceIds.includes('resume:stevens:identity'));
-  assert.ok(observation.evidenceIds.includes('contact:email'));
+  assert.ok(observation.evidenceIds.includes('contact:location'));
+  assert.match(observation.answerText, /New York City/);
   assert.equal(
     observation.result?.answer.artifacts.find((artifact) => artifact.kind === 'contact')?.contact.email,
     'dylanmccavitt@outlook.com',
@@ -408,7 +409,7 @@ test('the live eval source can produce a same-run approved evidence artifact', a
       segments: [
         {
           kind: 'factual',
-          text: 'The direct project record uses the published slug loom.',
+          text: 'The direct project record uses the published slug Loom.',
           evidenceIds: ['loom:slug'],
           evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
         },
@@ -426,7 +427,7 @@ test('the live eval source can produce a same-run approved evidence artifact', a
       segments: [
         {
           kind: 'factual',
-          text: 'The direct project record uses the published slug loom.',
+          text: 'The direct project record uses the published slug Loom.',
           evidenceIds: ['loom:slug'],
           evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
         },
@@ -467,7 +468,7 @@ test('the live eval source can produce a same-run approved evidence artifact', a
   assert.doesNotMatch(JSON.stringify(observation), new RegExp(source.privateEvidenceMarkers.join('|')));
 });
 
-test('selected exact evidence must appear unchanged in factual prose', async () => {
+test('selected evidence stays exact at the source boundary and permits natural prose capitalization', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest('Give the exact published project identity.');
   const model = toolSequenceModel([
@@ -475,9 +476,9 @@ test('selected exact evidence must appear unchanged in factual prose', async () 
     { toolName: 'finalizeAnswer', input: {
       segments: [{
         kind: 'factual',
-        text: 'The published project is available.',
+        text: 'The published project slug is Loom.',
         evidenceIds: ['loom:slug'],
-        evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
+        evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'Loom' }],
       }],
       artifacts: [{ kind: 'project', id: 'loom' }],
       limitations: [],
@@ -485,7 +486,7 @@ test('selected exact evidence must appear unchanged in factual prose', async () 
     { toolName: 'finalizeAnswer', input: {
       segments: [{
         kind: 'factual',
-        text: 'The published project slug is loom.',
+        text: 'The published project slug is Loom.',
         evidenceIds: ['loom:slug'],
         evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
       }],
@@ -502,7 +503,7 @@ test('selected exact evidence must appear unchanged in factual prose', async () 
 
   assert.equal(observation.result?.status, 'accepted');
   assert.equal(observation.result?.repairAttempted, true);
-  assert.match(observation.answerText, /loom/);
+  assert.match(observation.answerText, /Loom/);
 });
 
 test('the live eval unavailable-source override exercises a sanitized no-evidence path', async () => {

@@ -639,7 +639,7 @@ function evidenceQuoteErrors(
     if (!evidence.value.includes(selection.quote)) {
       errors.push(`segment ${index + 1} exact evidence quote was not returned by its cited source`);
     }
-    if (!segment.text.includes(selection.quote)) {
+    if (!segment.text.toLowerCase().includes(selection.quote.toLowerCase())) {
       errors.push(`segment ${index + 1} omitted its selected exact evidence quote`);
     }
   }
