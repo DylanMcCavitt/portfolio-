@@ -1149,6 +1149,41 @@ test('bounded outcome follow-ups are required, privacy-safe, and non-repetitive'
     }
   });
 
+  await t.test('an invalid extra tool limitation does not hide a missing required action from the sole repair', async () => {
+    const request = chatRequest('What is Dylan’s favorite weekend hobby?');
+    const prompts: LanguageModelV4CallOptions[] = [];
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model: toolSequenceModel([
+        { toolName: 'searchProfile', input: { query: 'favorite weekend hobby' } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [
+            { kind: 'limitation', code: 'personal_unknown' },
+            { kind: 'limitation', code: 'no_matching_published_projects' },
+          ],
+          artifactIntent: 'none',
+          artifacts: [],
+          limitations: ['personal_unknown', 'no_matching_published_projects'],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'limitation', code: 'personal_unknown' }],
+          artifactIntent: 'none',
+          artifacts: [],
+          limitations: ['personal_unknown'],
+          followUp: 'contact_dylan',
+        } },
+      ], prompts),
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, true);
+    assert.equal(observation.result?.answer.followUp, "Would you like Dylan's public contact details?");
+    const repairPrompt = JSON.stringify(prompts[2]?.prompt);
+    assert.match(repairPrompt, /limitation code no_matching_published_projects does not match the public tool outcome/);
+    assert.match(repairPrompt, /validated answer state requires one safe follow-up/);
+  });
+
   await t.test('a closed project filter does not veto a contact redirect for an unknown personal aspect', async () => {
     const request = chatRequest('Which in-progress projects are there, and what is Dylan’s favorite hobby?');
     const observation = await observeDMResponse(createDMChatResponse(request, config, {
@@ -1277,6 +1312,42 @@ test('bounded outcome follow-ups are required, privacy-safe, and non-repetitive'
     assert.equal(observation.result?.status, 'accepted');
     assert.equal(observation.result?.repairAttempted, true);
     assert.equal(observation.result?.answer.followUp, 'Would you like to name a specific published project?');
+  });
+
+  await t.test('ambiguous references retain clarification alongside privacy or unsupported limitations', async () => {
+    for (const unrelatedCode of ['private_sources', 'unsupported_request'] as const) {
+      const request = chatRequest('What about that one?');
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model: toolSequenceModel([
+          { toolName: 'finalizeAnswer', input: {
+            segments: [
+              { kind: 'limitation', code: 'ambiguous_reference' },
+              { kind: 'limitation', code: unrelatedCode },
+            ],
+            artifactIntent: 'none',
+            artifacts: [],
+            limitations: ['ambiguous_reference', unrelatedCode],
+            followUp: 'project_overview',
+          } },
+          { toolName: 'finalizeAnswer', input: {
+            segments: [
+              { kind: 'limitation', code: 'ambiguous_reference' },
+              { kind: 'limitation', code: unrelatedCode },
+            ],
+            artifactIntent: 'none',
+            artifacts: [],
+            limitations: ['ambiguous_reference', unrelatedCode],
+            followUp: 'specify_project',
+          } },
+        ]),
+      }), request);
+
+      assert.equal(observation.result?.status, 'accepted');
+      assert.equal(observation.result?.repairAttempted, true);
+      assert.equal(observation.result?.answer.followUp, 'Would you like to name a specific published project?');
+    }
   });
 
   await t.test('grounded resume and contact answers suppress project follow-ups', async () => {

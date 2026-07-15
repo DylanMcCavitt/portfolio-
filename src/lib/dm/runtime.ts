@@ -827,11 +827,10 @@ function allowedFollowUps(
   selected: ReadonlySet<LimitationCode>,
 ): Set<FollowUpCode> {
   if (required.size > 0) {
-    return allowedOutcomeFollowUps(new Set([...required, ...selected].filter((code) =>
-      TOOL_OUTCOME_LIMITATION_CODES.has(code))));
+    return allowedOutcomeFollowUps(required);
   }
-  if (selected.has('private_sources') || selected.has('unsupported_request')) return new Set();
   if (selected.has('ambiguous_reference')) return new Set(SAFE_FOLLOW_UPS_BY_LIMITATION.ambiguous_reference);
+  if (selected.has('private_sources') || selected.has('unsupported_request')) return new Set();
 
   if (input.segments.some((segment) => segment.kind === 'conversational' && segment.act === 'greeting')) {
     return new Set();
