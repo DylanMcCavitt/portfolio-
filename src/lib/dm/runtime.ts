@@ -159,6 +159,7 @@ type FollowUpCode = z.infer<typeof FollowUpCodeSchema>;
 type ArtifactIntent = z.infer<typeof ArtifactIntentSchema>;
 
 const MAX_PROJECT_SET_ARTIFACTS = 4;
+const MAX_FINALIZATION_ARTIFACTS = 8;
 
 const SERVER_LIMITATION_COPY = {
   private_sources: 'I can only use published public portfolio sources.',
@@ -228,7 +229,7 @@ const ArtifactReferenceSchema = z.discriminatedUnion('kind', [
 const FinalAnswerInputSchema = z.strictObject({
   segments: z.array(AnswerSegmentInputSchema).min(1).max(5),
   artifactIntent: ArtifactIntentSchema,
-  artifacts: z.array(ArtifactReferenceSchema).max(5),
+  artifacts: z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS),
   limitations: z.array(LimitationCodeSchema).max(4),
   followUp: FollowUpCodeSchema.optional(),
 });
@@ -255,6 +256,10 @@ interface RunArtifacts {
   outcomeOrdinals: Map<LimitationTrackedTool, number>;
   nextOutcomeOrdinal: number;
   requestedArtifactIntent: ArtifactIntent | null;
+  requestedArtifactKinds: Set<ArtifactReference['kind']>;
+  knownProjectIds: Set<string>;
+  directProjectReads: Set<string>;
+  latestTurnText: string;
   boundArtifactIntent: ArtifactIntent | null;
   projectLookupCompleted: boolean;
 }
@@ -286,7 +291,7 @@ export function createDMChatResponse(
     ...(deps.ragSearch ? { ragSearch: deps.ragSearch } : {}),
     ragApiKey: deps.env?.OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim(),
   });
-  const artifacts = emptyArtifacts(requestedArtifactIntent(request));
+  const artifacts = emptyArtifacts(requestedArtifactRequirements(request));
   const publicToolGate = createPublicToolGate();
   let finalizationAttempts = 0;
   let finalizationResult: Exclude<DMFinalizationResult, { status: 'rejected' }> | null = null;
@@ -298,7 +303,7 @@ export function createDMChatResponse(
   const agentTools = {
     ...publicTools,
     finalizeAnswer: tool({
-      description: 'Submit the complete structured visitor answer and its requested artifact intent only after every successful source in a requested composition pair is cited, each same-run artifact allowed by that intent is included, and distinctive evidenceQuotes preserve exact returned wording with natural capitalization allowed in factual prose. Empty and unavailable public-tool results require their matching finite limitation code. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
+      description: 'Submit the complete structured visitor answer and its requested artifact intent only after every successful source in a requested composition pair is cited, each explicitly requested same-run artifact is included, and distinctive evidenceQuotes preserve exact returned wording with natural capitalization allowed in factual prose. Stable project ids already known from page context require getProject evidence before finalization; searchProjects is discovery-only for unresolved titles. Empty and unavailable public-tool results require their matching finite limitation code. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
       inputSchema: FinalAnswerInputSchema,
       execute: async (input: FinalAnswerInput) => {
         await publicToolGate.waitForIdle();
@@ -544,7 +549,10 @@ function createRuntimePublicTools(
           metrics.tool();
           const result = await run.getProject(input, { abortSignal });
           artifacts.projectLookupCompleted = true;
-          if (result.project) artifacts.projects.set(result.project.id, result.project);
+          if (result.project) {
+            artifacts.projects.set(result.project.id, result.project);
+            artifacts.directProjectReads.add(result.project.id);
+          }
           rememberToolOutcome(artifacts, 'getProject', outcomeOrdinal, result.status, result.limitations);
           return result;
         });
@@ -643,6 +651,8 @@ function validateFinalAnswer(
     errors.push(...evidenceQuoteErrors(segment, run, index));
   }
   errors.push(...compositionCoverageErrors(input, run));
+  errors.push(...stableProjectReadErrors(input, run, artifacts));
+  errors.push(...requestedArtifactErrors(input, artifacts));
   for (const reference of artifactReferences) {
     if (!artifactAvailable(reference, artifacts)) errors.push(`${reference.kind} artifact was not returned in this run`);
   }
@@ -873,6 +883,103 @@ function artifactCardinalityErrors(
   return [];
 }
 
+function stableProjectReadErrors(
+  input: FinalAnswerInput,
+  run: PublicAgentToolRun,
+  artifacts: RunArtifacts,
+): string[] {
+  const latestTurnProjectIds = new Set(
+    [...artifacts.projects.values()]
+      .filter((project) => mentionsStableProjectReference(artifacts.latestTurnText, project.id)
+        || mentionsStableProjectReference(artifacts.latestTurnText, project.slug))
+      .map((project) => project.id),
+  );
+  if (artifacts.knownProjectIds.size === 0 && latestTurnProjectIds.size === 0) return [];
+
+  const citedProjectIds = new Set(
+    input.segments
+      .filter((segment): segment is Extract<FinalAnswerInput['segments'][number], { kind: 'factual' }> => segment.kind === 'factual')
+      .flatMap((segment) => run.evidenceLedger.resolve(segment.evidenceIds))
+      .flatMap((evidence) => evidence.source === 'project' ? [evidence.recordId] : []),
+  );
+  const referencedProjectIds = new Set(
+    input.artifacts
+      .filter((reference): reference is Extract<ArtifactReference, { kind: 'project' | 'links' }> => reference.kind === 'project' || reference.kind === 'links')
+      .map((reference) => reference.id),
+  );
+  if (artifacts.requestedArtifactKinds.has('evidence')) {
+    for (const source of artifacts.sources.values()) {
+      if (artifacts.knownProjectIds.has(source.projectId)) citedProjectIds.add(source.projectId);
+    }
+  }
+
+  const requiredProjectIds = new Set(latestTurnProjectIds);
+  for (const projectId of artifacts.knownProjectIds) {
+    if (citedProjectIds.has(projectId) || referencedProjectIds.has(projectId)) requiredProjectIds.add(projectId);
+  }
+  const missing = [...requiredProjectIds]
+    .filter((projectId) => !artifacts.directProjectReads.has(projectId));
+  return missing.map((projectId) => `stable project reference ${projectId} requires getProject; searchProjects discovery is not sufficient`);
+}
+
+function requestedArtifactErrors(input: FinalAnswerInput, artifacts: RunArtifacts): string[] {
+  const requiredKinds = [...artifacts.requestedArtifactKinds]
+    .filter((kind) => !(kind === 'evidence' && artifacts.requestedArtifactIntent === 'none'));
+  if (requiredKinds.length === 0) return [];
+
+  const references = deduplicateArtifactReferences(input.artifacts);
+  const referenceKeys = new Set(references.map((reference) => `${reference.kind}:${reference.id}`));
+  const errors: string[] = [];
+
+  if (requiredKinds.includes('resume')) {
+    for (const id of artifacts.resumeTracks.keys()) {
+      if (!referenceKeys.has(`resume:${id}`)) errors.push(`requested resume artifact was omitted: ${id}`);
+    }
+  }
+  if (requiredKinds.includes('contact') && artifacts.contact && !referenceKeys.has('contact:contact')) {
+    errors.push('requested contact artifact was omitted');
+  }
+  if (requiredKinds.includes('links')) {
+    const explicitlyNamedProjectIds = [...artifacts.projects.values()]
+      .filter((project) => mentionsRequestedProject(artifacts.latestTurnText, project))
+      .map((project) => project.id);
+    if (explicitlyNamedProjectIds.length > 0) {
+      for (const projectId of explicitlyNamedProjectIds) {
+        if (!references.some((reference) => reference.kind === 'links' && reference.id === projectId)) {
+          errors.push(`requested links artifact was omitted: ${projectId}`);
+        }
+      }
+    } else if (artifacts.projects.size > 0 && !references.some((reference) => reference.kind === 'links')) {
+      errors.push('requested links artifact was omitted');
+    }
+  }
+  if (requiredKinds.includes('evidence')) {
+    for (const id of artifacts.sources.keys()) {
+      if (!referenceKeys.has(`evidence:${id}`)) errors.push(`requested evidence artifact was omitted: ${id}`);
+    }
+  }
+  return errors;
+}
+
+function mentionsStableProjectReference(text: string, reference: string): boolean {
+  const normalizedText = normalizeStableReference(text);
+  const normalizedReference = normalizeStableReference(reference);
+  return normalizedReference.length > 0 && (` ${normalizedText} `).includes(` ${normalizedReference} `);
+}
+
+function mentionsRequestedProject(
+  text: string,
+  project: Pick<PublicProjectToolRecord, 'id' | 'slug' | 'title'>,
+): boolean {
+  return mentionsStableProjectReference(text, project.id)
+    || mentionsStableProjectReference(text, project.slug)
+    || mentionsStableProjectReference(text, project.title);
+}
+
+function normalizeStableReference(value: string): string {
+  return value.normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {
   if (reference.kind === 'project' || reference.kind === 'links') return artifacts.projects.has(reference.id);
   if (reference.kind === 'resume') return artifacts.resumeTracks.has(reference.id);
@@ -900,7 +1007,14 @@ function resolveArtifact(reference: ArtifactReference, artifacts: RunArtifacts):
   return project ? [{ kind: 'links', id: `links:${project.id}`, projectId: project.id, items: project.links }] : [];
 }
 
-function emptyArtifacts(requestedArtifactIntent: ArtifactIntent | null = null): RunArtifacts {
+interface ArtifactRequirements {
+  intent: ArtifactIntent | null;
+  kinds: Set<ArtifactReference['kind']>;
+  knownProjectIds: Set<string>;
+  latestTurnText: string;
+}
+
+function emptyArtifacts(requirements: ArtifactRequirements): RunArtifacts {
   return {
     projects: new Map(),
     resumeTracks: new Map(),
@@ -911,13 +1025,17 @@ function emptyArtifacts(requestedArtifactIntent: ArtifactIntent | null = null): 
     outcomeLimitations: new Map(),
     outcomeOrdinals: new Map(),
     nextOutcomeOrdinal: 0,
-    requestedArtifactIntent,
-    boundArtifactIntent: requestedArtifactIntent,
+    requestedArtifactIntent: requirements.intent,
+    requestedArtifactKinds: requirements.kinds,
+    knownProjectIds: requirements.knownProjectIds,
+    directProjectReads: new Set(),
+    latestTurnText: requirements.latestTurnText,
+    boundArtifactIntent: requirements.intent,
     projectLookupCompleted: false,
   };
 }
 
-function requestedArtifactIntent(request: DMChatRequest): ArtifactIntent | null {
+function requestedArtifactRequirements(request: DMChatRequest): ArtifactRequirements {
   const latestUser = request.messages.findLast((message) => message.role === 'user');
   const text = latestUser?.parts
     .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
@@ -927,17 +1045,47 @@ function requestedArtifactIntent(request: DMChatRequest): ArtifactIntent | null 
 
   // This policy sets only the artifact envelope. Tool choice, project
   // selection, evidence, subject resolution, and answer prose stay model-led.
-  if (requestsProjectLinksWithoutCards(tokens)) return 'non_project';
-  if (requestsNoArtifacts(tokens)) return 'none';
-  if (requestsOneProject(tokens)) return 'one_project';
-  if (requestsProjectSet(tokens)) return 'project_set';
-  return null;
+  const intent = requestsProjectLinksWithoutCards(tokens)
+    ? 'non_project'
+    : requestsNoArtifacts(tokens)
+      ? 'none'
+      : requestsOneProject(tokens)
+        ? 'one_project'
+        : requestsProjectSet(tokens)
+          ? 'project_set'
+          : null;
+  const kinds = new Set<ArtifactReference['kind']>();
+  if (tokens.includes('resume')) kinds.add('resume');
+  if (tokens.includes('contact') || tokens.includes('email')) kinds.add('contact');
+  if (
+    (intent === null || intent === 'non_project')
+    && requestsArtifactToken(tokens, ['link', 'links', 'repository', 'repo', 'url'])
+  ) kinds.add('links');
+  if (
+    tokens.includes('evidence')
+    || tokens.includes('citation')
+    || (tokens.includes('public') && (tokens.includes('source') || tokens.includes('sources')))
+  ) kinds.add('evidence');
+
+  return {
+    intent,
+    kinds,
+    knownProjectIds: new Set((request.context?.projectIds ?? []).map((id) => id.trim()).filter(Boolean)),
+    latestTurnText: text,
+  };
+}
+
+function requestsArtifactToken(tokens: string[], candidates: string[]): boolean {
+  return tokens.some((token, index) => candidates.includes(token)
+    && artifactDirectiveNegator(tokens, index) === null
+    && !artifactPostNominalNegator(tokens, index));
 }
 
 function artifactIntentTokens(value: string): string[] {
   let folded = '';
   for (const character of value.normalize('NFKD').toLowerCase()) {
     const code = character.codePointAt(0) ?? 0;
+    if (code >= 0x0300 && code <= 0x036f) continue;
     const isAsciiLetter = code >= 97 && code <= 122;
     const isDigit = code >= 48 && code <= 57;
     folded += isAsciiLetter || isDigit ? character : ' ';
@@ -1182,7 +1330,9 @@ function modelMessages(request: DMChatRequest): ModelMessage[] {
 function contextNote(context: DMChatContext | undefined): string {
   if (!context) return '';
   const lines = [
-    context.projectIds?.length ? `Visible project ids: ${context.projectIds.join(', ')}` : '',
+    context.projectIds?.length
+      ? `Stable public project ids already resolved by page context: ${context.projectIds.join(', ')}. For a latest-turn reference to one of these ids, call getProject directly; never use searchProjects to rediscover it.`
+      : '',
     context.resumeTrackIds?.length ? `Visible resume track ids: ${context.resumeTrackIds.join(', ')}` : '',
     context.fitCheck?.jobDescription ? `Job description supplied for fit check:\n${context.fitCheck.jobDescription}` : '',
   ].filter(Boolean);
@@ -1262,7 +1412,7 @@ const DM_SYSTEM_INSTRUCTIONS = [
   'When the visitor requests a distinctive fact or public evidence, add an evidenceQuotes entry whose quote is an exact substring of that returned evidence value and appears in the same factual segment before any supported interpretation; natural prose capitalization is allowed.',
   'If one requested public source is partial or unavailable, keep the supported aspects from successful tools, state the bounded limitation, and never invent the missing evidence or artifact.',
   'Conversation history can resolve the subject, but only the latest turn controls the requested aspect. Corrections replace the prior subject instead of blending subjects.',
-  'When the latest turn names, corrects, or refers to a project whose stable public id or slug is known, call getProject. If only its public title is known and the stable id or slug is unresolved, call searchProjects once to resolve it; do not guess a stable reference from the title.',
+  'When the latest turn names, corrects, or refers to a project whose stable public id or slug is known, call getProject. Stable project ids supplied by page context are already resolved and must never be sent to searchProjects. If only its public title is known and the stable id or slug is unresolved, call searchProjects once to resolve it; do not guess a stable reference from the title.',
   'For an aspect-only follow-up on a previously discussed project, cite getProject evidence but omit the repeated project artifact unless the visitor explicitly asks to see its card. A correction to a different project may include that new project artifact.',
   'For a link-only follow-up, use links artifacts and omit project artifacts.',
   'For comparisons and interpretations, gather evidence for every project or resume fact you discuss and distinguish supported inference from fact.',
@@ -1273,7 +1423,7 @@ const DM_SYSTEM_INSTRUCTIONS = [
   'Never claim access to Slack, admin drafts, candidate evidence, private notes, visitor history, credentials, hidden projects, or unpublished records. Those sources and tools do not exist here.',
   'Every factual segment passed to finalizeAnswer must cite one or more evidenceIds returned by public tools in this same run.',
   'Only factual segments accept free text. For no-evidence output, select a server-controlled conversational act, limitation code, and optional follow-up code; never place arbitrary prose in those fields.',
-  'Artifact references must use artifact ids returned by tools in this same run. Do not copy or invent artifact payloads.',
+  'Artifact references must use artifact ids returned by tools in this same run. Include every explicitly requested resume, contact, link, evidence, or project artifact that the successful public tools returned; do not copy or invent artifact payloads.',
   'Set artifactIntent from the latest request: none for explicitly no artifacts, one_project for exactly one or a best-project card, project_set for a project list or overview, and non_project only when rendering resume, contact, evidence, or link artifacts without project cards.',
   'The server derives explicit zero, one-project, and project-set intent from the current request. Your artifactIntent must match that policy and cannot change during repair.',
   `Project sets are server-bounded to ${MAX_PROJECT_SET_ARTIFACTS} cards. If a requested project artifact is unavailable, finalize honestly without inventing one.`,
