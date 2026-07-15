@@ -32,6 +32,16 @@ test('public agent tool schemas are strict and bound their required inputs', () 
   assert.equal(SearchProfileInputSchema.safeParse({ query: 'leadership', categories: ['work'] }).success, true);
 });
 
+test('composition tool descriptions require every requested public source', () => {
+  const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
+
+  assert.match(run.readResume.description, /getContact/);
+  assert.match(run.getContact.description, /readResume/);
+  assert.match(run.getProject.description, /searchPublicSources/);
+  assert.match(run.searchPublicSources.description, /getProject/);
+  assert.match(run.searchPublicSources.description, /approved public/i);
+});
+
 test('project, resume, and contact tools return sanitized public records with stable evidence and artifact ids', async () => {
   const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
 
@@ -70,6 +80,20 @@ test('project, resume, and contact tools return sanitized public records with st
   assert.equal(contact.contact?.email, 'dylanmccavitt@outlook.com');
   assert.deepEqual(contact.artifactIds, ['contact']);
   assert.ok(contact.evidenceIds.includes('contact:email'));
+});
+
+test('title-only project names can use search when their stable id or slug is unknown', async () => {
+  const titleOnlyProject = publishedCatalogProject('nhf');
+  const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [titleOnlyProject] });
+
+  const unresolvedDirectRead = await run.getProject({ id: 'No Hard Feelings' });
+  assert.equal(unresolvedDirectRead.status, 'empty');
+
+  const resolvedByTitle = await run.searchProjects({ query: 'No Hard Feelings', limit: 1 });
+  assert.equal(resolvedByTitle.status, 'complete');
+  assert.deepEqual(resolvedByTitle.projects.map((item) => item.id), ['nhf']);
+  assert.ok(resolvedByTitle.evidenceIds.includes('nhf:identity'));
+  assert.deepEqual(resolvedByTitle.artifactIds, ['nhf']);
 });
 
 test('the run-local ledger records only evidence returned by tools in that run', async () => {
@@ -151,6 +175,7 @@ test('approved public-source search composes with project tools and rechecks eve
   const sources = await run.searchPublicSources({ query: 'public evidence', projectIds: [projects.projects[0]!.id] });
   assert.equal(sources.status, 'partial');
   assert.deepEqual(sources.sources.map((source) => source.id), ['rag-public']);
+  assert.deepEqual(sources.artifactIds, ['rag-public']);
   assert.equal('fileId' in (sources.sources[0] ?? {}), false);
   assert.doesNotMatch(JSON.stringify(sources), /candidate-hidden|private\.md|file-private/);
   assert.equal(run.evidenceLedger.has('citation:rag-public'), true);
@@ -239,6 +264,16 @@ test('profile search is honestly empty before #194 and filters a later adapter t
   assert.deepEqual(profile.profiles.map((entry) => entry.id), ['public-one']);
   assert.equal(profile.profiles[0]?.href, undefined);
   assert.doesNotMatch(JSON.stringify(profile), /draft-one|private-one/);
+
+  const failed = createPublicAgentTools({
+    db: unusedDb(),
+    loadProjects: async () => [project],
+    loadProfileEntries: async () => { throw new Error('private profile adapter details'); },
+  });
+  const failedProfile = await failed.searchProfile({ query: 'leadership' });
+  assert.equal(failedProfile.status, 'unavailable');
+  assert.deepEqual(failedProfile.limitations, ['profile_source_not_available']);
+  assert.doesNotMatch(JSON.stringify(failedProfile), /private profile adapter details|public_data_unavailable/);
 });
 
 test('empty, partial, error, cancellation, and timeout outcomes are explicit and sanitized', async () => {
@@ -291,7 +326,11 @@ test('resume remains available with an explicit partial status when project cros
 });
 
 function publishedProject(): ProjectDetailReadModel {
-  const [record] = buildCatalogShadowRecords(CATALOG.slice(0, 1));
+  return publishedCatalogProject(CATALOG[0]!.id);
+}
+
+function publishedCatalogProject(id: string): ProjectDetailReadModel {
+  const record = buildCatalogShadowRecords(CATALOG).find((candidate) => candidate.id === id);
   assert.ok(record);
   return projectRecordToReadModels({
     ...record,

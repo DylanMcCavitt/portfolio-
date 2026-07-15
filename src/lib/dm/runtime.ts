@@ -21,7 +21,9 @@ import {
   createPublicAgentTools,
   type PublicAgentToolRun,
   type PublicContactRecord,
+  type PublicEvidenceSource,
   type PublicProjectToolRecord,
+  type PublicProfileSourceEntry,
   type PublicResumeTrackRecord,
   type PublicSourceRecord,
   type PublicToolStatus,
@@ -59,6 +61,7 @@ export interface DMRuntimeDeps {
   model?: LanguageModel;
   env?: DMRuntimeEnv;
   projectLoader?: () => Promise<ProjectDetailReadModel[]>;
+  profileLoader?: () => Promise<PublicProfileSourceEntry[]>;
   ragSearch?: (
     query: string,
     config: PublicRagSearchConfig,
@@ -148,10 +151,14 @@ const FOLLOW_UP_CODES = [
 const ConversationalActSchema = z.enum(CONVERSATIONAL_ACTS);
 const LimitationCodeSchema = z.enum(LIMITATION_CODES);
 const FollowUpCodeSchema = z.enum(FOLLOW_UP_CODES);
+const ArtifactIntentSchema = z.enum(['none', 'one_project', 'project_set', 'non_project']);
 
 type ConversationalAct = z.infer<typeof ConversationalActSchema>;
 type LimitationCode = z.infer<typeof LimitationCodeSchema>;
 type FollowUpCode = z.infer<typeof FollowUpCodeSchema>;
+type ArtifactIntent = z.infer<typeof ArtifactIntentSchema>;
+
+const MAX_PROJECT_SET_ARTIFACTS = 4;
 
 const SERVER_LIMITATION_COPY = {
   private_sources: 'I can only use published public portfolio sources.',
@@ -195,6 +202,10 @@ const AnswerSegmentInputSchema = z.discriminatedUnion('kind', [
     kind: z.literal('factual'),
     text: z.string().trim().min(1).max(1_200),
     evidenceIds: z.array(z.string().trim().min(1).max(240)).min(1).max(16),
+    evidenceQuotes: z.array(z.strictObject({
+      evidenceId: z.string().trim().min(1).max(240),
+      quote: z.string().trim().min(3).max(240),
+    })).max(8).default([]),
   }),
   z.strictObject({
     kind: z.literal('conversational'),
@@ -216,6 +227,7 @@ const ArtifactReferenceSchema = z.discriminatedUnion('kind', [
 
 const FinalAnswerInputSchema = z.strictObject({
   segments: z.array(AnswerSegmentInputSchema).min(1).max(5),
+  artifactIntent: ArtifactIntentSchema,
   artifacts: z.array(ArtifactReferenceSchema).max(5),
   limitations: z.array(LimitationCodeSchema).max(4),
   followUp: FollowUpCodeSchema.optional(),
@@ -223,6 +235,14 @@ const FinalAnswerInputSchema = z.strictObject({
 
 type FinalAnswerInput = z.infer<typeof FinalAnswerInputSchema>;
 type ArtifactReference = z.infer<typeof ArtifactReferenceSchema>;
+
+const COMPOSITION_PAIRS: Array<{
+  sources: [PublicEvidenceSource, PublicEvidenceSource];
+  artifacts: [ArtifactReference['kind'], ArtifactReference['kind']];
+}> = [
+  { sources: ['resume', 'contact'], artifacts: ['resume', 'contact'] },
+  { sources: ['project', 'public_source'], artifacts: ['project', 'evidence'] },
+];
 
 interface RunArtifacts {
   projects: Map<string, PublicProjectToolRecord>;
@@ -234,6 +254,9 @@ interface RunArtifacts {
   outcomeLimitations: Map<LimitationTrackedTool, string[]>;
   outcomeOrdinals: Map<LimitationTrackedTool, number>;
   nextOutcomeOrdinal: number;
+  requestedArtifactIntent: ArtifactIntent | null;
+  boundArtifactIntent: ArtifactIntent | null;
+  projectLookupCompleted: boolean;
 }
 
 type LimitationTrackedTool = 'searchProjects' | 'getProject' | 'searchPublicSources' | 'searchProfile';
@@ -259,10 +282,11 @@ export function createDMChatResponse(
     db: deps.db,
     env: deps.env,
     ...(deps.projectLoader ? { loadProjects: deps.projectLoader } : {}),
+    ...(deps.profileLoader ? { loadProfileEntries: deps.profileLoader } : {}),
     ...(deps.ragSearch ? { ragSearch: deps.ragSearch } : {}),
     ragApiKey: deps.env?.OPENAI_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim(),
   });
-  const artifacts = emptyArtifacts();
+  const artifacts = emptyArtifacts(requestedArtifactIntent(request));
   const publicToolGate = createPublicToolGate();
   let finalizationAttempts = 0;
   let finalizationResult: Exclude<DMFinalizationResult, { status: 'rejected' }> | null = null;
@@ -274,7 +298,7 @@ export function createDMChatResponse(
   const agentTools = {
     ...publicTools,
     finalizeAnswer: tool({
-      description: 'Submit the complete structured visitor answer. Empty and unavailable public-tool results require their matching finite limitation code; retry once only when rejected.',
+      description: 'Submit the complete structured visitor answer and its requested artifact intent only after every successful source in a requested composition pair is cited, each same-run artifact allowed by that intent is included, and distinctive evidenceQuotes preserve exact returned wording with natural capitalization allowed in factual prose. Empty and unavailable public-tool results require their matching finite limitation code. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
       inputSchema: FinalAnswerInputSchema,
       execute: async (input: FinalAnswerInput) => {
         await publicToolGate.waitForIdle();
@@ -311,6 +335,14 @@ export function createDMChatResponse(
     tools: agentTools,
     stopWhen: [() => finalized, isStepCount(budgets.maxSteps)],
     maxOutputTokens: budgets.maxOutputTokens,
+    experimental_repairToolCall: async ({ toolCall }) => {
+      if (toolCall.toolName !== 'finalizeAnswer' || finalizationResult) return null;
+      finalizationAttempts += 1;
+      if (finalizationAttempts >= 2) {
+        finalized = true;
+      }
+      return null;
+    },
   });
 
   const stream = createUIMessageStream({
@@ -496,6 +528,7 @@ function createRuntimePublicTools(
         return gate.run(async () => {
           metrics.tool();
           const result = await run.searchProjects(input, { abortSignal });
+          artifacts.projectLookupCompleted = true;
           for (const project of result.projects) artifacts.projects.set(project.id, project);
           rememberToolOutcome(artifacts, 'searchProjects', outcomeOrdinal, result.status, result.limitations);
           return result;
@@ -510,6 +543,7 @@ function createRuntimePublicTools(
         return gate.run(async () => {
           metrics.tool();
           const result = await run.getProject(input, { abortSignal });
+          artifacts.projectLookupCompleted = true;
           if (result.project) artifacts.projects.set(result.project.id, result.project);
           rememberToolOutcome(artifacts, 'getProject', outcomeOrdinal, result.status, result.limitations);
           return result;
@@ -593,16 +627,34 @@ function validateFinalAnswer(
   run: PublicAgentToolRun,
   artifacts: RunArtifacts,
 ): { ok: true; answer: DMValidatedAnswer } | { ok: false; errors: string[] } {
+  const changedIntent = artifacts.boundArtifactIntent !== null
+    && input.artifactIntent !== artifacts.boundArtifactIntent;
+  artifacts.boundArtifactIntent ??= input.artifactIntent;
+  if (changedIntent) {
+    return { ok: false, errors: ['artifact intent must match the current request and cannot change during repair'] };
+  }
   const errors: string[] = [];
   errors.push(...limitationOutcomeErrors(input, artifacts));
+  const artifactReferences = deduplicateArtifactReferences(input.artifacts);
   for (const [index, segment] of input.segments.entries()) {
     if (segment.kind !== 'factual') continue;
     const unknown = segment.evidenceIds.filter((id) => !run.evidenceLedger.has(id));
     if (unknown.length > 0) errors.push(`segment ${index + 1} cites evidence not returned in this run`);
+    errors.push(...evidenceQuoteErrors(segment, run, index));
   }
-  for (const reference of input.artifacts) {
+  errors.push(...compositionCoverageErrors(input, run));
+  for (const reference of artifactReferences) {
     if (!artifactAvailable(reference, artifacts)) errors.push(`${reference.kind} artifact was not returned in this run`);
   }
+  if (
+    artifacts.requestedArtifactIntent !== null
+    && (input.artifactIntent === 'one_project' || input.artifactIntent === 'project_set')
+    && artifacts.projects.size === 0
+    && !artifacts.projectLookupCompleted
+  ) {
+    errors.push('requested project artifacts require a completed project lookup');
+  }
+  errors.push(...artifactCardinalityErrors(input.artifactIntent, artifactReferences, artifacts.projects.size));
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)].slice(0, 5) };
 
   const segments = input.segments.map((segment) => {
@@ -630,7 +682,7 @@ function validateFinalAnswer(
     ok: true,
     answer: {
       segments,
-      artifacts: input.artifacts.flatMap((reference) => resolveArtifact(reference, artifacts)),
+      artifacts: artifactReferences.flatMap((reference) => resolveArtifact(reference, artifacts)),
       limitations,
       ...(input.followUp ? { followUp: FINALIZATION_ENUM_COPY.followUp[input.followUp] } : {}),
     },
@@ -669,6 +721,28 @@ function limitationOutcomeErrors(input: FinalAnswerInput, artifacts: RunArtifact
     const allowed = allowedOutcomeFollowUps(required);
     if (!allowed.has(input.followUp)) {
       errors.push(`follow-up ${input.followUp} is not useful for the public tool outcome`);
+    }
+  }
+  return errors;
+}
+
+function evidenceQuoteErrors(
+  segment: Extract<FinalAnswerInput['segments'][number], { kind: 'factual' }>,
+  run: PublicAgentToolRun,
+  index: number,
+): string[] {
+  const errors: string[] = [];
+  for (const selection of segment.evidenceQuotes) {
+    const evidence = run.evidenceLedger.resolve([selection.evidenceId])[0];
+    if (!evidence || !segment.evidenceIds.includes(selection.evidenceId)) {
+      errors.push(`segment ${index + 1} exact evidence was not cited from this run`);
+      continue;
+    }
+    if (!evidence.value.includes(selection.quote)) {
+      errors.push(`segment ${index + 1} exact evidence quote was not returned by its cited source`);
+    }
+    if (!segment.text.toLowerCase().includes(selection.quote.toLowerCase())) {
+      errors.push(`segment ${index + 1} omitted its selected exact evidence quote`);
     }
   }
   return errors;
@@ -718,6 +792,87 @@ function allowedOutcomeFollowUps(required: ReadonlySet<LimitationCode>): Set<Fol
   return allowed;
 }
 
+function compositionCoverageErrors(input: FinalAnswerInput, run: PublicAgentToolRun): string[] {
+  const returnedSources = new Set(
+    run.evidenceLedger.snapshot()
+      .map((evidence) => evidence.source)
+  );
+  const citedEvidenceIds = input.segments.flatMap((segment) =>
+    segment.kind === 'factual' ? segment.evidenceIds : [],
+  );
+  const citedSources = new Set(
+    run.evidenceLedger.resolve(citedEvidenceIds)
+      .map((evidence) => evidence.source)
+  );
+  const exactQuoteSources = new Set(
+    input.segments.flatMap((segment) => segment.kind === 'factual'
+      ? segment.evidenceQuotes.flatMap((selection) =>
+        run.evidenceLedger.resolve([selection.evidenceId]).map((evidence) => evidence.source))
+      : []),
+  );
+  const artifactKinds = new Set(input.artifacts.map((artifact) => artifact.kind));
+  const errors: string[] = [];
+  for (const pair of COMPOSITION_PAIRS) {
+    if (!pair.sources.every((source) => returnedSources.has(source))) continue;
+    const missingSources = pair.sources.filter((source) => !citedSources.has(source));
+    if (missingSources.length > 0) {
+      errors.push(`composed answer omitted returned evidence from: ${missingSources.join(', ')}`);
+    }
+    const missingQuotes = pair.sources.filter((source) => !exactQuoteSources.has(source));
+    if (missingQuotes.length > 0) {
+      errors.push(`composed answer needs exact evidence quotes from: ${missingQuotes.join(', ')}`);
+    }
+    const requiredArtifacts = input.artifactIntent === 'none'
+      ? []
+      : pair.artifacts.filter((artifact) => input.artifactIntent !== 'non_project' || artifact !== 'project');
+    const missingArtifacts = requiredArtifacts.filter((artifact) => !artifactKinds.has(artifact));
+    if (missingArtifacts.length > 0) {
+      errors.push(`composed answer omitted required artifacts: ${missingArtifacts.join(', ')}`);
+    }
+  }
+  return errors;
+}
+
+function deduplicateArtifactReferences(references: ArtifactReference[]): ArtifactReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const key = `${reference.kind}:${reference.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function artifactCardinalityErrors(
+  intent: ArtifactIntent,
+  references: ArtifactReference[],
+  availableProjectCount: number,
+): string[] {
+  const projectCount = references.filter((reference) => reference.kind === 'project').length;
+  if (intent === 'none') {
+    return references.length === 0 ? [] : ['artifact intent none requires zero artifacts'];
+  }
+  if (intent === 'one_project') {
+    if (projectCount > 1) return ['one_project artifact intent allows at most one project artifact'];
+    if (availableProjectCount > 0 && projectCount === 0) {
+      return ['one_project artifact intent requires one returned project artifact'];
+    }
+    return [];
+  }
+  if (intent === 'project_set') {
+    if (projectCount > MAX_PROJECT_SET_ARTIFACTS) {
+      return [`project_set artifact intent allows at most ${MAX_PROJECT_SET_ARTIFACTS} project artifacts`];
+    }
+    if (availableProjectCount > 0 && projectCount === 0) {
+      return ['project_set artifact intent requires at least one returned project artifact'];
+    }
+  }
+  if (intent === 'non_project' && projectCount > 0) {
+    return ['non_project artifact intent cannot include project artifacts'];
+  }
+  return [];
+}
+
 function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {
   if (reference.kind === 'project' || reference.kind === 'links') return artifacts.projects.has(reference.id);
   if (reference.kind === 'resume') return artifacts.resumeTracks.has(reference.id);
@@ -745,7 +900,7 @@ function resolveArtifact(reference: ArtifactReference, artifacts: RunArtifacts):
   return project ? [{ kind: 'links', id: `links:${project.id}`, projectId: project.id, items: project.links }] : [];
 }
 
-function emptyArtifacts(): RunArtifacts {
+function emptyArtifacts(requestedArtifactIntent: ArtifactIntent | null = null): RunArtifacts {
   return {
     projects: new Map(),
     resumeTracks: new Map(),
@@ -756,7 +911,152 @@ function emptyArtifacts(): RunArtifacts {
     outcomeLimitations: new Map(),
     outcomeOrdinals: new Map(),
     nextOutcomeOrdinal: 0,
+    requestedArtifactIntent,
+    boundArtifactIntent: requestedArtifactIntent,
+    projectLookupCompleted: false,
   };
+}
+
+function requestedArtifactIntent(request: DMChatRequest): ArtifactIntent | null {
+  const latestUser = request.messages.findLast((message) => message.role === 'user');
+  const text = latestUser?.parts
+    .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join(' ') ?? '';
+  const tokens = artifactIntentTokens(text);
+
+  // This policy sets only the artifact envelope. Tool choice, project
+  // selection, evidence, subject resolution, and answer prose stay model-led.
+  if (requestsProjectLinksWithoutCards(tokens)) return 'non_project';
+  if (requestsNoArtifacts(tokens)) return 'none';
+  if (requestsOneProject(tokens)) return 'one_project';
+  if (requestsProjectSet(tokens)) return 'project_set';
+  return null;
+}
+
+function artifactIntentTokens(value: string): string[] {
+  let folded = '';
+  for (const character of value.normalize('NFKD').toLowerCase()) {
+    const code = character.codePointAt(0) ?? 0;
+    const isAsciiLetter = code >= 97 && code <= 122;
+    const isDigit = code >= 48 && code <= 57;
+    folded += isAsciiLetter || isDigit ? character : ' ';
+  }
+  return folded.split(' ').filter(Boolean);
+}
+
+function requestsProjectLinksWithoutCards(tokens: string[]): boolean {
+  const hasLinks = tokens.some((token) => token === 'link' || token === 'links');
+  if (!hasLinks) return false;
+  if (requestsOnlyLinks(tokens)) return true;
+  if (includesTokenSequence(tokens, ['instead', 'of', 'project', 'cards'])) return true;
+  if (includesTokenSequence(tokens, ['instead', 'of', 'cards'])) return true;
+  return tokens.some((token, index) => (
+    (token === 'card' || token === 'cards') && artifactDirectiveNegator(tokens, index) !== null
+  ));
+}
+
+function requestsNoArtifacts(tokens: string[]): boolean {
+  for (const [index, token] of tokens.entries()) {
+    if (token !== 'card' && token !== 'cards' && token !== 'artifact' && token !== 'artifacts') continue;
+    if (artifactDirectiveNegator(tokens, index) !== null) return true;
+    if (artifactPostNominalNegator(tokens, index)) return true;
+  }
+  return false;
+}
+
+function requestsOnlyLinks(tokens: string[]): boolean {
+  const hasPositiveCard = tokens.some((token, index) => (
+    (token === 'card' || token === 'cards' || token === 'artifact' || token === 'artifacts')
+    && artifactDirectiveNegator(tokens, index) === null
+    && !artifactPostNominalNegator(tokens, index)
+  ));
+  if (hasPositiveCard) return false;
+  if (includesTokenSequence(tokens, ['links', 'only']) || includesTokenSequence(tokens, ['link', 'only'])) return true;
+  const fillers = new Set(['return', 'show', 'give', 'include', 'the', 'project', 'public', 'published', 'me']);
+  for (const [index, token] of tokens.entries()) {
+    if (token !== 'only') continue;
+    let cursor = index + 1;
+    while (fillers.has(tokens[cursor] ?? '')) cursor += 1;
+    if (tokens[cursor] === 'link' || tokens[cursor] === 'links') return true;
+  }
+  return false;
+}
+
+function artifactDirectiveNegator(tokens: string[], nounIndex: number): 'no' | 'without' | 'do_not' | 'zero' | null {
+  let cursor = nounIndex - 1;
+  const fillers = new Set(['project', 'a', 'any', 'the', 'one', 'single', 'sole', 'even']);
+  while (fillers.has(tokens[cursor] ?? '')) cursor -= 1;
+  if (['show', 'showing', 'render', 'rendering', 'open', 'opening', 'include', 'including'].includes(tokens[cursor] ?? '')) {
+    cursor -= 1;
+  }
+  if (tokens[cursor] === 'no') return 'no';
+  if (tokens[cursor] === 'without') return 'without';
+  if (tokens[cursor] === 'not' && tokens[cursor - 1] === 'do') return 'do_not';
+  if (tokens[cursor] === 't' && tokens[cursor - 1] === 'don') return 'do_not';
+  if (tokens[cursor] === 'not') return 'no';
+  if (tokens[cursor] === 'zero' || tokens[cursor] === '0') return 'zero';
+  return null;
+}
+
+function artifactPostNominalNegator(tokens: string[], nounIndex: number): boolean {
+  let cursor = nounIndex + 1;
+  if (tokens[cursor] === 'is' || tokens[cursor] === 'are') cursor += 1;
+  if (tokens[cursor] === 'unnecessary' || tokens[cursor] === 'unneeded') return true;
+  if (
+    (tokens[cursor] === 'isn' || tokens[cursor] === 'aren')
+    && tokens[cursor + 1] === 't'
+  ) {
+    return ['needed', 'necessary', 'required', 'wanted'].includes(tokens[cursor + 2] ?? '');
+  }
+  return tokens[cursor] === 'not'
+    && ['needed', 'necessary', 'required', 'wanted'].includes(tokens[cursor + 1] ?? '');
+}
+
+function requestsOneProject(tokens: string[]): boolean {
+  if (requestsExplicitOneProject(tokens)) return true;
+  const rankedSelection = includesTokenSequence(tokens, ['most', 'impressive'])
+    || tokens.some((token) => ['best', 'strongest', 'top', 'favorite'].includes(token));
+  const singularSelectionGrammar = tokens.some((token) => (
+    ['is', 'has', 'shows', 'demonstrates', 'does', 'ranks'].includes(token)
+  ));
+  const selectsFromProjects = tokens.includes('projects')
+    && tokens.includes('which')
+    && (tokens.includes('of') || tokens.includes('among'))
+    && singularSelectionGrammar;
+  if (selectsFromProjects && rankedSelection) return true;
+  const singularProject = tokens.includes('project') && !tokens.includes('projects');
+  if (!singularProject) return false;
+  if (tokens.includes('card') || tokens.includes('artifact')) return true;
+  return rankedSelection;
+}
+
+function requestsExplicitOneProject(tokens: string[]): boolean {
+  const singularTokens = new Set(['one', '1', 'single', 'sole']);
+  for (const [index, token] of tokens.entries()) {
+    if (!singularTokens.has(token)) continue;
+    if (tokens[index + 1] === 'or' && tokens[index + 2] === 'more') continue;
+    if (tokens[index + 1] === 'card' || tokens[index + 1] === 'artifact') return true;
+    if (tokens[index + 1] === 'project') return true;
+    if (
+      tokens[index + 1] === 'of'
+      && tokens.slice(index + 2).some((candidate) => candidate === 'project' || candidate === 'projects')
+    ) return true;
+  }
+  return false;
+}
+
+function requestsProjectSet(tokens: string[]): boolean {
+  if (tokens.includes('project') && tokens.includes('set')) return true;
+  const projectContext = tokens.includes('project') || tokens.includes('projects');
+  const pluralCardContext = tokens.includes('cards') || tokens.includes('artifacts');
+  if (projectContext && pluralCardContext) return true;
+  return tokens.includes('projects');
+}
+
+function includesTokenSequence(tokens: string[], sequence: string[]): boolean {
+  if (sequence.length === 0 || sequence.length > tokens.length) return false;
+  return tokens.some((_, start) => sequence.every((token, offset) => tokens[start + offset] === token));
 }
 
 function rememberLimitations(artifacts: RunArtifacts, limitations: string[]): void {
@@ -851,6 +1151,16 @@ function limitedResult(repairAttempted: boolean): Extract<DMFinalizationResult, 
   };
 }
 
+const LATEST_TURN_CONTROL = [
+  'Latest-turn control: the latest user message below is the only active request.',
+  'Earlier messages are reference context only: use them to resolve the project subject, never as factual evidence.',
+  'A subject correction in this latest user message replaces the prior subject.',
+  'When the project subject has a known stable public id or slug, call getProject for each needed project.',
+  'If only a public project title is known and its stable id or slug is unresolved, call searchProjects once to resolve it; use getProject for later coreference after resolution.',
+  'For an aspect-only follow-up on the same project, answer only that aspect and omit a repeated project card unless this latest user message explicitly asks for one.',
+  'For a repository-link follow-up, emit links artifacts rather than repeated project cards.',
+].join(' ');
+
 function modelMessages(request: DMChatRequest): ModelMessage[] {
   const messages = request.messages.slice(-13).map((message) => ({
     role: message.role === 'assistant' ? 'assistant' as const : 'user' as const,
@@ -863,7 +1173,7 @@ function modelMessages(request: DMChatRequest): ModelMessage[] {
   if (lastUser >= 0) {
     messages[lastUser] = {
       ...messages[lastUser],
-      content: `${messages[lastUser].content}${contextNote(request.context)}`,
+      content: `${LATEST_TURN_CONTROL}\n\nLatest user message:\n${messages[lastUser].content}${contextNote(request.context)}`,
     };
   }
   return messages;
@@ -946,7 +1256,15 @@ const DM_SYSTEM_INSTRUCTIONS = [
   "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
   'Answer the latest question first. Normally use two to five concise sentences across no more than five answer segments.',
   'Use the typed public tools when a claim needs facts. Avoid tools for greetings, capability questions, and other purely conversational turns.',
-  'Conversation history can resolve the subject, but the latest turn controls the requested aspect. Corrections replace the prior subject.',
+  'Treat every multi-part request as a checklist. Call the public tool needed for each requested aspect, and do not finalize until every successful source in the requested composition pair is cited or an unavailable aspect has an explicit limitation.',
+  'For a recruiter question that asks for both resume background and contact details, call both readResume and getContact, cite evidence from both, preserve a distinctive exact value from each in evidenceQuotes, and include the returned resume and contact artifacts.',
+  'For a project evidence deep dive, call both getProject and searchPublicSources with the published project id, cite evidence from both successful tools, preserve a distinctive exact phrase from each in evidenceQuotes, and include only same-run project and approved evidence artifacts.',
+  'When the visitor requests a distinctive fact or public evidence, add an evidenceQuotes entry whose quote is an exact substring of that returned evidence value and appears in the same factual segment before any supported interpretation; natural prose capitalization is allowed.',
+  'If one requested public source is partial or unavailable, keep the supported aspects from successful tools, state the bounded limitation, and never invent the missing evidence or artifact.',
+  'Conversation history can resolve the subject, but only the latest turn controls the requested aspect. Corrections replace the prior subject instead of blending subjects.',
+  'When the latest turn names, corrects, or refers to a project whose stable public id or slug is known, call getProject. If only its public title is known and the stable id or slug is unresolved, call searchProjects once to resolve it; do not guess a stable reference from the title.',
+  'For an aspect-only follow-up on a previously discussed project, cite getProject evidence but omit the repeated project artifact unless the visitor explicitly asks to see its card. A correction to a different project may include that new project artifact.',
+  'For a link-only follow-up, use links artifacts and omit project artifacts.',
   'For comparisons and interpretations, gather evidence for every project or resume fact you discuss and distinguish supported inference from fact.',
   'Use project area, status, or year filters when the latest question asks about that exact aspect. If the filtered search is empty, state the filter limitation and omit a follow-up when that fully answers the question.',
   'When searchProjects, searchPublicSources, or searchProfile returns empty or unavailable, select the matching finite limitation code. Do not turn an empty result into an unavailable-source claim or expose internal error details.',
@@ -956,6 +1274,9 @@ const DM_SYSTEM_INSTRUCTIONS = [
   'Every factual segment passed to finalizeAnswer must cite one or more evidenceIds returned by public tools in this same run.',
   'Only factual segments accept free text. For no-evidence output, select a server-controlled conversational act, limitation code, and optional follow-up code; never place arbitrary prose in those fields.',
   'Artifact references must use artifact ids returned by tools in this same run. Do not copy or invent artifact payloads.',
+  'Set artifactIntent from the latest request: none for explicitly no artifacts, one_project for exactly one or a best-project card, project_set for a project list or overview, and non_project only when rendering resume, contact, evidence, or link artifacts without project cards.',
+  'The server derives explicit zero, one-project, and project-set intent from the current request. Your artifactIntent must match that policy and cannot change during repair.',
+  `Project sets are server-bounded to ${MAX_PROJECT_SET_ARTIFACTS} cards. If a requested project artifact is unavailable, finalize honestly without inventing one.`,
   'Call finalizeAnswer with the complete visitor answer. Do not emit visitor-facing prose outside finalizeAnswer.',
   'If finalizeAnswer rejects the structure, repair it exactly once using the rejection errors. Never retry it more than once.',
 ].join('\n');
