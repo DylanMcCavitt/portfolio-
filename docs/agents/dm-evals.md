@@ -95,8 +95,9 @@ model's sanitized candidate-run digest for blinded review. After the ten
 comparisons per model are captured against those exact digests, run
 `npm run dm:eval:release` with `--release-report <captured.json>` and
 `--selection-evidence <sanitized.json>`. The second phase makes no provider call; it strictly rejects
-unknown report/run/judge/aggregate fields before any output, recomputes the
-candidate digests, and rejects stale or replayed preferences.
+unknown report/run/judge/aggregate fields, missing or malformed run evidence,
+and anything outside the exact Luna/Grok case/run matrix before any output. It
+recomputes the candidate digests and rejects stale or replayed preferences.
 
 After disqualification, qualified models rank by mean usefulness, relevance,
 and directness. A difference within 0.1 is broken by groundedness, then p95

@@ -238,6 +238,75 @@ test('captured release report validation rejects raw or unknown fields before re
   );
 });
 
+test('captured release report rejects truthy non-boolean pass evidence', () => {
+  const report = releaseReport(() => 5);
+  const malformed = structuredClone(report) as unknown as { runs: Array<Record<string, unknown>> };
+  malformed.runs[0]!.passed = 'false';
+  malformed.runs[0]!.failure = 'deterministic gate failed';
+
+  assert.throws(
+    () => validateDMReleaseReport(malformed),
+    /boolean passed value consistent with failure/,
+  );
+
+  const decision = selectDMReleaseWinner(malformed as unknown as DMEvalReport, selectionEvidence(report));
+  assert.equal(decision.status, 'no-winner');
+  assert.match(decision.aggregates[0]?.disqualifications.join('\n') ?? '', /invalid or inconsistent pass\/failure evidence/);
+});
+
+test('captured release report rejects rows outside the exact two-model matrix', () => {
+  const report = releaseReport(() => 5);
+  const withUnexpectedModel = structuredClone(report);
+  withUnexpectedModel.runs.push({ ...structuredClone(report.runs[0]!), model: 'unexpected/model' });
+
+  assert.throws(
+    () => validateDMReleaseReport(withUnexpectedModel),
+    /exact .*run Luna\/Grok matrix|unexpected model/,
+  );
+
+  const decision = selectDMReleaseWinner(withUnexpectedModel, selectionEvidence(report));
+  assert.equal(decision.status, 'no-winner');
+  for (const aggregate of decision.aggregates) {
+    assert.match(aggregate.disqualifications.join('\n'), /outside the exact Luna\/Grok matrix/);
+  }
+});
+
+test('captured release report rejects claimed passes with non-completed outcomes', () => {
+  const report = releaseReport(() => 5);
+  const malformed = structuredClone(report);
+  malformed.runs[0]!.outcome = 'error';
+
+  assert.throws(
+    () => validateDMReleaseReport(malformed),
+    /passing run requires a completed outcome/,
+  );
+
+  const decision = selectDMReleaseWinner(malformed, selectionEvidence(report));
+  assert.equal(decision.status, 'no-winner');
+  for (const aggregate of decision.aggregates) {
+    assert.match(aggregate.disqualifications.join('\n'), /does not match the live per-run release gate/);
+  }
+});
+
+test('captured release report re-applies the live judge gate before qualification', () => {
+  const report = releaseReport(() => 5);
+  const malformed = structuredClone(report);
+  const run = malformed.runs.find((candidate) => candidate.critical === false);
+  assert.ok(run?.judge && !('error' in run.judge));
+  run.judge.questionComprehension = 0;
+
+  assert.throws(
+    () => validateDMReleaseReport(malformed),
+    /does not match the live per-run release gate/,
+  );
+
+  const decision = selectDMReleaseWinner(malformed, selectionEvidence(report));
+  assert.equal(decision.status, 'no-winner');
+  for (const aggregate of decision.aggregates) {
+    assert.match(aggregate.disqualifications.join('\n'), /does not match the live per-run release gate/);
+  }
+});
+
 function releaseReport(usefulnessFor: (model: string) => number): DMEvalReport {
   const runs: DMEvalRunRecord[] = [];
   for (const model of DM_RELEASE_MODELS) {
@@ -267,6 +336,7 @@ function releaseReport(usefulnessFor: (model: string) => number): DMEvalReport {
           followUpApplicable,
           costUsd: null,
           judge: judge(usefulnessFor(model), followUpApplicable),
+          judgedBy: 'fixture-judge',
         });
       }
     }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DM_LIVE_EVAL_CORPUS, DM_RELEASE_MODELS, DM_RELEASE_RUNS_PER_CASE, type DMEvalCategory } from './eval-corpus';
-import type { DMEvalJudgeScore, DMEvalReport, DMEvalRunRecord } from './eval-report';
+import { applyEvalReleaseGate, type DMEvalJudgeScore, type DMEvalReport, type DMEvalRunRecord } from './eval-report';
 
 export const DM_RELEASE_PASS_RATE = 0.95;
 export const DM_RELEASE_FOLLOW_UP_RATE = 0.9;
@@ -231,22 +231,85 @@ export function validateDMReleaseReport(value: unknown): DMEvalReport {
   if (!value || typeof value !== 'object') throw new Error('Captured release report must be an object.');
   assertExactKeys(value, ['generatedAt', 'mode', 'scoreKind', 'judge', 'runs', 'releaseDecision'], 'captured release report');
   const report = value as Partial<DMEvalReport>;
+  assertRequiredKeys(value, ['generatedAt', 'mode', 'scoreKind', 'judge', 'runs'], 'captured release report');
+  if (typeof report.generatedAt !== 'string' || Number.isNaN(Date.parse(report.generatedAt))
+    || report.mode !== 'live' || report.scoreKind !== 'release'
+    || typeof report.judge !== 'string' || report.judge.length === 0) {
+    throw new Error('Captured release report requires a dated live release score with a configured judge.');
+  }
   if (!Array.isArray(report.runs)) throw new Error('Captured release report requires runs.');
+  const expectedCases = new Map(DM_LIVE_EVAL_CORPUS.map((testCase) => [testCase.id, testCase]));
+  const expectedRunCount = DM_RELEASE_MODELS.length * expectedCases.size * DM_RELEASE_RUNS_PER_CASE;
+  if (report.runs.length !== expectedRunCount) {
+    throw new Error(`Captured release report requires the exact ${expectedRunCount}-run Luna/Grok matrix.`);
+  }
+  const matrixKeys = new Set<string>();
   for (const run of report.runs as unknown[]) {
     if (!run || typeof run !== 'object') throw new Error('Captured release runs must be objects.');
-    assertExactKeys(run, [
+    const runKeys = [
       'model', 'caseId', 'caseName', 'runNumber', 'passed', 'failure', 'elapsedMs', 'tools', 'stepCount',
       'inputTokens', 'outputTokens', 'repairCount', 'outcome', 'answerText', 'blockKinds', 'evidenceIds',
       'source', 'categories', 'critical', 'followUpApplicable', 'costUsd', 'judge', 'judgedBy',
-    ], 'captured release run');
-    const judge = (run as { judge?: unknown }).judge;
-    if (judge !== undefined) {
-      if (!judge || typeof judge !== 'object') throw new Error('Captured release judge must be an object.');
-      if ('error' in judge) assertExactKeys(judge, ['error'], 'captured release judge error');
-      else assertExactKeys(judge, [
+    ];
+    assertExactKeys(run, runKeys, 'captured release run');
+    assertRequiredKeys(run, runKeys, 'captured release run');
+    const record = run as Record<string, unknown>;
+    if (!DM_RELEASE_MODELS.includes(record.model as (typeof DM_RELEASE_MODELS)[number])) {
+      throw new Error(`Captured release report contains unexpected model ${String(record.model)}.`);
+    }
+    const expectedCase = typeof record.caseId === 'string' ? expectedCases.get(record.caseId) : undefined;
+    if (!expectedCase || record.caseName !== expectedCase.name
+      || record.source !== expectedCase.source || record.critical !== expectedCase.critical
+      || record.followUpApplicable !== (expectedCase.expectations.followUp !== 'not-useful')
+      || !Array.isArray(record.categories)
+      || JSON.stringify([...record.categories].sort()) !== JSON.stringify([...expectedCase.categories].sort())) {
+      throw new Error('Captured release run contains unexpected or inconsistent corpus metadata.');
+    }
+    if (!Number.isInteger(record.runNumber) || (record.runNumber as number) < 1
+      || (record.runNumber as number) > DM_RELEASE_RUNS_PER_CASE) {
+      throw new Error('Captured release runNumber must be 1, 2, or 3.');
+    }
+    const matrixKey = `${record.model}:${record.caseId}:${record.runNumber}`;
+    if (matrixKeys.has(matrixKey)) throw new Error(`Captured release report contains duplicate matrix row ${matrixKey}.`);
+    matrixKeys.add(matrixKey);
+    if (typeof record.passed !== 'boolean'
+      || (record.passed === true && record.failure !== null)
+      || (record.passed === false && (typeof record.failure !== 'string' || record.failure.length === 0))) {
+      throw new Error('Captured release run requires a boolean passed value consistent with failure.');
+    }
+    if (!isFiniteNonNegative(record.elapsedMs) || !isNonNegativeInteger(record.stepCount)
+      || !isNullableNonNegativeInteger(record.inputTokens) || !isNullableNonNegativeInteger(record.outputTokens)
+      || !isNonNegativeInteger(record.repairCount) || !isNullableFiniteNonNegative(record.costUsd)) {
+      throw new Error('Captured release run contains invalid timing, token, repair, or cost telemetry.');
+    }
+    if (!isStringArray(record.tools) || !isEvalOutcome(record.outcome)
+      || typeof record.answerText !== 'string' || !isStringArray(record.blockKinds)
+      || !isStringArray(record.evidenceIds) || typeof record.judgedBy !== 'string' || record.judgedBy.length === 0) {
+      throw new Error('Captured release run contains invalid sanitized result fields.');
+    }
+    const judge = record.judge;
+    if (!judge || typeof judge !== 'object') throw new Error('Captured release judge must be an object.');
+    if ('error' in judge) {
+      assertExactKeys(judge, ['error'], 'captured release judge error');
+      assertRequiredKeys(judge, ['error'], 'captured release judge error');
+      if (typeof (judge as { error?: unknown }).error !== 'string') throw new Error('Captured release judge error must be a string.');
+    } else {
+      const judgeKeys = [
         'grounded', 'honest', 'questionComprehension', 'useful', 'relevant', 'direct', 'continuity',
         'nonRepetition', 'followUpUseful', 'notes',
-      ], 'captured release judge');
+      ];
+      assertExactKeys(judge, judgeKeys, 'captured release judge');
+      assertRequiredKeys(judge, judgeKeys, 'captured release judge');
+      if (!validJudge(judge as DMEvalJudgeScore) || typeof (judge as DMEvalJudgeScore).notes !== 'string') {
+        throw new Error('Captured release judge contains invalid score fields.');
+      }
+    }
+    const regated = applyEvalReleaseGate(record as unknown as DMEvalRunRecord);
+    if (record.passed === true && record.outcome !== 'completed') {
+      throw new Error('Captured release passing run requires a completed outcome.');
+    }
+    if (regated.passed !== record.passed || regated.failure !== record.failure) {
+      throw new Error('Captured release run pass/failure evidence does not match the live per-run release gate.');
     }
   }
   if (report.releaseDecision !== undefined) validateReleaseDecisionKeys(report.releaseDecision);
@@ -346,6 +409,15 @@ function aggregateModel(
   const casesById = new Map(DM_LIVE_EVAL_CORPUS.map((testCase) => [testCase.id, testCase]));
 
   if (report.mode !== 'live' || report.scoreKind !== 'release') disqualifications.add('report is not a live release score');
+  if (report.runs.some((run) => !DM_RELEASE_MODELS.includes(run.model as (typeof DM_RELEASE_MODELS)[number]))) {
+    disqualifications.add('release report contains a model outside the exact Luna/Grok matrix');
+  }
+  if (report.runs.some((run) => typeof run.passed !== 'boolean' || (run.passed === true) !== (run.failure === null))) {
+    disqualifications.add('release report contains invalid or inconsistent pass/failure evidence');
+  }
+  if (report.runs.some((run) => !matchesLiveReleaseGate(run))) {
+    disqualifications.add('release report does not match the live per-run release gate');
+  }
   if (runs.length !== expectedCaseIds.size * DM_RELEASE_RUNS_PER_CASE) {
     disqualifications.add(`incomplete release matrix: expected ${expectedCaseIds.size * DM_RELEASE_RUNS_PER_CASE} runs, found ${runs.length}`);
   }
@@ -371,16 +443,19 @@ function aggregateModel(
     if (!run.categories || JSON.stringify([...run.categories].sort()) !== JSON.stringify([...expected.categories].sort())) {
       disqualifications.add(`case ${run.caseId} has missing or incorrect category metadata`);
     }
+    if (typeof run.passed !== 'boolean' || (run.passed === true) !== (run.failure === null)) {
+      disqualifications.add(`case ${run.caseId} has invalid or inconsistent pass/failure evidence`);
+    }
   }
 
-  const passedRuns = runs.filter((run) => run.passed).length;
+  const passedRuns = runs.filter((run) => run.passed === true).length;
   const passRate = runs.length === 0 ? 0 : passedRuns / runs.length;
   if (passRate < DM_RELEASE_PASS_RATE) disqualifications.add(`corpus pass rate ${(passRate * 100).toFixed(1)}% is below 95%`);
 
   const maintainerCaseIds = DM_LIVE_EVAL_CORPUS.filter((testCase) => testCase.source === 'maintainer-failure').map((testCase) => testCase.id);
   const stableMaintainerCases = maintainerCaseIds.filter((caseId) => {
     const caseRuns = runs.filter((run) => run.caseId === caseId);
-    return caseRuns.length === DM_RELEASE_RUNS_PER_CASE && caseRuns.every((run) => run.passed);
+    return caseRuns.length === DM_RELEASE_RUNS_PER_CASE && caseRuns.every((run) => run.passed === true);
   }).length;
   const expectedMaintainerCases = maintainerCaseIds.length;
   if (stableMaintainerCases !== expectedMaintainerCases) {
@@ -557,6 +632,32 @@ function isFiniteNonNegative(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isNullableNonNegativeInteger(value: unknown): boolean {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function isNullableFiniteNonNegative(value: unknown): boolean {
+  return value === null || isFiniteNonNegative(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isEvalOutcome(value: unknown): value is string {
+  return ['completed', 'error', 'incomplete', 'timeout', 'aborted', 'rate_limited'].includes(value as string);
+}
+
+function matchesLiveReleaseGate(run: DMEvalRunRecord): boolean {
+  if (run.passed === true && run.outcome !== 'completed') return false;
+  const regated = applyEvalReleaseGate(run);
+  return regated.passed === run.passed && regated.failure === run.failure;
+}
+
 function isSha256(value: string): boolean {
   return /^[a-f0-9]{64}$/.test(value);
 }
@@ -572,6 +673,11 @@ function sha256(value: string): string {
 function assertExactKeys(value: object, allowed: string[], label: string): void {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) throw new Error(`${label} contains forbidden or unknown fields: ${unknown.join(', ')}`);
+}
+
+function assertRequiredKeys(value: object, required: string[], label: string): void {
+  const missing = required.filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
+  if (missing.length > 0) throw new Error(`${label} is missing required fields: ${missing.join(', ')}`);
 }
 
 function formatRate(value: number | null): string {
