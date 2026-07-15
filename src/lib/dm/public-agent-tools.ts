@@ -266,7 +266,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   };
 
   const searchProjects = createTool(
-    'Search published portfolio projects by public content and optional public filters.',
+    'Search published portfolio projects by public content and optional public filters. Use the area, status, or year filter for a question about that exact published-project aspect.',
     SearchProjectsInputSchema,
     async (input, signal) => {
       const projects = await loadProjects();
@@ -284,7 +284,11 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
         projects: selected,
         evidence,
         artifactIds: selected.map((record) => record.artifactId),
-        limitations: selected.length < scored.length ? ['result_limit'] : [],
+        limitations: selected.length === 0
+          ? [hasProjectFilters(input.filters) && filtered.length === 0
+            ? 'no_matching_published_project_filters'
+            : 'no_matching_published_projects']
+          : selected.length < scored.length ? ['result_limit'] : [],
       });
     },
     (input) => ({ query: input.query, projects: [] }),
@@ -300,7 +304,13 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
       throwIfAborted(signal);
       const found = projects.find((project) => input.id ? project.id === input.id : project.slug === input.slug);
       if (!found) {
-        return resultWithEvidence({ status: 'empty', project: null, evidence: [], artifactIds: [], limitations: [] });
+        return resultWithEvidence({
+          status: 'empty',
+          project: null,
+          evidence: [],
+          artifactIds: [],
+          limitations: ['no_matching_published_projects'],
+        });
       }
       const project = projectRecord(found);
       return resultWithEvidence({
@@ -401,7 +411,8 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
         : undefined;
       if (input.projectIds?.length && requestedIds?.length === 0) {
         return resultWithEvidence({
-          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [], limitations: [],
+          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [],
+          limitations: ['no_matching_approved_public_sources'],
         });
       }
 
@@ -411,7 +422,8 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
       throwIfAborted(signal);
       if (!baseConfig) {
         return resultWithEvidence({
-          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [], limitations: [],
+          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [],
+          limitations: ['no_matching_approved_public_sources'],
         });
       }
       const allowedIds = requestedIds ? new Set(requestedIds) : publishedIds;
@@ -419,7 +431,8 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
       const tool = buildPublicFileSearchTool(sources);
       if (!tool) {
         return resultWithEvidence({
-          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [], limitations: [],
+          status: 'empty', query: input.query, sources: [], evidence: [], artifactIds: [],
+          limitations: ['no_matching_approved_public_sources'],
         });
       }
       const limit = input.limit ?? 4;
@@ -449,12 +462,15 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
         sources: records,
         evidence,
         artifactIds: [],
-        limitations: output.citations.length > records.length || records.length === limit ? ['result_limit_or_boundary_filter'] : [],
+        limitations: records.length === 0
+          ? ['no_matching_approved_public_sources']
+          : output.citations.length > records.length || records.length === limit ? ['result_limit_or_boundary_filter'] : [],
       });
     },
     (input) => ({ query: input.query, sources: [] }),
     ledger,
     defaultTimeoutMs,
+    'public_source_unavailable',
   );
 
   const searchProfile = createTool(
@@ -514,6 +530,7 @@ function createTool<Input, Output extends PublicToolResult>(
   empty: (input: Input) => Omit<NoInfer<Output>, keyof PublicToolResult>,
   ledger: ReturnType<typeof createEvidenceLedger>,
   defaultTimeoutMs: number,
+  unavailableFallback = 'public_data_unavailable',
 ): TypedPublicAgentTool<Input, Output> {
   const execute = async (rawInput: Input, options: PublicToolCallOptions = {}): Promise<Output> => {
     const input = inputSchema.parse(rawInput);
@@ -524,7 +541,7 @@ function createTool<Input, Output extends PublicToolResult>(
       ledger.record(result.evidence);
       return result;
     } catch (error) {
-      const limitation = unavailableLimitation(error, control.signal, control.timedOut());
+      const limitation = unavailableLimitation(error, control.signal, control.timedOut(), unavailableFallback);
       return resultWithEvidence({
         status: 'unavailable',
         ...empty(input),
@@ -769,6 +786,10 @@ function projectMatchesFilters(project: ProjectDetailReadModel, filters: SearchP
   return filters.year === undefined || project.year === filters.year;
 }
 
+function hasProjectFilters(filters: SearchProjectsInput['filters']): boolean {
+  return Boolean(filters?.area || filters?.status || filters?.year !== undefined);
+}
+
 function projectHaystack(project: ProjectDetailReadModel): string {
   return [
     project.id, project.slug, project.title, project.area, ...project.status, String(project.year), project.activity,
@@ -858,10 +879,15 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new PublicToolAbortError();
 }
 
-function unavailableLimitation(error: unknown, signal: AbortSignal, timedOut: boolean): string {
+function unavailableLimitation(
+  error: unknown,
+  signal: AbortSignal,
+  timedOut: boolean,
+  fallback: string,
+): string {
   if (signal.aborted) {
     return timedOut ? 'timeout' : 'cancelled';
   }
   if (error instanceof PublicToolUnavailableError) return error.code;
-  return 'public_data_unavailable';
+  return fallback;
 }
