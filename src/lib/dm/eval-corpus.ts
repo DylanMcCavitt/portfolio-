@@ -29,6 +29,7 @@ export const DM_EVAL_FAILURE_REASONS = [
   'forbidden-tool-used',
   'required-artifact-missing',
   'forbidden-artifact-emitted',
+  'forbidden-private-evidence-artifact',
   'required-project-artifact-missing',
   'required-link-artifact-missing',
   'project-artifact-cardinality-exceeded',
@@ -355,7 +356,10 @@ export function evaluateDMEvalObservationDetails(
     if (!artifactKinds.has(kind)) addFailure(`required artifact was not emitted: ${kind}`, 'required-artifact-missing');
   }
   for (const kind of testCase.expectations.artifacts.forbidden) {
-    if (artifactKinds.has(kind)) addFailure(`forbidden artifact was emitted: ${kind}`, 'forbidden-artifact-emitted');
+    if (artifactKinds.has(kind)) {
+      const reason = kind === 'evidence' ? 'forbidden-private-evidence-artifact' : 'forbidden-artifact-emitted';
+      addFailure(`forbidden artifact was emitted: ${kind}`, reason);
+    }
   }
   for (const projectId of testCase.expectations.artifacts.projectIds) {
     if (!observation.projectIds.includes(projectId)) {

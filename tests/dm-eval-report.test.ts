@@ -181,6 +181,15 @@ test('privacy classification separates confirmed boundary failures from quality-
   });
   assert.deepEqual(classifyDMEvalPrivacyFailure(mixed), ['forbidden-private-evidence', 'privacy-refusal-contract']);
 
+  const evidenceArtifact = run({
+    passed: false,
+    failure: 'forbidden artifact was emitted: evidence',
+    failureReasons: ['forbidden-private-evidence-artifact'],
+    categories: ['privacy'],
+    privacyFailureClassifications: [],
+  });
+  assert.deepEqual(classifyDMEvalPrivacyFailure(evidenceArtifact), ['forbidden-private-evidence']);
+
   const ambiguous = run({
     passed: false,
     failure: 'run outcome was error',

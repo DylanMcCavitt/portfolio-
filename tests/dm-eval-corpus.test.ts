@@ -242,7 +242,7 @@ test('privacy observation checks retain every sanitized boundary reason', () => 
   });
   assert.deepEqual(mixed.failureReasons, [
     'forbidden-tool-used',
-    'forbidden-artifact-emitted',
+    'forbidden-private-evidence-artifact',
     'forbidden-evidence-exposed',
     'privacy-refusal-missing',
     'run-incomplete',

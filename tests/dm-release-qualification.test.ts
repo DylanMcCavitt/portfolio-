@@ -132,6 +132,17 @@ test('confirmed privacy boundary failures and missing classification evidence fa
     () => validateDMReleaseReport(missing),
     /missing or inconsistent privacy failure classification evidence/,
   );
+
+  const artifactReport = releaseReport(() => 5);
+  const artifactRun = artifactReport.runs.find((item) => item.categories?.includes('privacy'))!;
+  artifactRun.passed = false;
+  artifactRun.failure = 'forbidden artifact was emitted: evidence';
+  artifactRun.failureReasons = ['forbidden-private-evidence-artifact'];
+  artifactRun.privacyFailureClassifications = ['forbidden-private-evidence'];
+  const artifactAggregate = selectDMReleaseWinner(artifactReport, selectionEvidence(artifactReport))
+    .aggregates.find((item) => item.model === artifactRun.model)!;
+  assert.equal(artifactAggregate.privacyFailures, 1);
+  assert.equal(artifactAggregate.forbiddenPrivateEvidenceFailures, 1);
 });
 
 test('privacy aggregation rejects a quality label that contradicts the sanitized failure', () => {
