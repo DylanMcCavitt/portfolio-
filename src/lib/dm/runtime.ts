@@ -226,7 +226,9 @@ interface RunArtifacts {
   contact: PublicContactRecord | null;
   sources: Map<string, PublicSourceRecord>;
   limitations: Set<string>;
+  requestedArtifactIntent: ArtifactIntent | null;
   boundArtifactIntent: ArtifactIntent | null;
+  projectLookupCompleted: boolean;
 }
 
 interface PublicToolGate {
@@ -485,6 +487,7 @@ function createRuntimePublicTools(
       execute: (input, { abortSignal }) => gate.run(async () => {
         metrics.tool();
         const result = await run.searchProjects(input, { abortSignal });
+        artifacts.projectLookupCompleted = true;
         for (const project of result.projects) artifacts.projects.set(project.id, project);
         rememberLimitations(artifacts, result.limitations);
         return result;
@@ -496,6 +499,7 @@ function createRuntimePublicTools(
       execute: (input, { abortSignal }) => gate.run(async () => {
         metrics.tool();
         const result = await run.getProject(input, { abortSignal });
+        artifacts.projectLookupCompleted = true;
         if (result.project) artifacts.projects.set(result.project.id, result.project);
         rememberLimitations(artifacts, result.limitations);
         return result;
@@ -574,11 +578,8 @@ function validateFinalAnswer(
 ): { ok: true; answer: DMValidatedAnswer } | { ok: false; errors: string[] } {
   const changedIntent = artifacts.boundArtifactIntent !== null
     && input.artifactIntent !== artifacts.boundArtifactIntent;
-  const unavailableProjectFallback = artifacts.projects.size === 0
-    && input.artifactIntent === 'none'
-    && (artifacts.boundArtifactIntent === 'one_project' || artifacts.boundArtifactIntent === 'project_set');
   artifacts.boundArtifactIntent ??= input.artifactIntent;
-  if (changedIntent && !unavailableProjectFallback) {
+  if (changedIntent) {
     return { ok: false, errors: ['artifact intent must match the current request and cannot change during repair'] };
   }
   const errors: string[] = [];
@@ -590,6 +591,14 @@ function validateFinalAnswer(
   }
   for (const reference of artifactReferences) {
     if (!artifactAvailable(reference, artifacts)) errors.push(`${reference.kind} artifact was not returned in this run`);
+  }
+  if (
+    artifacts.requestedArtifactIntent !== null
+    && (input.artifactIntent === 'one_project' || input.artifactIntent === 'project_set')
+    && artifacts.projects.size === 0
+    && !artifacts.projectLookupCompleted
+  ) {
+    errors.push('requested project artifacts require a completed project lookup');
   }
   errors.push(...artifactCardinalityErrors(input.artifactIntent, artifactReferences, artifacts.projects.size));
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)].slice(0, 5) };
@@ -693,14 +702,16 @@ function resolveArtifact(reference: ArtifactReference, artifacts: RunArtifacts):
   return project ? [{ kind: 'links', id: `links:${project.id}`, projectId: project.id, items: project.links }] : [];
 }
 
-function emptyArtifacts(boundArtifactIntent: ArtifactIntent | null = null): RunArtifacts {
+function emptyArtifacts(requestedArtifactIntent: ArtifactIntent | null = null): RunArtifacts {
   return {
     projects: new Map(),
     resumeTracks: new Map(),
     contact: null,
     sources: new Map(),
     limitations: new Set(),
-    boundArtifactIntent,
+    requestedArtifactIntent,
+    boundArtifactIntent: requestedArtifactIntent,
+    projectLookupCompleted: false,
   };
 }
 
@@ -733,24 +744,47 @@ function artifactIntentTokens(value: string): string[] {
 }
 
 function requestsProjectLinksWithoutCards(tokens: string[]): boolean {
-  return tokens.some((token) => token === 'link' || token === 'links')
-    && tokens.some((token, index) => (
-      (token === 'card' || token === 'cards') && artifactDirectiveNegator(tokens, index) !== null
-    ));
+  const hasLinks = tokens.some((token) => token === 'link' || token === 'links');
+  if (!hasLinks) return false;
+  if (requestsOnlyLinks(tokens)) return true;
+  if (includesTokenSequence(tokens, ['instead', 'of', 'project', 'cards'])) return true;
+  if (includesTokenSequence(tokens, ['instead', 'of', 'cards'])) return true;
+  return tokens.some((token, index) => (
+    (token === 'card' || token === 'cards') && artifactDirectiveNegator(tokens, index) !== null
+  ));
 }
 
 function requestsNoArtifacts(tokens: string[]): boolean {
   for (const [index, token] of tokens.entries()) {
     if (token !== 'card' && token !== 'cards' && token !== 'artifact' && token !== 'artifacts') continue;
     if (artifactDirectiveNegator(tokens, index) !== null) return true;
+    if (artifactPostNominalNegator(tokens, index)) return true;
+  }
+  return false;
+}
+
+function requestsOnlyLinks(tokens: string[]): boolean {
+  const hasPositiveCard = tokens.some((token, index) => (
+    (token === 'card' || token === 'cards' || token === 'artifact' || token === 'artifacts')
+    && artifactDirectiveNegator(tokens, index) === null
+    && !artifactPostNominalNegator(tokens, index)
+  ));
+  if (hasPositiveCard) return false;
+  if (includesTokenSequence(tokens, ['links', 'only']) || includesTokenSequence(tokens, ['link', 'only'])) return true;
+  const fillers = new Set(['return', 'show', 'give', 'include', 'the', 'project', 'public', 'published', 'me']);
+  for (const [index, token] of tokens.entries()) {
+    if (token !== 'only') continue;
+    let cursor = index + 1;
+    while (fillers.has(tokens[cursor] ?? '')) cursor += 1;
+    if (tokens[cursor] === 'link' || tokens[cursor] === 'links') return true;
   }
   return false;
 }
 
 function artifactDirectiveNegator(tokens: string[], nounIndex: number): 'no' | 'without' | 'do_not' | 'zero' | null {
   let cursor = nounIndex - 1;
-  if (tokens[cursor] === 'project') cursor -= 1;
-  if (tokens[cursor] === 'a' || tokens[cursor] === 'any' || tokens[cursor] === 'the') cursor -= 1;
+  const fillers = new Set(['project', 'a', 'any', 'the', 'one', 'single', 'sole', 'even']);
+  while (fillers.has(tokens[cursor] ?? '')) cursor -= 1;
   if (['show', 'showing', 'render', 'rendering', 'open', 'opening', 'include', 'including'].includes(tokens[cursor] ?? '')) {
     cursor -= 1;
   }
@@ -763,11 +797,22 @@ function artifactDirectiveNegator(tokens: string[], nounIndex: number): 'no' | '
   return null;
 }
 
+function artifactPostNominalNegator(tokens: string[], nounIndex: number): boolean {
+  let cursor = nounIndex + 1;
+  if (tokens[cursor] === 'is' || tokens[cursor] === 'are') cursor += 1;
+  if (tokens[cursor] === 'unnecessary' || tokens[cursor] === 'unneeded') return true;
+  if (
+    (tokens[cursor] === 'isn' || tokens[cursor] === 'aren')
+    && tokens[cursor + 1] === 't'
+  ) {
+    return ['needed', 'necessary', 'required', 'wanted'].includes(tokens[cursor + 2] ?? '');
+  }
+  return tokens[cursor] === 'not'
+    && ['needed', 'necessary', 'required', 'wanted'].includes(tokens[cursor + 1] ?? '');
+}
+
 function requestsOneProject(tokens: string[]): boolean {
-  const projectContext = tokens.includes('project') || tokens.includes('projects');
-  const cardContext = tokens.some((token) => token === 'card' || token === 'cards' || token === 'artifact' || token === 'artifacts');
-  const explicitOne = tokens.some((token) => token === 'one' || token === '1' || token === 'single' || token === 'sole');
-  if (projectContext && cardContext && explicitOne) return true;
+  if (requestsExplicitOneProject(tokens)) return true;
   const rankedSelection = includesTokenSequence(tokens, ['most', 'impressive'])
     || tokens.some((token) => ['best', 'strongest', 'top', 'favorite'].includes(token));
   const singularSelectionGrammar = tokens.some((token) => (
@@ -781,12 +826,29 @@ function requestsOneProject(tokens: string[]): boolean {
   const singularProject = tokens.includes('project') && !tokens.includes('projects');
   if (!singularProject) return false;
   if (tokens.includes('card') || tokens.includes('artifact')) return true;
-  if (explicitOne) return true;
   return rankedSelection;
+}
+
+function requestsExplicitOneProject(tokens: string[]): boolean {
+  const singularTokens = new Set(['one', '1', 'single', 'sole']);
+  for (const [index, token] of tokens.entries()) {
+    if (!singularTokens.has(token)) continue;
+    if (tokens[index + 1] === 'or' && tokens[index + 2] === 'more') continue;
+    if (tokens[index + 1] === 'card' || tokens[index + 1] === 'artifact') return true;
+    if (tokens[index + 1] === 'project') return true;
+    if (
+      tokens[index + 1] === 'of'
+      && tokens.slice(index + 2).some((candidate) => candidate === 'project' || candidate === 'projects')
+    ) return true;
+  }
+  return false;
 }
 
 function requestsProjectSet(tokens: string[]): boolean {
   if (tokens.includes('project') && tokens.includes('set')) return true;
+  const projectContext = tokens.includes('project') || tokens.includes('projects');
+  const pluralCardContext = tokens.includes('cards') || tokens.includes('artifacts');
+  if (projectContext && pluralCardContext) return true;
   return tokens.includes('projects');
 }
 

@@ -250,13 +250,35 @@ test('finalization enforces zero, one, and bounded project artifact cardinality'
       { prompt: "Which of Dylan's projects is most impressive?", intent: 'one_project' },
       { prompt: "Which of Dylan's projects best shows client software work?", intent: 'one_project' },
       { prompt: "Which is best among Dylan's projects?", intent: 'one_project' },
+      { prompt: "Show me one of Dylan's projects.", intent: 'one_project' },
+      { prompt: "Which one of Dylan's projects uses TypeScript?", intent: 'one_project' },
+      { prompt: 'Show me one project that uses TypeScript.', intent: 'one_project' },
+      { prompt: "Tell me about a single project from Dylan's portfolio.", intent: 'one_project' },
+      { prompt: 'Just one card.', intent: 'one_project' },
       { prompt: "List Dylan's best projects.", intent: 'project_set' },
       { prompt: "What are Dylan's most impressive projects?", intent: 'project_set' },
       { prompt: "Which of Dylan's projects are most impressive?", intent: 'project_set' },
       { prompt: "List Dylan's projects from most impressive to least impressive.", intent: 'project_set' },
+      { prompt: 'Show me two project cards.', intent: 'project_set' },
+      { prompt: 'Show a few project cards.', intent: 'project_set' },
+      { prompt: "Don't show a single project card.", intent: 'none' },
+      { prompt: 'Without showing a single project card, tell me about the work.', intent: 'none' },
+      { prompt: 'Project cards are not needed.', intent: 'none' },
+      { prompt: 'A project card is unnecessary.', intent: 'none' },
+      { prompt: "Project cards aren't needed.", intent: 'none' },
+      { prompt: "A project card isn't necessary.", intent: 'none' },
+      { prompt: 'I want project links only.', intent: 'non_project' },
+      { prompt: 'Give me links instead of project cards.', intent: 'non_project' },
+      { prompt: 'Give me only the project links.', intent: 'non_project' },
+      { prompt: 'Only return the links.', intent: 'non_project' },
       { prompt: "Show one card for one of Dylan's projects.", intent: 'one_project' },
       { prompt: 'Without screenshots, show me a project card.', intent: 'one_project' },
       { prompt: 'Show me a project card without links.', intent: 'one_project' },
+      { prompt: 'Only show a project card with links.', intent: 'one_project' },
+      { prompt: 'Only show project links on the card.', intent: 'one_project' },
+      { prompt: 'Show a project card with GitHub links only.', intent: 'one_project' },
+      { prompt: "Give me a one-paragraph overview of Dylan's projects.", intent: 'project_set' },
+      { prompt: 'Show project cards one at a time.', intent: 'project_set' },
     ] as const;
 
     for (const testCase of cases) {
@@ -265,7 +287,9 @@ test('finalization enforces zero, one, and bounded project artifact cardinality'
         ? 'project_set'
         : testCase.intent === 'project_set'
           ? 'none'
-          : 'one_project';
+          : testCase.intent === 'non_project'
+            ? 'project_set'
+            : 'one_project';
       const wrongArtifacts = wrongIntent === 'none'
         ? []
         : wrongIntent === 'one_project'
@@ -275,7 +299,9 @@ test('finalization enforces zero, one, and bounded project artifact cardinality'
         ? []
         : testCase.intent === 'one_project'
           ? [{ kind: 'project', id: 'agentic-trader' }]
-          : [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }];
+          : testCase.intent === 'project_set'
+            ? [{ kind: 'project', id: 'agentic-trader' }, { kind: 'project', id: 'loom' }]
+            : [{ kind: 'links', id: 'loom' }];
       const model = toolSequenceModel([
         { toolName: 'getProject', input: { id: 'agentic-trader' } },
         { toolName: 'getProject', input: { id: 'loom' } },
@@ -308,8 +334,63 @@ test('finalization enforces zero, one, and bounded project artifact cardinality'
 
       assert.equal(observation.result?.status, 'accepted', testCase.prompt);
       assert.equal(observation.result?.repairAttempted, true, testCase.prompt);
-      assert.equal(observation.projectIds.length, correctedArtifacts.length, testCase.prompt);
+      const expectedProjectCards = testCase.intent === 'one_project' ? 1 : testCase.intent === 'project_set' ? 2 : 0;
+      assert.equal(observation.projectIds.length, expectedProjectCards, testCase.prompt);
     }
+  });
+
+  await t.test('request-bound project intent cannot bypass lookup and required artifacts', async () => {
+    for (const testCase of [
+      { prompt: 'Return one project card.', intent: 'one_project' },
+      { prompt: 'Return a bounded set of projects.', intent: 'project_set' },
+    ] as const) {
+      const request = chatRequest(testCase.prompt);
+      const model = toolSequenceModel([
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+          artifactIntent: testCase.intent,
+          artifacts: [],
+          limitations: [],
+        } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+          artifactIntent: 'none',
+          artifacts: [],
+          limitations: [],
+        } },
+      ]);
+      const observation = await observeDMResponse(createDMChatResponse(request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        model,
+      }), request);
+
+      assert.equal(observation.result?.status, 'limited', testCase.prompt);
+      assert.equal(observation.result?.repairAttempted, true, testCase.prompt);
+      assert.deepEqual(observation.projectIds, [], testCase.prompt);
+    }
+  });
+
+  await t.test('a completed empty project lookup permits an honest zero-artifact answer', async () => {
+    const request = chatRequest('Return one project card for missing-project.');
+    const model = toolSequenceModel([
+      { toolName: 'getProject', input: { id: 'missing-project' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'conversational', act: 'acknowledgement' }],
+        artifactIntent: 'one_project',
+        artifacts: [],
+        limitations: [],
+      } },
+    ]);
+    const observation = await observeDMResponse(createDMChatResponse(request, config, {
+      db: source.db,
+      projectLoader: source.projectLoader,
+      model,
+    }), request);
+
+    assert.equal(observation.result?.status, 'accepted');
+    assert.equal(observation.result?.repairAttempted, false);
+    assert.deepEqual(observation.projectIds, []);
   });
 
   await t.test('zero artifacts preserves grounded prose after one repair', async () => {
@@ -674,7 +755,7 @@ test('public tool failure becomes an explicit sanitized limitation', async () =>
     { toolName: 'searchProjects', input: { query: 'public projects' } },
     { toolName: 'finalizeAnswer', input: {
       segments: [{ kind: 'limitation', code: 'public_data_unavailable' }],
-      artifactIntent: 'none',
+      artifactIntent: 'project_set',
       artifacts: [],
       limitations: ['public_data_unavailable'],
       followUp: 'try_resume',
