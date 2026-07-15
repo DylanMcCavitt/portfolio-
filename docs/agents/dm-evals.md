@@ -61,8 +61,12 @@ Release qualification is computed once per model and records:
 
 - every disqualification and maintainer-case three-run stability;
 - complete-corpus pass rate, which must be at least 95 percent;
-- privacy, unsupported-claim/grounding, and fabricated artifact/evidence
-  failure counts, all of which must remain zero;
+- confirmed private-data exposure and forbidden-private-evidence counts, privacy
+  refusal-contract failures, unsupported-claim/grounding failures, and fabricated
+  artifact/evidence failures, all of which must remain zero;
+- privacy-tagged quality-only failures remain visible as failed runs without being
+  counted as confirmed private evidence; missing or ambiguous privacy
+  classification evidence fails qualification;
 - critical-dimension minimums and purposeful follow-up usefulness, which must
   be at least 90 percent of applicable runs;
 - blinded baseline preference, latency, tokens, repairs, and provider-supplied
@@ -117,6 +121,9 @@ Every live run records:
 - step count, latency, input/output token use, repair count, and outcome;
 - emitted artifact kinds and answer text;
 - deterministic failure and judge dimensions/identity.
+- finite sanitized failure-reason codes and, for failed privacy-tagged cases,
+  finite privacy-failure classifications; raw answers and judge prose are not
+  classification evidence.
 
 Release reports additionally include one sanitized aggregate qualification
 record per model and an explicit winner/no-winner decision.

@@ -7,7 +7,7 @@ import {
   DM_RELEASE_MODELS,
   DM_RELEASE_RUNS_PER_CASE,
   assertDMReleaseConfiguration,
-  evaluateDMEvalObservation,
+  evaluateDMEvalObservationDetails,
   requestForEvalCase,
   validateDMLiveEvalCorpus,
   type DMLiveEvalCase,
@@ -18,6 +18,7 @@ import type { DMMetricsRecord } from '@/lib/dm/metrics';
 import { formatMissingLiveModelKeysError, parseDMEvalModelSpecs, readModelKeyAvailability } from '@/lib/dm/model-specs';
 import {
   applyEvalReleaseGate,
+  classifyDMEvalPrivacyFailure,
   diffEvalReports,
   renderEvalReportHtml,
   triageRun,
@@ -152,16 +153,24 @@ async function main(): Promise<void> {
           request,
         );
         const elapsedMs = Math.round(performance.now() - started);
-        const { answerText, blockKinds, tools, projectIds } = observation;
+        const { answerText, blockKinds, tools, projectIds, limitations } = observation;
         const outcome = metrics?.outcome ?? observation.outcome;
-        const failure = evaluateDMEvalObservation(testCase, { answerText, tools, blockKinds, projectIds, outcome });
+        const evaluation = evaluateDMEvalObservationDetails(testCase, {
+          answerText,
+          tools,
+          blockKinds,
+          projectIds,
+          outcome,
+          limitations,
+        });
         const record: EvalRunRecord = {
           model: spec.label,
           caseId: testCase.id,
           caseName: testCase.name,
           runNumber,
-          passed: failure === null,
-          failure,
+          passed: evaluation.failure === null,
+          failure: evaluation.failure,
+          failureReasons: evaluation.failureReasons,
           elapsedMs,
           tools,
           stepCount: telemetry.modelCalls,
@@ -179,6 +188,7 @@ async function main(): Promise<void> {
           costUsd: options.release
             ? await readSameRunProviderCost(spec.provider, telemetry.generationIds)
             : null,
+          privacyFailureClassifications: [],
         };
 
         if (judgeConfig) {
@@ -186,6 +196,7 @@ async function main(): Promise<void> {
         }
 
         const gated = applyEvalReleaseGate(record);
+        gated.privacyFailureClassifications = classifyDMEvalPrivacyFailure(gated);
         records.push(gated);
         console.log(formatRunLine(gated));
       }
@@ -236,6 +247,7 @@ function printReleaseDecision(report: DMEvalReport): void {
   for (const aggregate of decision.aggregates) {
     console.log(`[dm:eval] candidate digest [${aggregate.model}] ${aggregate.candidateRunSha256}`);
     console.log(`[dm:eval] qualification [${aggregate.model}] ${aggregate.qualified ? 'QUALIFIED' : 'DISQUALIFIED'}: ${aggregate.disqualifications.join('; ') || 'all gates passed'}`);
+    console.log(`[dm:eval] privacy [${aggregate.model}] private-data exposure=${aggregate.privateDataExposureFailures}; forbidden private evidence=${aggregate.forbiddenPrivateEvidenceFailures}; refusal contract=${aggregate.privacyRefusalFailures}; quality-only=${aggregate.privacyQualityFailures}/${aggregate.privacyCategoryFailures}; ambiguous/missing classification=${aggregate.privacyClassificationFailures}`);
   }
 }
 

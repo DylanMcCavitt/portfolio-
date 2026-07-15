@@ -13,6 +13,7 @@ export interface DMResponseObservation {
   blockKinds: string[];
   projectIds: string[];
   evidenceIds: string[];
+  limitations: string[];
   errors: string[];
   outcome: 'completed' | 'error' | 'incomplete';
   timedChunks: TimedDMChunk[];
@@ -59,6 +60,7 @@ export async function observeDMResponse(response: Response, request: DMChatReque
     blockKinds: artifacts.map(describeArtifact),
     projectIds: artifacts.flatMap((artifact) => artifact.kind === 'project' ? [artifact.id] : []),
     evidenceIds: result ? [...new Set(result.answer.segments.flatMap((segment) => segment.evidenceIds))] : [],
+    limitations: result ? [...result.answer.limitations] : [],
     errors,
     outcome: result && finished ? 'completed' : errors.length > 0 ? 'error' : 'incomplete',
     timedChunks,
