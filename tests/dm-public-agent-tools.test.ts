@@ -32,6 +32,16 @@ test('public agent tool schemas are strict and bound their required inputs', () 
   assert.equal(SearchProfileInputSchema.safeParse({ query: 'leadership', categories: ['work'] }).success, true);
 });
 
+test('composition tool descriptions require every requested public source', () => {
+  const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
+
+  assert.match(run.readResume.description, /getContact/);
+  assert.match(run.getContact.description, /readResume/);
+  assert.match(run.getProject.description, /searchPublicSources/);
+  assert.match(run.searchPublicSources.description, /getProject/);
+  assert.match(run.searchPublicSources.description, /approved public/i);
+});
+
 test('project, resume, and contact tools return sanitized public records with stable evidence and artifact ids', async () => {
   const run = createPublicAgentTools({ db: unusedDb(), loadProjects: async () => [project] });
 
@@ -165,6 +175,7 @@ test('approved public-source search composes with project tools and rechecks eve
   const sources = await run.searchPublicSources({ query: 'public evidence', projectIds: [projects.projects[0]!.id] });
   assert.equal(sources.status, 'partial');
   assert.deepEqual(sources.sources.map((source) => source.id), ['rag-public']);
+  assert.deepEqual(sources.artifactIds, ['rag-public']);
   assert.equal('fileId' in (sources.sources[0] ?? {}), false);
   assert.doesNotMatch(JSON.stringify(sources), /candidate-hidden|private\.md|file-private/);
   assert.equal(run.evidenceLedger.has('citation:rag-public'), true);

@@ -970,6 +970,73 @@ test('public tool failure becomes an explicit sanitized limitation', async () =>
   assert.doesNotMatch(JSON.stringify(observation), /private database host/);
 });
 
+test('mixed resume and contact composition repairs a dropped same-run source', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('Summarize the public education background and recruiter contact details.');
+  const prompts: LanguageModelV4CallOptions[] = [];
+  const model = toolStepModel([
+    [
+      { toolName: 'readResume', input: { trackIds: ['stevens'] } },
+      { toolName: 'getContact', input: {} },
+    ],
+    [{ toolName: 'finalizeAnswer', input: {
+      segments: [
+        {
+          kind: 'factual',
+          text: 'Stevens Institute of Technology is part of the public education background.',
+          evidenceIds: ['resume:stevens:identity'],
+          evidenceQuotes: [{ evidenceId: 'resume:stevens:identity', quote: 'Stevens Institute of Technology' }],
+        },
+      ],
+      artifactIntent: 'non_project',
+      artifacts: [{ kind: 'resume', id: 'stevens' }, { kind: 'contact', id: 'contact' }],
+      limitations: [],
+    } }],
+    [{ toolName: 'finalizeAnswer', input: {
+      segments: [
+        {
+          kind: 'factual',
+          text: 'Stevens Institute of Technology is part of the public education background.',
+          evidenceIds: ['resume:stevens:identity'],
+          evidenceQuotes: [{ evidenceId: 'resume:stevens:identity', quote: 'Stevens Institute of Technology' }],
+        },
+        {
+          kind: 'factual',
+          text: 'Dylan is based in New York City.',
+          evidenceIds: ['contact:location'],
+          evidenceQuotes: [{ evidenceId: 'contact:location', quote: 'new york city' }],
+        },
+      ],
+      artifactIntent: 'non_project',
+      artifacts: [{ kind: 'resume', id: 'stevens' }, { kind: 'contact', id: 'contact' }],
+      limitations: [],
+    } }],
+  ], prompts);
+
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model,
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  assert.equal(observation.result?.repairAttempted, true);
+  assert.deepEqual(observation.tools, ['readResume', 'getContact']);
+  assert.deepEqual(observation.blockKinds, ['resume:stevens', 'contact']);
+  assert.ok(observation.evidenceIds.includes('resume:stevens:identity'));
+  assert.ok(observation.evidenceIds.includes('contact:location'));
+  assert.match(observation.answerText, /New York City/);
+  assert.equal(
+    observation.result?.answer.artifacts.find((artifact) => artifact.kind === 'contact')?.contact.email,
+    'dylanmccavitt@outlook.com',
+  );
+  const prompt = JSON.stringify(prompts[0]?.prompt);
+  assert.match(prompt, /readResume and getContact/);
+  assert.match(prompt, /getProject and searchPublicSources/);
+  const finalizer = prompts[0]?.tools?.find((entry) => entry.name === 'finalizeAnswer');
+  assert.match(finalizer && 'description' in finalizer ? finalizer.description ?? '' : '', /evidenceQuotes/);
+});
+
 test('the live eval source can produce a same-run approved evidence artifact', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest("Use public source evidence to explain Loom's architecture.");
@@ -977,11 +1044,39 @@ test('the live eval source can produce a same-run approved evidence artifact', a
     { toolName: 'getProject', input: { id: 'loom' } },
     { toolName: 'searchPublicSources', input: { query: 'Loom public architecture evidence', projectIds: ['loom'] } },
     { toolName: 'finalizeAnswer', input: {
-      segments: [{
-        kind: 'factual',
-        text: 'Loom separates planning, bounded implementation, independent review, and verification into explicit delivery phases.',
-        evidenceIds: ['citation:loom-architecture'],
-      }],
+      segments: [
+        {
+          kind: 'factual',
+          text: 'The direct project record uses the published slug Loom.',
+          evidenceIds: ['loom:slug'],
+          evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
+        },
+        {
+          kind: 'factual',
+          text: 'The approved public source describes delivery phases.',
+          evidenceIds: ['citation:loom-architecture'],
+          evidenceQuotes: [{ evidenceId: 'citation:loom-architecture', quote: 'delivery phases' }],
+        },
+      ],
+      artifactIntent: 'one_project',
+      artifacts: [{ kind: 'evidence', id: 'loom-architecture' }],
+      limitations: [],
+    } },
+    { toolName: 'finalizeAnswer', input: {
+      segments: [
+        {
+          kind: 'factual',
+          text: 'The direct project record uses the published slug Loom.',
+          evidenceIds: ['loom:slug'],
+          evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
+        },
+        {
+          kind: 'factual',
+          text: 'Loom separates planning, bounded implementation, independent review, and verification into explicit delivery phases.',
+          evidenceIds: ['citation:loom-architecture'],
+          evidenceQuotes: [{ evidenceId: 'citation:loom-architecture', quote: 'delivery phases' }],
+        },
+      ],
       artifactIntent: 'one_project',
       artifacts: [{ kind: 'project', id: 'loom' }, { kind: 'evidence', id: 'loom-architecture' }],
       limitations: [],
@@ -996,6 +1091,7 @@ test('the live eval source can produce a same-run approved evidence artifact', a
   }), request);
 
   assert.equal(observation.result?.status, 'accepted');
+  assert.equal(observation.result?.repairAttempted, true);
   assert.deepEqual(observation.tools, ['getProject', 'searchPublicSources']);
   assert.deepEqual(observation.blockKinds, ['projects:loom', 'evidence']);
   assert.deepEqual(observation.projectIds, ['loom']);
@@ -1004,7 +1100,137 @@ test('the live eval source can produce a same-run approved evidence artifact', a
     observation.result?.answer.artifacts.find((artifact) => artifact.kind === 'evidence')?.id,
     'loom-architecture',
   );
+  const publicSourceArtifact = observation.result?.answer.artifacts.find((artifact) => artifact.kind === 'evidence');
+  const publicSourceEvidence = observation.result?.answer.segments
+    .flatMap((segment) => segment.evidence)
+    .find((evidence) => evidence.id === 'citation:loom-architecture');
+  assert.equal(publicSourceEvidence?.value, publicSourceArtifact?.kind === 'evidence' ? publicSourceArtifact.source.text : undefined);
   assert.doesNotMatch(JSON.stringify(observation), new RegExp(source.privateEvidenceMarkers.join('|')));
+});
+
+test('mixed project and public-source composition respects no-card and non-project intent', async (t) => {
+  const source = await createEvalProjectSource();
+  const scenarios: Array<{
+    name: string;
+    request: DMChatRequest;
+    artifactIntent: 'none' | 'non_project';
+    artifacts: Array<{ kind: 'links' | 'evidence'; id: string }>;
+  }> = [
+    {
+      name: 'explicit no-card request',
+      request: chatRequest('Use approved public-source evidence to explain Loom, without cards.'),
+      artifactIntent: 'none',
+      artifacts: [],
+    },
+    {
+      name: 'explicit links-only request',
+      request: chatRequest('Use approved public-source evidence to explain Loom. Give me links instead of project cards.'),
+      artifactIntent: 'non_project',
+      artifacts: [{ kind: 'links', id: 'loom' }, { kind: 'evidence', id: 'loom-architecture' }],
+    },
+    {
+      name: 'latest-turn source aspect follow-up',
+      request: {
+        messages: [
+          { id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'Tell me about Loom.' }] },
+          { id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'Loom is one of Dylan\'s published projects.' }] },
+          { id: 'user-2', role: 'user', parts: [{ type: 'text', text: 'What does the approved source say about its architecture?' }] },
+        ],
+      },
+      artifactIntent: 'non_project',
+      artifacts: [{ kind: 'evidence', id: 'loom-architecture' }],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const model = toolSequenceModel([
+        { toolName: 'getProject', input: { id: 'loom' } },
+        { toolName: 'searchPublicSources', input: { query: 'Loom public architecture evidence', projectIds: ['loom'] } },
+        { toolName: 'finalizeAnswer', input: {
+          segments: [
+            {
+              kind: 'factual',
+              text: 'The direct project record uses the published slug Loom.',
+              evidenceIds: ['loom:slug'],
+              evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
+            },
+            {
+              kind: 'factual',
+              text: 'The approved public source describes delivery phases.',
+              evidenceIds: ['citation:loom-architecture'],
+              evidenceQuotes: [{ evidenceId: 'citation:loom-architecture', quote: 'delivery phases' }],
+            },
+          ],
+          artifactIntent: scenario.artifactIntent,
+          artifacts: scenario.artifacts,
+          limitations: [],
+        } },
+      ]);
+
+      const observation = await observeDMResponse(createDMChatResponse(scenario.request, config, {
+        db: source.db,
+        projectLoader: source.projectLoader,
+        ragSearch: source.publicSourceSearch,
+        model,
+      }), scenario.request);
+
+      assert.equal(observation.result?.status, 'accepted');
+      assert.equal(observation.result?.repairAttempted, false);
+      assert.deepEqual(observation.tools, ['getProject', 'searchPublicSources']);
+      assert.deepEqual(observation.projectIds, []);
+      assert.ok(observation.evidenceIds.includes('loom:slug'));
+      assert.ok(observation.evidenceIds.includes('citation:loom-architecture'));
+      assert.equal(
+        observation.result?.answer.artifacts.some((artifact) => artifact.kind === 'project'),
+        false,
+      );
+      assert.deepEqual(
+        observation.result?.answer.artifacts.map((artifact) => artifact.kind),
+        scenario.artifacts.map((artifact) => artifact.kind),
+      );
+    });
+  }
+});
+
+test('selected evidence stays exact at the source boundary and permits natural prose capitalization', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('Give the exact published project identity.');
+  const model = toolSequenceModel([
+    { toolName: 'getProject', input: { id: 'loom' } },
+    { toolName: 'finalizeAnswer', input: {
+      segments: [{
+        kind: 'factual',
+        text: 'The published project slug is Loom.',
+        evidenceIds: ['loom:slug'],
+        evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'Loom' }],
+      }],
+      artifactIntent: 'one_project',
+      artifacts: [{ kind: 'project', id: 'loom' }],
+      limitations: [],
+    } },
+    { toolName: 'finalizeAnswer', input: {
+      segments: [{
+        kind: 'factual',
+        text: 'The published project slug is Loom.',
+        evidenceIds: ['loom:slug'],
+        evidenceQuotes: [{ evidenceId: 'loom:slug', quote: 'loom' }],
+      }],
+      artifactIntent: 'one_project',
+      artifacts: [{ kind: 'project', id: 'loom' }],
+      limitations: [],
+    } },
+  ]);
+
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model,
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  assert.equal(observation.result?.repairAttempted, true);
+  assert.match(observation.answerText, /Loom/);
 });
 
 test('the live eval unavailable-source override exercises a sanitized no-evidence path', async () => {
@@ -1016,7 +1242,10 @@ test('the live eval unavailable-source override exercises a sanitized no-evidenc
     { toolName: 'getProject', input: { id: 'loom' } },
     { toolName: 'searchPublicSources', input: { query: 'Loom public architecture evidence', projectIds: ['loom'] } },
     { toolName: 'finalizeAnswer', input: {
-      segments: [{ kind: 'limitation', code: 'public_source_unavailable' }],
+      segments: [
+        { kind: 'factual', text: 'Loom is the available published project record.', evidenceIds: ['loom:identity'] },
+        { kind: 'limitation', code: 'public_source_unavailable' },
+      ],
       artifactIntent: 'one_project',
       artifacts: [{ kind: 'project', id: 'loom' }],
       limitations: ['public_source_unavailable'],
@@ -1038,7 +1267,8 @@ test('the live eval unavailable-source override exercises a sanitized no-evidenc
   assert.equal(unavailableOverrideCalled, true);
   assert.deepEqual(observation.tools, ['getProject', 'searchPublicSources']);
   assert.deepEqual(observation.blockKinds, ['projects:loom']);
-  assert.deepEqual(observation.evidenceIds, []);
+  assert.deepEqual(observation.evidenceIds, ['loom:identity']);
+  assert.equal(observation.result?.answer.artifacts.some((artifact) => artifact.kind === 'evidence'), false);
   assert.match(observation.answerText, /public-source search is unavailable/i);
   assert.doesNotMatch(JSON.stringify(observation), /simulated eval public source unavailable/);
 });

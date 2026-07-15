@@ -21,6 +21,7 @@ import {
   createPublicAgentTools,
   type PublicAgentToolRun,
   type PublicContactRecord,
+  type PublicEvidenceSource,
   type PublicProjectToolRecord,
   type PublicResumeTrackRecord,
   type PublicSourceRecord,
@@ -190,6 +191,10 @@ const AnswerSegmentInputSchema = z.discriminatedUnion('kind', [
     kind: z.literal('factual'),
     text: z.string().trim().min(1).max(1_200),
     evidenceIds: z.array(z.string().trim().min(1).max(240)).min(1).max(16),
+    evidenceQuotes: z.array(z.strictObject({
+      evidenceId: z.string().trim().min(1).max(240),
+      quote: z.string().trim().min(3).max(240),
+    })).max(8).default([]),
   }),
   z.strictObject({
     kind: z.literal('conversational'),
@@ -219,6 +224,14 @@ const FinalAnswerInputSchema = z.strictObject({
 
 type FinalAnswerInput = z.infer<typeof FinalAnswerInputSchema>;
 type ArtifactReference = z.infer<typeof ArtifactReferenceSchema>;
+
+const COMPOSITION_PAIRS: Array<{
+  sources: [PublicEvidenceSource, PublicEvidenceSource];
+  artifacts: [ArtifactReference['kind'], ArtifactReference['kind']];
+}> = [
+  { sources: ['resume', 'contact'], artifacts: ['resume', 'contact'] },
+  { sources: ['project', 'public_source'], artifacts: ['project', 'evidence'] },
+];
 
 interface RunArtifacts {
   projects: Map<string, PublicProjectToolRecord>;
@@ -267,7 +280,7 @@ export function createDMChatResponse(
   const agentTools = {
     ...publicTools,
     finalizeAnswer: tool({
-      description: 'Submit the complete structured visitor answer and its requested artifact intent. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
+      description: 'Submit the complete structured visitor answer and its requested artifact intent only after every successful source in a requested composition pair is cited, each same-run artifact allowed by that intent is included, and distinctive evidenceQuotes preserve exact returned wording with natural capitalization allowed in factual prose. The server validates explicit zero, one-project, and project-set requests; use exactly once after gathering any needed public evidence and retry once only when rejected.',
       inputSchema: FinalAnswerInputSchema,
       execute: async (input: FinalAnswerInput) => {
         await publicToolGate.waitForIdle();
@@ -596,7 +609,9 @@ function validateFinalAnswer(
     if (segment.kind !== 'factual') continue;
     const unknown = segment.evidenceIds.filter((id) => !run.evidenceLedger.has(id));
     if (unknown.length > 0) errors.push(`segment ${index + 1} cites evidence not returned in this run`);
+    errors.push(...evidenceQuoteErrors(segment, run, index));
   }
+  errors.push(...compositionCoverageErrors(input, run));
   for (const reference of artifactReferences) {
     if (!artifactAvailable(reference, artifacts)) errors.push(`${reference.kind} artifact was not returned in this run`);
   }
@@ -641,6 +656,69 @@ function validateFinalAnswer(
       ...(input.followUp ? { followUp: FINALIZATION_ENUM_COPY.followUp[input.followUp] } : {}),
     },
   };
+}
+
+function evidenceQuoteErrors(
+  segment: Extract<FinalAnswerInput['segments'][number], { kind: 'factual' }>,
+  run: PublicAgentToolRun,
+  index: number,
+): string[] {
+  const errors: string[] = [];
+  for (const selection of segment.evidenceQuotes) {
+    const evidence = run.evidenceLedger.resolve([selection.evidenceId])[0];
+    if (!evidence || !segment.evidenceIds.includes(selection.evidenceId)) {
+      errors.push(`segment ${index + 1} exact evidence was not cited from this run`);
+      continue;
+    }
+    if (!evidence.value.includes(selection.quote)) {
+      errors.push(`segment ${index + 1} exact evidence quote was not returned by its cited source`);
+    }
+    if (!segment.text.toLowerCase().includes(selection.quote.toLowerCase())) {
+      errors.push(`segment ${index + 1} omitted its selected exact evidence quote`);
+    }
+  }
+  return errors;
+}
+
+function compositionCoverageErrors(input: FinalAnswerInput, run: PublicAgentToolRun): string[] {
+  const returnedSources = new Set(
+    run.evidenceLedger.snapshot()
+      .map((evidence) => evidence.source)
+  );
+  const citedEvidenceIds = input.segments.flatMap((segment) =>
+    segment.kind === 'factual' ? segment.evidenceIds : [],
+  );
+  const citedSources = new Set(
+    run.evidenceLedger.resolve(citedEvidenceIds)
+      .map((evidence) => evidence.source)
+  );
+  const exactQuoteSources = new Set(
+    input.segments.flatMap((segment) => segment.kind === 'factual'
+      ? segment.evidenceQuotes.flatMap((selection) =>
+        run.evidenceLedger.resolve([selection.evidenceId]).map((evidence) => evidence.source))
+      : []),
+  );
+  const artifactKinds = new Set(input.artifacts.map((artifact) => artifact.kind));
+  const errors: string[] = [];
+  for (const pair of COMPOSITION_PAIRS) {
+    if (!pair.sources.every((source) => returnedSources.has(source))) continue;
+    const missingSources = pair.sources.filter((source) => !citedSources.has(source));
+    if (missingSources.length > 0) {
+      errors.push(`composed answer omitted returned evidence from: ${missingSources.join(', ')}`);
+    }
+    const missingQuotes = pair.sources.filter((source) => !exactQuoteSources.has(source));
+    if (missingQuotes.length > 0) {
+      errors.push(`composed answer needs exact evidence quotes from: ${missingQuotes.join(', ')}`);
+    }
+    const requiredArtifacts = input.artifactIntent === 'none'
+      ? []
+      : pair.artifacts.filter((artifact) => input.artifactIntent !== 'non_project' || artifact !== 'project');
+    const missingArtifacts = requiredArtifacts.filter((artifact) => !artifactKinds.has(artifact));
+    if (missingArtifacts.length > 0) {
+      errors.push(`composed answer omitted required artifacts: ${missingArtifacts.join(', ')}`);
+    }
+  }
+  return errors;
 }
 
 function deduplicateArtifactReferences(references: ArtifactReference[]): ArtifactReference[] {
@@ -1014,6 +1092,11 @@ const DM_SYSTEM_INSTRUCTIONS = [
   "You are DM, Dylan McCavitt's public portfolio agent for recruiters and hiring managers.",
   'Answer the latest question first. Normally use two to five concise sentences across no more than five answer segments.',
   'Use the typed public tools when a claim needs facts. Avoid tools for greetings, capability questions, and other purely conversational turns.',
+  'Treat every multi-part request as a checklist. Call the public tool needed for each requested aspect, and do not finalize until every successful source in the requested composition pair is cited or an unavailable aspect has an explicit limitation.',
+  'For a recruiter question that asks for both resume background and contact details, call both readResume and getContact, cite evidence from both, preserve a distinctive exact value from each in evidenceQuotes, and include the returned resume and contact artifacts.',
+  'For a project evidence deep dive, call both getProject and searchPublicSources with the published project id, cite evidence from both successful tools, preserve a distinctive exact phrase from each in evidenceQuotes, and include only same-run project and approved evidence artifacts.',
+  'When the visitor requests a distinctive fact or public evidence, add an evidenceQuotes entry whose quote is an exact substring of that returned evidence value and appears in the same factual segment before any supported interpretation; natural prose capitalization is allowed.',
+  'If one requested public source is partial or unavailable, keep the supported aspects from successful tools, state the bounded limitation, and never invent the missing evidence or artifact.',
   'Conversation history can resolve the subject, but only the latest turn controls the requested aspect. Corrections replace the prior subject instead of blending subjects.',
   'When the latest turn names, corrects, or refers to a project whose stable public id or slug is known, call getProject. If only its public title is known and the stable id or slug is unresolved, call searchProjects once to resolve it; do not guess a stable reference from the title.',
   'For an aspect-only follow-up on a previously discussed project, cite getProject evidence but omit the repeated project artifact unless the visitor explicitly asks to see its card. A correction to a different project may include that new project artifact.',
