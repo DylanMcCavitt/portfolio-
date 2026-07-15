@@ -144,10 +144,14 @@ const FOLLOW_UP_CODES = [
 const ConversationalActSchema = z.enum(CONVERSATIONAL_ACTS);
 const LimitationCodeSchema = z.enum(LIMITATION_CODES);
 const FollowUpCodeSchema = z.enum(FOLLOW_UP_CODES);
+const ArtifactIntentSchema = z.enum(['none', 'one_project', 'project_set', 'non_project']);
 
 type ConversationalAct = z.infer<typeof ConversationalActSchema>;
 type LimitationCode = z.infer<typeof LimitationCodeSchema>;
 type FollowUpCode = z.infer<typeof FollowUpCodeSchema>;
+type ArtifactIntent = z.infer<typeof ArtifactIntentSchema>;
+
+const MAX_PROJECT_SET_ARTIFACTS = 4;
 
 // Security boundary: only factual segments retain model-authored prose. The
 // model can select these finite enum values only through finalizeAnswer; the
@@ -207,6 +211,7 @@ const ArtifactReferenceSchema = z.discriminatedUnion('kind', [
 
 const FinalAnswerInputSchema = z.strictObject({
   segments: z.array(AnswerSegmentInputSchema).min(1).max(5),
+  artifactIntent: ArtifactIntentSchema,
   artifacts: z.array(ArtifactReferenceSchema).max(5),
   limitations: z.array(LimitationCodeSchema).max(4),
   followUp: FollowUpCodeSchema.optional(),
@@ -221,6 +226,7 @@ interface RunArtifacts {
   contact: PublicContactRecord | null;
   sources: Map<string, PublicSourceRecord>;
   limitations: Set<string>;
+  boundArtifactIntent: ArtifactIntent | null;
 }
 
 interface PublicToolGate {
@@ -259,7 +265,7 @@ export function createDMChatResponse(
   const agentTools = {
     ...publicTools,
     finalizeAnswer: tool({
-      description: 'Submit the complete structured visitor answer. Use exactly once after gathering any needed public evidence; retry once only when rejected.',
+      description: 'Submit the complete structured visitor answer and its requested artifact intent. Use exactly once after gathering any needed public evidence; retry once only when rejected.',
       inputSchema: FinalAnswerInputSchema,
       execute: async (input: FinalAnswerInput) => {
         await publicToolGate.waitForIdle();
@@ -566,15 +572,23 @@ function validateFinalAnswer(
   run: PublicAgentToolRun,
   artifacts: RunArtifacts,
 ): { ok: true; answer: DMValidatedAnswer } | { ok: false; errors: string[] } {
+  const changedIntent = artifacts.boundArtifactIntent !== null
+    && input.artifactIntent !== artifacts.boundArtifactIntent;
+  artifacts.boundArtifactIntent ??= input.artifactIntent;
+  if (changedIntent) {
+    return { ok: false, errors: ['artifact intent cannot change during finalization repair'] };
+  }
   const errors: string[] = [];
+  const artifactReferences = deduplicateArtifactReferences(input.artifacts);
   for (const [index, segment] of input.segments.entries()) {
     if (segment.kind !== 'factual') continue;
     const unknown = segment.evidenceIds.filter((id) => !run.evidenceLedger.has(id));
     if (unknown.length > 0) errors.push(`segment ${index + 1} cites evidence not returned in this run`);
   }
-  for (const reference of input.artifacts) {
+  for (const reference of artifactReferences) {
     if (!artifactAvailable(reference, artifacts)) errors.push(`${reference.kind} artifact was not returned in this run`);
   }
+  errors.push(...artifactCardinalityErrors(input.artifactIntent, artifactReferences, artifacts.projects.size));
   if (errors.length > 0) return { ok: false, errors: [...new Set(errors)].slice(0, 5) };
 
   const segments = input.segments.map((segment) => {
@@ -602,11 +616,51 @@ function validateFinalAnswer(
     ok: true,
     answer: {
       segments,
-      artifacts: input.artifacts.flatMap((reference) => resolveArtifact(reference, artifacts)),
+      artifacts: artifactReferences.flatMap((reference) => resolveArtifact(reference, artifacts)),
       limitations,
       ...(input.followUp ? { followUp: FINALIZATION_ENUM_COPY.followUp[input.followUp] } : {}),
     },
   };
+}
+
+function deduplicateArtifactReferences(references: ArtifactReference[]): ArtifactReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const key = `${reference.kind}:${reference.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function artifactCardinalityErrors(
+  intent: ArtifactIntent,
+  references: ArtifactReference[],
+  availableProjectCount: number,
+): string[] {
+  const projectCount = references.filter((reference) => reference.kind === 'project').length;
+  if (intent === 'none') {
+    return references.length === 0 ? [] : ['artifact intent none requires zero artifacts'];
+  }
+  if (intent === 'one_project') {
+    if (projectCount > 1) return ['one_project artifact intent allows at most one project artifact'];
+    if (availableProjectCount > 0 && projectCount === 0) {
+      return ['one_project artifact intent requires one returned project artifact'];
+    }
+    return [];
+  }
+  if (intent === 'project_set') {
+    if (projectCount > MAX_PROJECT_SET_ARTIFACTS) {
+      return [`project_set artifact intent allows at most ${MAX_PROJECT_SET_ARTIFACTS} project artifacts`];
+    }
+    if (availableProjectCount > 0 && projectCount === 0) {
+      return ['project_set artifact intent requires at least one returned project artifact'];
+    }
+  }
+  if (intent === 'non_project' && projectCount > 0) {
+    return ['non_project artifact intent cannot include project artifacts'];
+  }
+  return [];
 }
 
 function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {
@@ -643,6 +697,7 @@ function emptyArtifacts(): RunArtifacts {
     contact: null,
     sources: new Map(),
     limitations: new Set(),
+    boundArtifactIntent: null,
   };
 }
 
@@ -793,6 +848,9 @@ const DM_SYSTEM_INSTRUCTIONS = [
   'Every factual segment passed to finalizeAnswer must cite one or more evidenceIds returned by public tools in this same run.',
   'Only factual segments accept free text. For no-evidence output, select a server-controlled conversational act, limitation code, and optional follow-up code; never place arbitrary prose in those fields.',
   'Artifact references must use artifact ids returned by tools in this same run. Do not copy or invent artifact payloads.',
+  'Set artifactIntent from the latest request: none for explicitly no artifacts, one_project for exactly one or a best-project card, project_set for a project list or overview, and non_project only when rendering resume, contact, evidence, or link artifacts without project cards.',
+  'Artifact intent is fixed on the first finalization attempt and cannot change during repair.',
+  `Project sets are server-bounded to ${MAX_PROJECT_SET_ARTIFACTS} cards. If a requested project artifact is unavailable, finalize honestly without inventing one.`,
   'Call finalizeAnswer with the complete visitor answer. Do not emit visitor-facing prose outside finalizeAnswer.',
   'If finalizeAnswer rejects the structure, repair it exactly once using the rejection errors. Never retry it more than once.',
 ].join('\n');
