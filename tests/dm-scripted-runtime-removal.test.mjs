@@ -54,9 +54,14 @@ const V2FinalAnswerInputSchema = z.strictObject({
 });
 const FORBIDDEN_SOURCE_INSTRUCTION = 'Never claim access to Slack, admin drafts, candidate evidence, private notes, visitor history, credentials, hidden projects, or unpublished records. Those sources and tools do not exist here.';
 const DM_BASE_SYSTEM_INSTRUCTIONS = [FORBIDDEN_SOURCE_INSTRUCTION];
-const DM_V2_SYSTEM_INSTRUCTIONS = [FORBIDDEN_SOURCE_INSTRUCTION];
+const DM_V2_SYSTEM_INSTRUCTIONS = [
+  FORBIDDEN_SOURCE_INSTRUCTION,
+  'Emit markdown through the standard response text stream and ensure finalizeAnswer exactly equals that streamed text.',
+  'The finalizer is an integrity echo, not a second answer.',
+];
 function createDMChatResponse(request, config = {}) {
   const contract = config.contract ?? 'v1';
+  const v2Prose = createBoundedV2Prose();
   const publicRun = {};
   const artifacts = {};
   const siteBrief = {};
@@ -85,7 +90,13 @@ function createDMChatResponse(request, config = {}) {
       };
   const stream = createUIMessageStream({
     async execute({ writer }) {
+      for (const chunk of []) {
+        if (contract === 'v2' && isV2TextChunk(chunk)) v2Prose.forward(chunk, writer.write);
+      }
       finalizationResult ??= limitedResult(finalizationAttempts > 0);
+      const terminalMarkdown = finalizationResult?.answer?.segments?.[0]?.text ?? null;
+      if (terminalMarkdown !== v2Prose.text) finalized = true;
+      if (contract === 'v1') metrics.visibleOutput();
       writer.write({ type: 'data-dm-answer', data: finalizationResult });
     },
   });
@@ -300,6 +311,19 @@ test('requires the full forbidden-source list in both contracts', async (t) => {
   const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
   assert.ok(result.failures.includes(
     'src/lib/dm/runtime.ts: v1 and v2 must retain the complete forbidden-source instruction',
+  ));
+});
+
+test('requires v2 to bind standard streamed prose to the finalizer integrity echo', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'standard response text stream',
+    'terminal-only response',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 instructions must bind standard streamed prose to the exact finalizer integrity echo',
   ));
 });
 
