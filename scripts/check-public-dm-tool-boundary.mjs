@@ -4,6 +4,7 @@ import process from 'node:process';
 const PUBLIC_TOOL_MODULES = [
   'src/lib/dm/public-agent-tools.ts',
   'src/lib/dm/runtime.ts',
+  'src/lib/dm/site-brief.ts',
 ];
 const FORBIDDEN_IMPORT = /(?:^|\/)(?:admin|slack|private|candidate|visitor|auth|credentials?|secrets?)(?:\/|$)/i;
 const FORBIDDEN_QUERY = /\b(?:project_drafts|project_candidates|admin_sessions|slack_events|visitor_history|conversation_history)\b/i;
@@ -16,6 +17,9 @@ for (const path of PUBLIC_TOOL_MODULES) {
 
   for (const specifier of imports) {
     if (FORBIDDEN_IMPORT.test(specifier)) failures.push(`${path}: forbidden import ${specifier}`);
+    if (path.endsWith('/site-brief.ts') && specifier === '@/data/catalog') {
+      failures.push(`${path}: site brief must not import the catalog directly`);
+    }
   }
   if (FORBIDDEN_QUERY.test(source)) failures.push(`${path}: forbidden private-source query token`);
 }

@@ -1,0 +1,214 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { RESUME } from '@/data/resume';
+import type { ProjectDetailReadModel, ProjectReadQueryable } from '@/lib/db/project-reads';
+import { createEvalProjectSource } from '@/lib/dm/eval-source';
+import {
+  buildDMSiteBrief,
+  DM_SITE_BRIEF_MAX_CHARS,
+  DM_SITE_BRIEF_MAX_ESTIMATED_TOKENS,
+  DM_SITE_BRIEF_SUMMARY_MAX_CHARS,
+  DMSiteBriefError,
+  loadDMSiteBrief,
+} from '@/lib/dm/site-brief';
+import { PublicProjectDataError } from '@/lib/public-projects';
+
+test('site brief covers variable published-project counts deterministically without a fixed 15-row assumption', async () => {
+  const source = await createEvalProjectSource();
+  const template = (await source.projectLoader())[0];
+  assert.ok(template);
+
+  for (const count of [3, 17]) {
+    const rows = variableProjects(template, count).reverse();
+    const brief = buildDMSiteBrief(rows);
+    const sortedIds = rows.map((project) => project.id).sort();
+
+    assert.equal(brief.content.projects.length, count);
+    assert.deepEqual(brief.content.projects.map((project) => project.id), sortedIds);
+    assert.deepEqual(
+      brief.content.projects.map((project) => project.route),
+      sortedIds.map((id) => `/projects/${id}`),
+    );
+    assert.ok(brief.content.projects.every((project) => !project.summary.includes('\n')));
+    assert.ok(brief.content.projects.every((project) => [...project.summary].length <= DM_SITE_BRIEF_SUMMARY_MAX_CHARS));
+    assert.equal(brief.promptText, JSON.stringify(brief.content));
+    assert.equal(brief.charCount, brief.promptText.length);
+    assert.equal(brief.estimatedTokens, Math.ceil(brief.charCount / 4));
+    assert.ok(brief.charCount <= DM_SITE_BRIEF_MAX_CHARS);
+    assert.ok(brief.estimatedTokens <= DM_SITE_BRIEF_MAX_ESTIMATED_TOKENS);
+    assert.equal(buildDMSiteBrief([...rows].reverse()).promptText, brief.promptText);
+  }
+});
+
+test('site brief includes the canonical career overview, resume tracks, routes, and contact pointer', async () => {
+  const source = await createEvalProjectSource();
+  const brief = buildDMSiteBrief(await source.projectLoader());
+  const current = RESUME.tracks.find((track) => track.current) ?? RESUME.tracks.at(-1);
+  assert.ok(current);
+
+  assert.equal(brief.content.careerOverview, RESUME.about);
+  assert.deepEqual(
+    brief.content.resumeTracks.map((track) => ({ id: track.id, route: track.route })),
+    RESUME.tracks.map((track) => ({ id: track.id, route: `/journey/${track.id}` })),
+  );
+  assert.deepEqual(brief.content.routes, {
+    home: '/',
+    projects: '/library',
+    resume: '/journey',
+    hiring: '/hiring',
+    fitCheck: '/fit-check',
+  });
+  assert.deepEqual(brief.content.contact, {
+    route: `/journey/${current.id}`,
+    evidenceTool: 'getContact',
+  });
+  assert.equal(Object.hasOwn(brief.content, 'ownerApprovedProfileSummary'), false);
+});
+
+test('the reserved profile extension accepts only an explicitly supplied owner-approved short summary', async () => {
+  const source = await createEvalProjectSource();
+  const projects = await source.projectLoader();
+  const approved = buildDMSiteBrief(projects, {
+    ownerApprovedProfileSummary: '  Owner-approved public profile summary for a later phase.  ',
+  });
+  assert.equal(
+    approved.content.ownerApprovedProfileSummary,
+    'Owner-approved public profile summary for a later phase.',
+  );
+  assert.throws(
+    () => buildDMSiteBrief(projects, { ownerApprovedProfileSummary: '   ' }),
+    (error: unknown) => error instanceof DMSiteBriefError && error.code === 'validation_failed',
+  );
+});
+
+test('site brief fails closed rather than dropping published projects when the complete set exceeds its budget', async () => {
+  const source = await createEvalProjectSource();
+  const template = (await source.projectLoader())[0];
+  assert.ok(template);
+  const rows = variableProjects(template, 60);
+
+  assert.throws(
+    () => buildDMSiteBrief(rows),
+    (error: unknown) => error instanceof DMSiteBriefError && error.code === 'size_limit_exceeded',
+  );
+});
+
+test('site brief source, config, read, validation, and unexpected-empty failures are fail closed', async (t) => {
+  await t.test('invalid source configuration', async () => {
+    await assert.rejects(
+      loadDMSiteBrief({ env: { PUBLIC_PROJECT_SOURCE: 'catalog' } }),
+      (error: unknown) => error instanceof PublicProjectDataError && error.code === 'invalid_source_mode',
+    );
+  });
+
+  await t.test('missing database configuration', async () => {
+    await assert.rejects(
+      loadDMSiteBrief({ env: { PUBLIC_PROJECT_SOURCE: 'database' } }),
+      (error: unknown) => error instanceof PublicProjectDataError && error.code === 'missing_config',
+    );
+  });
+
+  await t.test('database read failure', async () => {
+    await assert.rejects(
+      loadDMSiteBrief({
+        env: { PUBLIC_PROJECT_SOURCE: 'database' },
+        db: { async query() { throw new Error('private database read details'); } },
+      }),
+      (error: unknown) => error instanceof PublicProjectDataError && error.code === 'read_failed',
+    );
+  });
+
+  await t.test('persisted row validation failure', async () => {
+    await assert.rejects(
+      loadDMSiteBrief({
+        env: { PUBLIC_PROJECT_SOURCE: 'database' },
+        db: databaseRows([{ ...DATABASE_PROJECT_ROW, slug: '../private' }]),
+      }),
+      (error: unknown) => error instanceof PublicProjectDataError && error.code === 'read_failed',
+    );
+  });
+
+  await t.test('unexpected empty published set', async () => {
+    await assert.rejects(
+      loadDMSiteBrief({
+        env: { PUBLIC_PROJECT_SOURCE: 'database' },
+        db: databaseRows([]),
+      }),
+      (error: unknown) => error instanceof PublicProjectDataError && error.code === 'empty_published_set',
+    );
+  });
+
+  await t.test('invalid injected typed project', async () => {
+    assert.throws(
+      () => buildDMSiteBrief([{ id: 'invalid project id' } as ProjectDetailReadModel]),
+      (error: unknown) => error instanceof DMSiteBriefError && error.code === 'validation_failed',
+    );
+  });
+});
+
+test('database mode brief uses only the published DB query result and never overlays catalog projects', async () => {
+  const queries: string[] = [];
+  const db: ProjectReadQueryable = {
+    async query<Row = unknown>(sql: string) {
+      queries.push(sql);
+      return { rows: [DATABASE_PROJECT_ROW] as Row[] };
+    },
+  };
+  const brief = await loadDMSiteBrief({
+    env: { PUBLIC_PROJECT_SOURCE: 'database' },
+    db,
+  });
+
+  assert.deepEqual(brief.content.projects.map((project) => project.id), ['db-only-brief']);
+  assert.deepEqual(brief.content.projects.map((project) => project.route), ['/projects/db-only-brief']);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0] ?? '', /lifecycle_state = 'published'/);
+  assert.doesNotMatch(brief.promptText, /agentic-trader|exit-manager|legacy_catalog/);
+});
+
+function variableProjects(template: ProjectDetailReadModel, count: number): ProjectDetailReadModel[] {
+  return Array.from({ length: count }, (_, index) => {
+    const suffix = String(index).padStart(2, '0');
+    const id = `brief-project-${suffix}`;
+    return {
+      ...template,
+      id,
+      slug: id,
+      title: `Brief Project ${suffix}`,
+      summary: `A concise public summary for project ${suffix}.\nIt stays on one deterministic line in the brief.`,
+      dmArtifact: {
+        ...template.dmArtifact,
+        id,
+        title: `Brief Project ${suffix}`,
+        href: `/projects/${id}`,
+      },
+    };
+  });
+}
+
+function databaseRows(rows: unknown[]): ProjectReadQueryable {
+  return {
+    async query<Row = unknown>() {
+      return { rows: rows as Row[] };
+    },
+  };
+}
+
+const DATABASE_PROJECT_ROW = {
+  id: 'db-only-brief',
+  slug: 'db-only-brief',
+  title: 'DB Only Brief Project',
+  tagline: 'A published database-only project.',
+  area: 'AI & Developer Tools',
+  year: 2026,
+  lifecycle_state: 'published',
+  activity: 'published',
+  summary: 'This sentinel exists only in the injected published database result.',
+  details: [],
+  metrics: [],
+  links: [],
+  media: [],
+  source: 'test_seed',
+  published_at: '2026-07-15T00:00:00.000Z',
+  archived_at: null,
+};

@@ -38,9 +38,22 @@
       "subjectRefs": [
         "src/lib/dm/public-agent-tools.ts",
         "src/lib/dm/runtime.ts",
+        "src/lib/dm/site-brief.ts",
         "scripts/check-public-dm-tool-boundary.mjs"
       ],
       "check": "node scripts/check-public-dm-tool-boundary.mjs"
+    },
+    {
+      "id": "dm-site-brief-boundary",
+      "statement": "DM starts model work only after building a deterministic bounded site brief from the complete dynamic public-project source plus canonical resume and public route pointers, without weakening same-run typed-tool evidence rules",
+      "subjectRefs": [
+        "src/lib/dm/site-brief.ts",
+        "src/lib/dm/runtime.ts",
+        "src/pages/api/dm/chat.ts",
+        "tests/dm-site-brief.test.ts",
+        "tests/dm-runtime.test.ts"
+      ],
+      "check": "npm run test:dm"
     },
     {
       "id": "dm-tool-loop-runtime",
