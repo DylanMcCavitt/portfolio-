@@ -175,12 +175,12 @@ starting point changes. What kind of role are you evaluating him for?
 
 **DM:** The public work supports “product-minded engineer with growing systems
 depth.” Bella's Beads shows him owning a customer-facing product through
-handoff, while his homelab and Slurmlet show sustained interest in reliability,
+handoff, while his homelab and Slurmlet document work on reliability,
 infrastructure, and scheduling.
 
 I would not present the personal projects as proof of large-scale production
-systems experience. They do show how he learns: by building bounded systems,
-making the rules visible, and testing the failure cases.
+systems experience. Taken together, I read those projects as evidence that he
+learns by making the rules visible and testing bounded workflows.
 
 ### 11. Personal question the approved corpus cannot answer
 
@@ -257,7 +257,7 @@ experience.
 | 7 | Cross-project comparison | Distinguishes solo delivery from team coursework | `bellas-beads`, `work-orders` |
 | 8 | Cross-project comparison | Compares purpose and risk without exposing account data | `exit-manager`, `hood` |
 | 9 | Vague question | Gives a useful default, then asks the one material clarifier | `bellas-beads` |
-| 10 | Vague question | Makes a bounded synthesis and labels the experience gap | `bellas-beads`, `homeserver`, `slurmlet` |
+| 10 | Vague question | Frames a project-based interpretation and labels the experience gap | `bellas-beads`, `homeserver`, `slurmlet` |
 | 11 | Unsupported personal question | States the source gap naturally and redirects to supported work evidence | `RESUME`; public catalog themes only |
 | 12 | Job-description fit check | Maps evidence, names the scale gap, gives a hiring judgment | `bellas-beads`; `paulweiss`, `kroll` résumé tracks |
 | 13 | Job-description fit check | Separates relevant direction from shipped proof | `evalgate`; `kroll` résumé track |
