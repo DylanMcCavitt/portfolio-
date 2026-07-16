@@ -210,6 +210,52 @@ test('v2 bounds visible model-authored prose without splitting a Unicode code po
   assert.doesNotMatch(metricsLines.join('\n'), new RegExp(sentinel));
 });
 
+test('v2 preserves leading and trailing finalizer whitespace in an exact prose echo', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('What can you help with?');
+  const markdown = ' \nExact whitespace remains part of this answer.\n ';
+  const observation = await observeDMResponse(createDMChatResponse(request, v2Config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
+      markdown,
+      evidenceIds: [],
+      artifacts: [],
+    }, prose: markdown }]),
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  const streamedMarkdown = observation.timedChunks.flatMap(({ chunk }) => (
+    chunk.type === 'text-delta' ? [chunk.delta] : []
+  )).join('');
+  assert.equal(streamedMarkdown, markdown);
+  assert.equal(observation.result?.answer.segments[0]?.text, markdown);
+  assert.deepEqual(observation.errors, []);
+});
+
+test('v2 rejects finalizer markdown above 6000 raw UTF-16 units before integrity matching', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('What can you help with?');
+  const prose = 'x'.repeat(6_000);
+  const metricsLines: string[] = [];
+  const observation = await observeDMResponse(createDMChatResponse(request, v2Config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model: toolSequenceModel([{ toolName: 'finalizeAnswer', input: {
+      markdown: `${prose}\n`,
+      evidenceIds: [],
+      artifacts: [],
+    }, prose }]),
+    metricsLogger: (line) => metricsLines.push(line),
+  }), request);
+
+  assert.equal(observation.answerText, prose);
+  assert.equal(observation.result, null);
+  assert.match(observation.errors.join(' '), /safely finish/i);
+  assert.equal(observation.timedChunks.at(-1)?.chunk.type, 'finish');
+  assert.equal(parseMetricsRecord(metricsLines).errorCategory, 'finalization_validation');
+});
+
 test('site brief failure stops before model work and exposes only a sanitized stream error', async () => {
   const marker = 'private-site-brief-read-details';
   const model = toolSequenceModel([]) as MockLanguageModelV4;

@@ -261,7 +261,7 @@ function schemaBoundaryFailures(sourceFile) {
     ? v2Initializer.arguments[0]
     : null;
   const expectedV2Fields = new Map([
-    ['markdown', 'z.string().trim().min(1).max(6_000)'],
+    ['markdown', 'z.string().min(1).max(6_000).refine((value) => value.trim().length > 0)'],
     ['evidenceIds', 'z.array(z.string().trim().min(1).max(240)).max(32)'],
     ['artifacts', 'z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS)'],
     ['followUp', 'z.string().trim().min(1).max(600).optional()'],

@@ -263,7 +263,7 @@ const FinalAnswerInputSchema = z.strictObject({
 });
 
 const V2FinalAnswerInputSchema = z.strictObject({
-  markdown: z.string().trim().min(1).max(6_000),
+  markdown: z.string().min(1).max(6_000).refine((value) => value.trim().length > 0),
   evidenceIds: z.array(z.string().trim().min(1).max(240)).max(32),
   artifacts: z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS),
   followUp: z.string().trim().min(1).max(600).optional(),

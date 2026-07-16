@@ -47,7 +47,7 @@ const FinalAnswerInputSchema = z.strictObject({
   followUp: FollowUpCodeSchema.optional(),
 });
 const V2FinalAnswerInputSchema = z.strictObject({
-  markdown: z.string().trim().min(1).max(6_000),
+  markdown: z.string().min(1).max(6_000).refine((value) => value.trim().length > 0),
   evidenceIds: z.array(z.string().trim().min(1).max(240)).max(32),
   artifacts: z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS),
   followUp: z.string().trim().min(1).max(600).optional(),
@@ -278,13 +278,26 @@ test('requires the v1-default fail-closed contract selector', async (t) => {
 test('rejects an unbounded v2 prose schema', async (t) => {
   const root = await createCleanFixture(t);
   await mutateRuntime(root, (runtime) => runtime.replace(
-    'markdown: z.string().trim().min(1).max(6_000)',
-    'markdown: z.string().trim().min(1).max(60_000)',
+    'markdown: z.string().min(1).max(6_000).refine((value) => value.trim().length > 0)',
+    'markdown: z.string().min(1).max(60_000).refine((value) => value.trim().length > 0)',
   ));
 
   const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
   assert.ok(result.failures.includes(
-    'src/lib/dm/runtime.ts: v2 finalization field markdown must remain z.string().trim().min(1).max(6_000)',
+    'src/lib/dm/runtime.ts: v2 finalization field markdown must remain z.string().min(1).max(6_000).refine((value) => value.trim().length > 0)',
+  ));
+});
+
+test('requires v2 markdown to reject whitespace-only input without transforming it', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '.refine((value) => value.trim().length > 0)',
+    '.refine((value) => value.length > 0)',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 finalization field markdown must remain z.string().min(1).max(6_000).refine((value) => value.trim().length > 0)',
   ));
 });
 
