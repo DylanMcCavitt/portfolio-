@@ -303,16 +303,66 @@ function governedV2DependencyMutationFailures(sourceFile) {
     }
     return resolved;
   };
+  const recordAlias = (name, path) => {
+    const resolved = resolveAliasPath(path);
+    if (!resolved || (resolved.length === 1 && resolved[0] === name)) return false;
+    if (aliases.get(name)?.join('.') === resolved.join('.')) return false;
+    aliases.set(name, resolved);
+    return true;
+  };
+  const recordBindingAliases = (name, path) => {
+    if (!path) return false;
+    if (ts.isIdentifier(name)) return recordAlias(name.text, path);
+
+    let changed = false;
+    if (ts.isObjectBindingPattern(name)) {
+      for (const element of name.elements) {
+        if (element.dotDotDotToken) {
+          // Object rest is a shallow copy, so governed descendant values retain
+          // their identity through the new binding.
+          changed = recordBindingAliases(element.name, path) || changed;
+          continue;
+        }
+        const property = element.propertyName
+          ? propertyNameText(element.propertyName)
+          : ts.isIdentifier(element.name)
+            ? element.name.text
+            : null;
+        if (property !== null) {
+          changed = recordBindingAliases(element.name, [...path, property]) || changed;
+        }
+      }
+      return changed;
+    }
+
+    for (const [index, element] of name.elements.entries()) {
+      if (ts.isOmittedExpression(element)) continue;
+      changed = recordBindingAliases(element.name, [...path, String(index)]) || changed;
+    }
+    return changed;
+  };
+  const recordDeclarationAliases = (name, initializer) => {
+    const expression = unwrapExpression(initializer);
+    if (ts.isArrayBindingPattern(name) && ts.isArrayLiteralExpression(expression)) {
+      let changed = false;
+      for (const [index, element] of name.elements.entries()) {
+        if (ts.isOmittedExpression(element)) continue;
+        const source = expression.elements[index];
+        const sourcePath = source && !ts.isOmittedExpression(source)
+          ? resolveAliasPath(staticPropertyPath(ts.isSpreadElement(source) ? source.expression : source))
+          : null;
+        changed = recordBindingAliases(element.name, sourcePath) || changed;
+      }
+      return changed;
+    }
+    return recordBindingAliases(name, resolveAliasPath(staticPropertyPath(expression)));
+  };
   let aliasesChanged = true;
   while (aliasesChanged) {
     aliasesChanged = false;
     walk(sourceFile, (node) => {
-      if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name) || !node.initializer) return;
-      const path = resolveAliasPath(staticPropertyPath(node.initializer));
-      if (!path || (path.length === 1 && path[0] === node.name.text)) return;
-      if (aliases.get(node.name.text)?.join('.') === path.join('.')) return;
-      aliases.set(node.name.text, path);
-      aliasesChanged = true;
+      if (!ts.isVariableDeclaration(node) || !node.initializer) return;
+      aliasesChanged = recordDeclarationAliases(node.name, node.initializer) || aliasesChanged;
     });
   }
   const governedPath = (node) => resolveAliasPath(staticPropertyPath(node));

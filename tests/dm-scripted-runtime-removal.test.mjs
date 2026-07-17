@@ -515,6 +515,51 @@ test('rejects replacement of current-run project map methods through an alias', 
   ));
 });
 
+test('rejects replacement of current-run project map methods through a renamed destructured alias', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const siteBrief =',
+    `const { projects: projectMap = new Map() } = artifacts;
+  projectMap.has = () => false;
+  const siteBrief =`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ));
+});
+
+test('rejects replacement of current-run project map methods through an object-rest alias', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const siteBrief =',
+    `const { ...artifactAliases } = artifacts;
+  artifactAliases.projects.has = () => false;
+  const siteBrief =`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ));
+});
+
+test('rejects replacement of current-run evidence ledger methods through an array binding', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const siteBrief =',
+    `const [ledgerAlias] = [publicRun.evidenceLedger];
+  ledgerAlias.has = () => true;
+  const siteBrief =`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency publicRun.evidenceLedger must not be replaced or redefined',
+  ));
+});
+
 test('rejects Reflect.set replacement of the public tool idle gate', async (t) => {
   const root = await createCleanFixture(t);
   await mutateRuntime(root, (runtime) => runtime.replace(
