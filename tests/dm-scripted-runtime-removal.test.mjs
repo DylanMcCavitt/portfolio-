@@ -347,6 +347,19 @@ test('requires v2 markdown to reject whitespace-only input without transforming 
   ));
 });
 
+test('rejects swapping the v2 and v1 finalizers through the contract branch condition', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    "const agentTools = contract === 'v2'",
+    "const agentTools = contract === 'v1'",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: agentTools must bind the governed v2 finalizer to the true branch of the exact contract === v2 conditional and the v1 finalizer to its false branch',
+  ));
+});
+
 test('rejects a behavior-gated local schema shadow at the v2 finalizer', async (t) => {
   const root = await createCleanFixture(t);
   await mutateRuntime(root, (runtime) => runtime.replace(

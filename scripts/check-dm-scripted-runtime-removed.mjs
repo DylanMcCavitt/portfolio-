@@ -553,6 +553,23 @@ function finalizeExecuteForSchema(root, sourceFile, schemaName) {
   return match;
 }
 
+function contractBranchBindingFailures(sourceFile) {
+  const declaration = variableDeclaration(sourceFile, 'agentTools');
+  const initializer = declaration?.initializer && unwrapExpression(declaration.initializer);
+  if (
+    !initializer
+    || !ts.isConditionalExpression(initializer)
+    || compactNode(initializer.condition, sourceFile) !== "contract==='v2'"
+    || !finalizeExecuteForSchema(initializer.whenTrue, sourceFile, 'V2FinalAnswerInputSchema')
+    || finalizeExecuteForSchema(initializer.whenTrue, sourceFile, 'FinalAnswerInputSchema')
+    || !finalizeExecuteForSchema(initializer.whenFalse, sourceFile, 'FinalAnswerInputSchema')
+    || finalizeExecuteForSchema(initializer.whenFalse, sourceFile, 'V2FinalAnswerInputSchema')
+  ) {
+    return ['src/lib/dm/runtime.ts: agentTools must bind the governed v2 finalizer to the true branch of the exact contract === v2 conditional and the v1 finalizer to its false branch'];
+  }
+  return [];
+}
+
 function strictObjectForKind(sourceFile, schemaName, kind) {
   const declaration = variableDeclaration(sourceFile, schemaName);
   if (!declaration?.initializer) return null;
@@ -701,7 +718,10 @@ function finalizationCopyFailures(sourceFile) {
 }
 
 function v2ContractFailures(sourceFile) {
-  const failures = governedV2DependencyMutationFailures(sourceFile);
+  const failures = [
+    ...governedV2DependencyMutationFailures(sourceFile),
+    ...contractBranchBindingFailures(sourceFile),
+  ];
   const compact = (node) => node?.getText(sourceFile).replace(/\s+/g, '') ?? '';
   const forbiddenSource = variableDeclaration(sourceFile, 'FORBIDDEN_SOURCE_INSTRUCTION');
   const expectedForbiddenSource = 'Never claim access to Slack, admin drafts, candidate evidence, private notes, visitor history, credentials, hidden projects, or unpublished records. Those sources and tools do not exist here.';
