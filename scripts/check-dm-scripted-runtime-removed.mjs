@@ -444,8 +444,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     if (ts.isArrayLiteralExpression(expression) && /^\d+$/.test(key)) {
       const value = expression.elements[Number(key)];
-      return value && !ts.isOmittedExpression(value)
-        ? [ts.isSpreadElement(value) ? value.expression : value]
+      return value && !ts.isOmittedExpression(value) && !ts.isSpreadElement(value)
+        ? [value]
         : [];
     }
     return [];
@@ -474,6 +474,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
     if (ts.isObjectLiteralExpression(expression)) {
       return expression.properties.flatMap((property) => (
         ts.isSpreadAssignment(property) ? literalMemberPaths(property.expression, key) : []
+      ));
+    }
+    if (ts.isArrayLiteralExpression(expression)) {
+      return expression.elements.flatMap((element) => (
+        ts.isSpreadElement(element) ? literalMemberPaths(element.expression, key) : []
       ));
     }
     const path = staticPropertyPath(expression, constBindings);
@@ -532,7 +537,10 @@ function dynamicCodeExecutionFailures(sourceFile) {
       return propagateMember(expression.expression, expression.name.text);
     }
     if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
-      const key = staticStringValue(expression.argumentExpression, constBindings);
+      const argument = unwrapExpression(expression.argumentExpression);
+      const key = ts.isNumericLiteral(argument)
+        ? argument.text
+        : staticStringValue(argument, constBindings);
       if (key !== null) return propagateMember(expression.expression, key);
     }
     let changed = false;
@@ -1001,11 +1009,9 @@ function trustedPrimitiveMutationFailures(sourceFile) {
   const ambiguousIntrinsicValues = new Set();
   const canonicalGlobalPath = (path) => {
     if (!path) return null;
-    let canonical = path[0] === 'global' ? ['globalThis', ...path.slice(1)] : [...path];
-    while (canonical[0] === 'globalThis' && canonical[1] === 'global') {
-      canonical = ['globalThis', ...canonical.slice(2)];
-    }
-    return canonical;
+    let selfLinkLength = 0;
+    while (['globalThis', 'global'].includes(path[selfLinkLength])) selfLinkLength += 1;
+    return selfLinkLength > 0 ? ['globalThis', ...path.slice(selfLinkLength)] : [...path];
   };
   const intrinsicPrototypeForValue = (node) => {
     const target = unwrapExpression(node);
@@ -1437,7 +1443,10 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
       && !aliasAssignments.has(node)
-      && governed(resolvePath(node.left))
+      && (
+        governed(resolvePath(node.left))
+        || assignmentTargetExpressions(node.left).some((target) => governed(resolvePath(target)))
+      )
     ) mutated = true;
     if (ts.isDeleteExpression(node) && governed(resolvePath(node.expression))) mutated = true;
     if (
@@ -1710,9 +1719,63 @@ function governedV2DependencyMutationFailures(sourceFile) {
       if (mutatesGovernedPath || mutatesGovernedDescendant) mutated.add(label);
     }
   };
+  const nearestAncestor = (node, predicate) => {
+    for (let current = node.parent; current && current !== sourceFile; current = current.parent) {
+      if (predicate(current)) return current;
+    }
+    return null;
+  };
+  const exactForOf = (node, expected) => {
+    const loop = nearestAncestor(node, ts.isForOfStatement);
+    return loop ? compactNode(loop, sourceFile) === expected : false;
+  };
+  const exactIf = (node, expected) => {
+    const branch = nearestAncestor(node, ts.isIfStatement);
+    return branch ? compactNode(branch, sourceFile) === expected : false;
+  };
+  const trustedArtifactWriteSpecs = [
+    {
+      text: 'artifacts.projects.set(project.id, project)',
+      valid: (node) => executeBelongsToCall(node, 'tool', 'searchProjects')
+        && exactForOf(node, 'for(constprojectofresult.projects)artifacts.projects.set(project.id,project);'),
+    },
+    {
+      text: 'artifacts.projects.set(result.project.id, result.project)',
+      valid: (node) => executeBelongsToCall(node, 'tool', 'getProject')
+        && exactIf(node, 'if(result.project){artifacts.projects.set(result.project.id,result.project);artifacts.directProjectReads.add(result.project.id);}'),
+    },
+    {
+      text: 'artifacts.resumeTracks.set(track.id, track)',
+      valid: (node) => executeBelongsToCall(node, 'tool', 'readResume')
+        && exactForOf(node, 'for(consttrackofresult.tracks)artifacts.resumeTracks.set(track.id,track);'),
+    },
+    {
+      text: 'artifacts.sources.set(source.id, source)',
+      valid: (node) => executeBelongsToCall(node, 'tool', 'searchPublicSources')
+        && exactForOf(node, 'for(constsourceofresult.sources)artifacts.sources.set(source.id,source);'),
+    },
+    {
+      text: 'artifacts.contact = result.contact',
+      valid: (node) => executeBelongsToCall(node, 'tool', 'getContact'),
+    },
+  ];
+  const trustedArtifactWriteNodes = new Map(
+    trustedArtifactWriteSpecs.map((spec) => [spec.text, []]),
+  );
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node) && !ts.isBinaryExpression(node)) return;
+    const matches = trustedArtifactWriteNodes.get(node.getText(sourceFile));
+    if (matches) matches.push(node);
+  });
+  const trustedArtifactWritesValid = trustedArtifactWriteSpecs.every((spec) => {
+    const nodes = trustedArtifactWriteNodes.get(spec.text);
+    return nodes.length === 1 && spec.valid(nodes[0]);
+  });
+  const authorizedArtifactWrites = new Set(
+    trustedArtifactWritesValid ? [...trustedArtifactWriteNodes.values()].flat() : [],
+  );
   const isAuthorizedArtifactContactWrite = (node, path) => (
-    path.join('.') === 'artifacts.contact'
-    && hasFunctionDeclarationAncestor(node, 'createRuntimePublicTools')
+    path.join('.') === 'artifacts.contact' && authorizedArtifactWrites.has(node)
   );
   const isAuthorizedArtifactCollectionWrite = (node, path, method) => (
     method === 'set'
@@ -1721,27 +1784,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
       'artifacts.resumeTracks',
       'artifacts.sources',
     ].includes(path.join('.'))
-    && authorizedArtifactCollectionWrites.has(node)
-  );
-
-  const trustedArtifactCollectionWriteTexts = new Set([
-    'artifacts.projects.set(project.id, project)',
-    'artifacts.projects.set(result.project.id, result.project)',
-    'artifacts.resumeTracks.set(track.id, track)',
-    'artifacts.sources.set(source.id, source)',
-  ]);
-  const trustedArtifactCollectionWriteNodes = new Map(
-    [...trustedArtifactCollectionWriteTexts].map((text) => [text, []]),
-  );
-  walk(sourceFile, (node) => {
-    if (!ts.isCallExpression(node)) return;
-    const calls = trustedArtifactCollectionWriteNodes.get(node.getText(sourceFile));
-    if (calls) calls.push(node);
-  });
-  const authorizedArtifactCollectionWrites = new Set(
-    [...trustedArtifactCollectionWriteNodes.values()].every((calls) => calls.length === 1)
-      ? [...trustedArtifactCollectionWriteNodes.values()].flat()
-      : [],
+    && authorizedArtifactWrites.has(node)
   );
 
   walk(sourceFile, (node) => {
@@ -1751,9 +1794,28 @@ function governedV2DependencyMutationFailures(sourceFile) {
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
       recordGovernedEscape(node.right);
+      const directPaths = [
+        ...new Map(
+          [...possiblePropertyPaths(node.left), ...governedPaths(node.left)]
+            .map((path) => [path.join('.'), path]),
+        ).values(),
+      ];
+      const concretePropertyTarget = (staticPropertyPath(node.left)?.length ?? 0) > 1;
+      if (directPaths.length === 0) {
+        for (const target of assignmentTargetExpressions(node.left)) {
+          for (const path of governedPaths(target)) recordPath(path);
+        }
+      }
+      if (concretePropertyTarget) {
+        for (const path of directPaths) {
+          if (!isAuthorizedArtifactContactWrite(node, path)) recordPath(path);
+        }
+      }
       if (aliasAssignments.has(node)) return;
-      for (const path of governedPaths(node.left)) {
-        if (!isAuthorizedArtifactContactWrite(node, path)) recordPath(path);
+      if (!concretePropertyTarget) {
+        for (const path of directPaths) {
+          if (!isAuthorizedArtifactContactWrite(node, path)) recordPath(path);
+        }
       }
       return;
     }
@@ -2392,6 +2454,12 @@ function governedSchemaMutationFailures(sourceFile) {
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
       if (governedPaths(node.right).some(mutatesGovernedSchema)) mutated = true;
+      if (
+        governedPaths(node.left).length === 0
+        && assignmentTargetExpressions(node.left).some((target) => (
+          governedPaths(target).some(mutatesGovernedSchema)
+        ))
+      ) mutated = true;
       if (aliasAssignments.has(node)) return;
       if (governedPaths(node.left).some(mutatesGovernedSchema)) mutated = true;
       return;
