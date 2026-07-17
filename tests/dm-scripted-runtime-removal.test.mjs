@@ -881,6 +881,8 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `Reflect.construct(Function, [${JSON.stringify(hiddenWrite)}])();`,
     `const suffix = 'structor'; (async () => {})['con' + suffix](${JSON.stringify(hiddenWrite)})();`,
     `const R = Reflect; R['con' + 'struct'](Function, [${JSON.stringify(hiddenWrite)}])();`,
+    `const key = ['con', 'structor'].join(''); (async () => {})[key](${JSON.stringify(hiddenWrite)})();`,
+    `const key = 'safe'; { const key = ['con', 'structor'].join(''); (async () => {})[key](${JSON.stringify(hiddenWrite)})(); }`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1391,12 +1393,47 @@ const ArtifactReferenceSchema =`,
     runtime.replace('  const siteBrief =', "  Array['proto' + 'type'].flatMap = () => [];\n  const siteBrief ="),
     runtime.replace('  const siteBrief =', "  const R = Reflect;\n  R.set(Map.prototype, 'has', () => true);\n  const siteBrief ="),
     runtime.replace('  const siteBrief =', "  Reflect.defineProperty(z, 'strictObject', { value: () => ({}) });\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  let P; P = Map.prototype; P.has = () => true;\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  const P = Object.getPrototypeOf([]); P.flatMap = () => [];\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  Reflect['define' + 'Property'](z, 'strictObject', { value: () => ({}) });\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  const { defineProperty } = Reflect; defineProperty(z, 'strictObject', { value: () => ({}) });\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  const box = { P: Map.prototype }; box.P.has = () => true;\n  const siteBrief ="),
   ];
   for (const [index, mutated] of mutations.entries()) {
     await t.test(String(index), () => {
       assert.ok(finalizationBoundaryFailures(mutated).includes(
         'src/lib/dm/runtime.ts: governed Zod methods and intrinsic prototypes must not be mutated',
       ));
+    });
+  }
+});
+
+test('rejects governed dependency and schema returns from helpers and getters', async (t) => {
+  const runtime = await liveRuntimeSource();
+  const mutations = [
+    runtime.replace(
+      '  const siteBrief =',
+      '  const getProjects = () => artifacts.projects;\n  getProjects().has = () => true;\n  const siteBrief =',
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      '  const box = { get projects() { return artifacts.projects; } };\n  box.projects.has = () => true;\n  const siteBrief =',
+    ),
+    runtime.replace(
+      "  const agentTools = contract === 'v2'",
+      "  const getSchema = () => V2FinalAnswerInputSchema;\n  getSchema().parse = (value: unknown) => value;\n  const agentTools = contract === 'v2'",
+    ),
+    runtime.replace(
+      "  const agentTools = contract === 'v2'",
+      "  const box = { get schema() { return V2FinalAnswerInputSchema; } };\n  box.schema.parse = (value: unknown) => value;\n  const agentTools = contract === 'v2'",
+    ),
+  ];
+  for (const [index, mutated] of mutations.entries()) {
+    await t.test(String(index), () => {
+      const failures = finalizationBoundaryFailures(mutated);
+      assert.ok(failures.includes(index < 2
+        ? 'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter'
+        : 'src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated'));
     });
   }
 });
