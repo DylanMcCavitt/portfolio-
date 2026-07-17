@@ -342,6 +342,31 @@ function staticPropertyPath(node) {
   return null;
 }
 
+function possiblePropertyPaths(node) {
+  const expression = unwrapExpression(node);
+  if (ts.isConditionalExpression(expression)) {
+    return [
+      ...possiblePropertyPaths(expression.whenTrue),
+      ...possiblePropertyPaths(expression.whenFalse),
+    ];
+  }
+  if (
+    ts.isBinaryExpression(expression)
+    && (
+      expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      || expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+      || expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    )
+  ) {
+    return [
+      ...possiblePropertyPaths(expression.left),
+      ...possiblePropertyPaths(expression.right),
+    ];
+  }
+  const path = staticPropertyPath(expression);
+  return path ? [path] : [];
+}
+
 const GOVERNED_V2_DEPENDENCY_PATHS = new Map([
   ['publicRun.evidenceLedger', ['publicRun', 'evidenceLedger']],
   ['publicToolGate.waitForIdle', ['publicToolGate', 'waitForIdle']],
@@ -351,33 +376,43 @@ const GOVERNED_V2_DEPENDENCY_PATHS = new Map([
 function governedV2DependencyMutationFailures(sourceFile) {
   const mutated = new Set();
   const aliases = new Map();
-  const resolveAliasPath = (path) => {
-    if (!path) return null;
-    const expanded = new Set();
-    let resolved = path;
-    while (aliases.has(resolved[0]) && !expanded.has(resolved[0])) {
-      expanded.add(resolved[0]);
-      resolved = [...aliases.get(resolved[0]), ...resolved.slice(1)];
+  const resolveAliasPaths = (paths) => {
+    const pending = paths.map((path) => ({ path, expanded: new Set() }));
+    const resolved = [];
+    while (pending.length > 0) {
+      const candidate = pending.pop();
+      const replacements = aliases.get(candidate.path[0]);
+      if (!replacements || candidate.expanded.has(candidate.path[0])) {
+        resolved.push(candidate.path);
+        continue;
+      }
+      const expanded = new Set(candidate.expanded).add(candidate.path[0]);
+      for (const replacement of replacements) {
+        pending.push({ path: [...replacement, ...candidate.path.slice(1)], expanded });
+      }
     }
     return resolved;
   };
-  const recordAlias = (name, path) => {
-    const resolved = resolveAliasPath(path);
-    if (!resolved || (resolved.length === 1 && resolved[0] === name)) return false;
-    if (aliases.get(name)?.join('.') === resolved.join('.')) return false;
-    aliases.set(name, resolved);
+  const recordAlias = (name, paths) => {
+    const existing = aliases.get(name) ?? [];
+    const existingKeys = new Set(existing.map((path) => path.join('.')));
+    const additions = resolveAliasPaths(paths).filter((path) => (
+      !(path.length === 1 && path[0] === name) && !existingKeys.has(path.join('.'))
+    ));
+    if (additions.length === 0) return false;
+    aliases.set(name, [...existing, ...additions]);
     return true;
   };
-  const recordBindingAliases = (name, path) => {
-    if (!path) return false;
+  const recordBindingAliases = (name, paths) => {
+    if (paths.length === 0) return false;
     const target = unwrapExpression(name);
-    if (ts.isIdentifier(target)) return recordAlias(target.text, path);
+    if (ts.isIdentifier(target)) return recordAlias(target.text, paths);
 
     if (
       ts.isBinaryExpression(target)
       && target.operatorToken.kind === ts.SyntaxKind.EqualsToken
     ) {
-      return recordBindingAliases(target.left, path);
+      return recordBindingAliases(target.left, paths);
     }
 
     let changed = false;
@@ -386,7 +421,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
         if (element.dotDotDotToken) {
           // Object rest is a shallow copy, so governed descendant values retain
           // their identity through the new binding.
-          changed = recordBindingAliases(element.name, path) || changed;
+          changed = recordBindingAliases(element.name, paths) || changed;
           continue;
         }
         const property = element.propertyName
@@ -395,7 +430,10 @@ function governedV2DependencyMutationFailures(sourceFile) {
             ? element.name.text
             : null;
         if (property !== null) {
-          changed = recordBindingAliases(element.name, [...path, property]) || changed;
+          changed = recordBindingAliases(
+            element.name,
+            paths.map((path) => [...path, property]),
+          ) || changed;
         }
       }
       return changed;
@@ -404,17 +442,20 @@ function governedV2DependencyMutationFailures(sourceFile) {
     if (ts.isObjectLiteralExpression(target)) {
       for (const property of target.properties) {
         if (ts.isSpreadAssignment(property)) {
-          changed = recordBindingAliases(property.expression, path) || changed;
+          changed = recordBindingAliases(property.expression, paths) || changed;
           continue;
         }
         if (ts.isShorthandPropertyAssignment(property)) {
-          changed = recordBindingAliases(property.name, [...path, property.name.text]) || changed;
+          changed = recordBindingAliases(
+            property.name,
+            paths.map((path) => [...path, property.name.text]),
+          ) || changed;
           continue;
         }
         if (ts.isPropertyAssignment(property)) {
           changed = recordBindingAliases(
             property.initializer,
-            [...path, propertyNameText(property.name)],
+            paths.map((path) => [...path, propertyNameText(property.name)]),
           ) || changed;
         }
       }
@@ -429,7 +470,10 @@ function governedV2DependencyMutationFailures(sourceFile) {
           : ts.isSpreadElement(element)
             ? element.expression
             : element;
-        changed = recordBindingAliases(elementTarget, [...path, String(index)]) || changed;
+        changed = recordBindingAliases(
+          elementTarget,
+          paths.map((path) => [...path, String(index)]),
+        ) || changed;
       }
     }
     return changed;
@@ -445,19 +489,19 @@ function governedV2DependencyMutationFailures(sourceFile) {
       for (const [index, element] of target.elements.entries()) {
         if (ts.isOmittedExpression(element)) continue;
         const source = expression.elements[index];
-        const sourcePath = source && !ts.isOmittedExpression(source)
-          ? resolveAliasPath(staticPropertyPath(ts.isSpreadElement(source) ? source.expression : source))
-          : null;
+        const sourcePaths = source && !ts.isOmittedExpression(source)
+          ? resolveAliasPaths(possiblePropertyPaths(ts.isSpreadElement(source) ? source.expression : source))
+          : [];
         const elementTarget = ts.isBindingElement(element)
           ? element.name
           : ts.isSpreadElement(element)
             ? element.expression
             : element;
-        changed = recordBindingAliases(elementTarget, sourcePath) || changed;
+        changed = recordBindingAliases(elementTarget, sourcePaths) || changed;
       }
       return changed;
     }
-    return recordBindingAliases(target, resolveAliasPath(staticPropertyPath(expression)));
+    return recordBindingAliases(target, resolveAliasPaths(possiblePropertyPaths(expression)));
   };
   const aliasAssignments = new Set();
   let aliasesChanged = true;
@@ -477,7 +521,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
       aliasesChanged = changed || aliasesChanged;
     });
   }
-  const governedPath = (node) => resolveAliasPath(staticPropertyPath(node));
+  const governedPaths = (node) => resolveAliasPaths(possiblePropertyPaths(node));
   const recordPath = (path, affectsDescendants = false) => {
     if (!path) return;
     for (const [label, governedPath] of GOVERNED_V2_DEPENDENCY_PATHS) {
@@ -495,11 +539,11 @@ function governedV2DependencyMutationFailures(sourceFile) {
       && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
       if (aliasAssignments.has(node)) return;
-      recordPath(governedPath(node.left));
+      for (const path of governedPaths(node.left)) recordPath(path);
       return;
     }
     if (ts.isDeleteExpression(node)) {
-      recordPath(governedPath(node.expression));
+      for (const path of governedPaths(node.expression)) recordPath(path);
       return;
     }
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
@@ -507,37 +551,37 @@ function governedV2DependencyMutationFailures(sourceFile) {
     const method = node.expression.name.text;
     const ownerName = ts.isIdentifier(owner) ? owner.text : null;
     if ((ownerName === 'Object' || ownerName === 'Reflect') && method === 'defineProperty') {
-      const objectPath = node.arguments[0] ? governedPath(node.arguments[0]) : null;
+      const objectPaths = node.arguments[0] ? governedPaths(node.arguments[0]) : [];
       const property = node.arguments[1] && unwrapExpression(node.arguments[1]);
-      if (objectPath && property && (ts.isStringLiteral(property) || ts.isNumericLiteral(property))) {
-        recordPath([...objectPath, property.text]);
+      if (objectPaths.length > 0 && property && (ts.isStringLiteral(property) || ts.isNumericLiteral(property))) {
+        for (const objectPath of objectPaths) recordPath([...objectPath, property.text]);
       } else {
-        recordPath(objectPath, true);
+        for (const objectPath of objectPaths) recordPath(objectPath, true);
       }
       return;
     }
     if (ownerName === 'Reflect' && method === 'set') {
-      const objectPath = node.arguments[0] ? governedPath(node.arguments[0]) : null;
+      const objectPaths = node.arguments[0] ? governedPaths(node.arguments[0]) : [];
       const property = node.arguments[1] && unwrapExpression(node.arguments[1]);
-      if (objectPath && property && (ts.isStringLiteral(property) || ts.isNumericLiteral(property))) {
-        recordPath([...objectPath, property.text]);
+      if (objectPaths.length > 0 && property && (ts.isStringLiteral(property) || ts.isNumericLiteral(property))) {
+        for (const objectPath of objectPaths) recordPath([...objectPath, property.text]);
       } else {
-        recordPath(objectPath, true);
+        for (const objectPath of objectPaths) recordPath(objectPath, true);
       }
       return;
     }
     if (ownerName === 'Object' && method === 'defineProperties') {
-      const objectPath = node.arguments[0] ? governedPath(node.arguments[0]) : null;
+      const objectPaths = node.arguments[0] ? governedPaths(node.arguments[0]) : [];
       const descriptors = node.arguments[1] && unwrapExpression(node.arguments[1]);
-      if (!objectPath || !descriptors || !ts.isObjectLiteralExpression(descriptors)) {
-        recordPath(objectPath, true);
+      if (objectPaths.length === 0 || !descriptors || !ts.isObjectLiteralExpression(descriptors)) {
+        for (const objectPath of objectPaths) recordPath(objectPath, true);
         return;
       }
       for (const property of descriptors.properties) {
         if (ts.isPropertyAssignment(property) || ts.isMethodDeclaration(property)) {
-          recordPath([...objectPath, propertyNameText(property.name)]);
+          for (const objectPath of objectPaths) recordPath([...objectPath, propertyNameText(property.name)]);
         } else {
-          recordPath(objectPath, true);
+          for (const objectPath of objectPaths) recordPath(objectPath, true);
         }
       }
       return;
@@ -546,18 +590,18 @@ function governedV2DependencyMutationFailures(sourceFile) {
       (ownerName === 'Object' || ownerName === 'Reflect')
       && method === 'setPrototypeOf'
     ) {
-      recordPath(node.arguments[0] ? governedPath(node.arguments[0]) : null, true);
+      for (const path of node.arguments[0] ? governedPaths(node.arguments[0]) : []) recordPath(path, true);
       return;
     }
     if (ownerName !== 'Object' || method !== 'assign') return;
-    const objectPath = node.arguments[0] ? governedPath(node.arguments[0]) : null;
-    if (!objectPath) return;
+    const objectPaths = node.arguments[0] ? governedPaths(node.arguments[0]) : [];
+    if (objectPaths.length === 0) return;
     for (const source of node.arguments.slice(1)) {
       const unwrapped = unwrapExpression(source);
       if (!ts.isObjectLiteralExpression(unwrapped)) continue;
       for (const property of unwrapped.properties) {
         if (ts.isPropertyAssignment(property) || ts.isMethodDeclaration(property)) {
-          recordPath([...objectPath, propertyNameText(property.name)]);
+          for (const objectPath of objectPaths) recordPath([...objectPath, propertyNameText(property.name)]);
         }
       }
     }

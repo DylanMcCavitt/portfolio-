@@ -588,6 +588,36 @@ test('rejects replacement of current-run project map methods through an assignme
   ));
 });
 
+test('rejects replacement of current-run project map methods through a conditional alias', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const siteBrief =',
+    `const projectMap = contract === 'v2' ? artifacts.projects : new Map();
+  projectMap.has = () => false;
+  const siteBrief =`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.deepEqual(result.failures, [
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ]);
+});
+
+test('rejects replacement of current-run project map methods through a logical alias', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const siteBrief =',
+    `const projectMap = (artifacts.projects ?? new Map());
+  projectMap.has = () => false;
+  const siteBrief =`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.deepEqual(result.failures, [
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ]);
+});
+
 test('rejects replacement of current-run project map methods through a destructuring assignment alias', async (t) => {
   const root = await createCleanFixture(t);
   await mutateRuntime(root, (runtime) => runtime.replace(
