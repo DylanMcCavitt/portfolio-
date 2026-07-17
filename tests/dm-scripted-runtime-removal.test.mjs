@@ -910,6 +910,8 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; const box: any = {}; function seed(k: string) { box[k] = fn; } seed('fn'); const carrier = ({ ...{ value: box } }).value; const key = ['con', 'structor'].join(''); let C: any; [C] = [carrier.fn[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const callable = ({ value: fn }).value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const callable = true ? fn : (() => {}); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const holder = { value: fn }; const callable = ({ ...holder }).value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const holder = { value: fn }; const callable = (true ? holder : { value: null }).value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1482,6 +1484,10 @@ const ArtifactReferenceSchema =`,
     runtime.replace('  const siteBrief =', "  Object.prototype.__defineGetter__('poisoned', () => 'yes');\n  const siteBrief ="),
     runtime.replace('  const siteBrief =', "  function patch(name: string, root: any = globalThis) { const C = root[name]; const P = Reflect.get(C, 'prototype'); P.add = function () { return this; }; } patch('Set');\n  const siteBrief ="),
     runtime.replace('  const siteBrief =', "  const expose = () => globalThis; const root = expose(); const name = ['S', 'et'].join(''); const C = root[name]; const P = Reflect.get(C, 'prototype'); P.add = function () { return this; };\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  (Array.prototype as any)[0]++;\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  for ((Array.prototype as any)[0] of ['poison']) {}\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  const root: any = global; const name = ['S', 'et'].join(''); const C = root[name]; const P = Reflect.get(C, 'prototype'); P.add = function () { return this; };\n  const siteBrief ="),
+    runtime.replace('  const siteBrief =', "  const root: any = (globalThis as any).global; const descriptors = Object.getOwnPropertyDescriptors(root); const name = ['S', 'et'].join(''); const C = descriptors[name].value; const P = Reflect.get(C, 'prototype'); P.add = function () { return this; };\n  const siteBrief ="),
   ];
   for (const [index, mutated] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1554,6 +1560,12 @@ test('rejects governed dependency and schema escapes through generators and clas
 
 test('rejects governed dependency and schema escapes through property stores and throws', async (t) => {
   const runtime = await liveRuntimeSource();
+  const publicToolsStart = `function createRuntimePublicTools(
+  run: PublicAgentToolRun,
+  artifacts: RunArtifacts,
+  metrics: ReturnType<typeof createDMMetricsRecorder>,
+  gate: PublicToolGate,
+) {`;
   const mutations = [
     runtime.replace(
       '  const siteBrief =',
@@ -1619,6 +1631,38 @@ test('rejects governed dependency and schema escapes through property stores and
       '  const siteBrief =',
       "  const projects = artifacts.projects;\n  projects.set('forged', {} as any);\n  const siteBrief =",
     ),
+    runtime.replace(
+      publicToolsStart,
+      `${publicToolsStart}\n  artifacts.projects.set('forged', {} as any);`,
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  artifacts.projects['clear']();\n  const siteBrief =",
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  const projects = artifacts.projects;\n  projects['set']('forged', {} as any);\n  const siteBrief =",
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  const method = Date.now() > 0 ? 'clear' : 'get';\n  (artifacts.projects as any)[method]();\n  const siteBrief =",
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  (artifacts.projects as any).forged++;\n  const siteBrief =",
+    ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  for ((artifacts.projects as any).forged of [1]) {}\n  const siteBrief =",
+    ),
+    runtime.replace(
+      "  const agentTools = contract === 'v2'",
+      "  (V2FinalAnswerInputSchema as any).parse++;\n  const agentTools = contract === 'v2'",
+    ),
+    runtime.replace(
+      "  const agentTools = contract === 'v2'",
+      "  for ((V2FinalAnswerInputSchema as any).parse of [(value: unknown) => value]) {}\n  const agentTools = contract === 'v2'",
+    ),
   ];
   const expected = [
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
@@ -1637,6 +1681,14 @@ test('rejects governed dependency and schema escapes through property stores and
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.resumeTracks must not be replaced or redefined',
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.sources must not be replaced or redefined',
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated',
+    'src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated',
   ];
   for (const [index, mutated] of mutations.entries()) {
     await t.test(String(index), () => {

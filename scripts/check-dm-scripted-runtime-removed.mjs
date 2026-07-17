@@ -450,6 +450,35 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return [];
   };
+  const literalMemberPaths = (node, key) => {
+    const expression = unwrapExpression(node);
+    if (ts.isConditionalExpression(expression)) {
+      return [
+        ...literalMemberPaths(expression.whenTrue, key),
+        ...literalMemberPaths(expression.whenFalse, key),
+      ];
+    }
+    if (ts.isBinaryExpression(expression)) {
+      if (expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+        return literalMemberPaths(expression.right, key);
+      }
+      if (
+        expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+        || expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+        || expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      ) return [
+        ...literalMemberPaths(expression.left, key),
+        ...literalMemberPaths(expression.right, key),
+      ];
+    }
+    if (ts.isObjectLiteralExpression(expression)) {
+      return expression.properties.flatMap((property) => (
+        ts.isSpreadAssignment(property) ? literalMemberPaths(property.expression, key) : []
+      ));
+    }
+    const path = staticPropertyPath(expression, constBindings);
+    return path ? [`${path.join('.')}.${key}`] : [];
+  };
   const recordCallableTarget = (target) => {
     const collection = target.includes('.') ? callablePaths : callableBindings;
     if (collection.has(target)) return false;
@@ -485,14 +514,26 @@ function dynamicCodeExecutionFailures(sourceFile) {
       callableContainers.add(target);
       return true;
     }
-    if (ts.isPropertyAccessExpression(expression)) return literalMemberValues(
-      expression.expression,
-      expression.name.text,
-    ).some((value) => propagateCallableInitializer(target, value));
+    const propagateMember = (receiver, key) => {
+      let changed = literalMemberValues(receiver, key)
+        .some((value) => propagateCallableInitializer(target, value));
+      for (const memberPath of literalMemberPaths(receiver, key)) {
+        if (callableBindings.has(memberPath) || callablePaths.has(memberPath)) {
+          changed = recordCallableTarget(target) || changed;
+        }
+        if (isCallableContainer(memberPath) && !callableContainers.has(target)) {
+          callableContainers.add(target);
+          changed = true;
+        }
+      }
+      return changed;
+    };
+    if (ts.isPropertyAccessExpression(expression)) {
+      return propagateMember(expression.expression, expression.name.text);
+    }
     if (ts.isElementAccessExpression(expression) && expression.argumentExpression) {
       const key = staticStringValue(expression.argumentExpression, constBindings);
-      if (key !== null) return literalMemberValues(expression.expression, key)
-        .some((value) => propagateCallableInitializer(target, value));
+      if (key !== null) return propagateMember(expression.expression, key);
     }
     let changed = false;
     if (ts.isArrayLiteralExpression(expression)) {
@@ -878,6 +919,37 @@ function possiblePropertyPaths(node) {
   return path ? [path] : [];
 }
 
+function assignmentTargetExpressions(node) {
+  const target = unwrapExpression(node);
+  if (
+    ts.isIdentifier(target)
+    || ts.isPropertyAccessExpression(target)
+    || ts.isElementAccessExpression(target)
+  ) return [target];
+  if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    return assignmentTargetExpressions(target.left);
+  }
+  if (ts.isArrayLiteralExpression(target) || ts.isArrayBindingPattern(target)) {
+    return target.elements.flatMap((element) => {
+      if (ts.isOmittedExpression(element)) return [];
+      if (ts.isBindingElement(element)) return assignmentTargetExpressions(element.name);
+      return assignmentTargetExpressions(ts.isSpreadElement(element) ? element.expression : element);
+    });
+  }
+  if (ts.isObjectLiteralExpression(target)) {
+    return target.properties.flatMap((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) return assignmentTargetExpressions(property.name);
+      if (ts.isPropertyAssignment(property)) return assignmentTargetExpressions(property.initializer);
+      if (ts.isSpreadAssignment(property)) return assignmentTargetExpressions(property.expression);
+      return [];
+    });
+  }
+  if (ts.isObjectBindingPattern(target)) {
+    return target.elements.flatMap((element) => assignmentTargetExpressions(element.name));
+  }
+  return [];
+}
+
 function containedPropertyPaths(node) {
   const paths = [];
   const visit = (current) => {
@@ -927,6 +999,14 @@ function trustedPrimitiveMutationFailures(sourceFile) {
   const aliasAssignments = new Set();
   const intrinsicValues = new Map();
   const ambiguousIntrinsicValues = new Set();
+  const canonicalGlobalPath = (path) => {
+    if (!path) return null;
+    let canonical = path[0] === 'global' ? ['globalThis', ...path.slice(1)] : [...path];
+    while (canonical[0] === 'globalThis' && canonical[1] === 'global') {
+      canonical = ['globalThis', ...canonical.slice(2)];
+    }
+    return canonical;
+  };
   const intrinsicPrototypeForValue = (node) => {
     const target = unwrapExpression(node);
     if (ts.isIdentifier(target) && intrinsicValues.has(target.text)) return intrinsicValues.get(target.text);
@@ -974,7 +1054,7 @@ function trustedPrimitiveMutationFailures(sourceFile) {
   const resolveDirectPath = (node) => {
     const expression = unwrapExpression(node);
     const resolvedCalleePath = (callee) => {
-      let path = staticPropertyPath(callee, constBindings);
+      let path = canonicalGlobalPath(staticPropertyPath(callee, constBindings));
       if (!path) return null;
       const seen = new Set();
       while (!seen.has(path.join('.'))) {
@@ -1004,9 +1084,9 @@ function trustedPrimitiveMutationFailures(sourceFile) {
             return [...carrier, ...path.slice(length + 1)];
           }
         }
-        if (!expanded) return path;
+        if (!expanded) return canonicalGlobalPath(path);
       }
-      return path;
+      return canonicalGlobalPath(path);
     };
     const canonicalIntrinsic = (path) => {
       const name = path?.length === 1
@@ -1156,7 +1236,7 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       const parent = property === null ? null : resolveDirectPath(expression.expression);
       if (parent && property !== null) return [...parent, property];
     }
-    return staticPropertyPath(expression, constBindings);
+    return canonicalGlobalPath(staticPropertyPath(expression, constBindings));
   };
   const expandAlias = (path) => {
     if (!path) return null;
@@ -1360,6 +1440,16 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       && governed(resolvePath(node.left))
     ) mutated = true;
     if (ts.isDeleteExpression(node) && governed(resolvePath(node.expression))) mutated = true;
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
+      && governed(resolvePath(node.operand))
+    ) mutated = true;
+    if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node))
+      && !ts.isVariableDeclarationList(node.initializer)
+      && assignmentTargetExpressions(node.initializer).some((target) => governed(resolvePath(target)))
+    ) mutated = true;
     if (!ts.isCallExpression(node)) return;
     const calleePath = resolvePath(node.expression);
     const method = calleePath?.at(-1);
@@ -1631,7 +1721,27 @@ function governedV2DependencyMutationFailures(sourceFile) {
       'artifacts.resumeTracks',
       'artifacts.sources',
     ].includes(path.join('.'))
-    && hasFunctionDeclarationAncestor(node, 'createRuntimePublicTools')
+    && authorizedArtifactCollectionWrites.has(node)
+  );
+
+  const trustedArtifactCollectionWriteTexts = new Set([
+    'artifacts.projects.set(project.id, project)',
+    'artifacts.projects.set(result.project.id, result.project)',
+    'artifacts.resumeTracks.set(track.id, track)',
+    'artifacts.sources.set(source.id, source)',
+  ]);
+  const trustedArtifactCollectionWriteNodes = new Map(
+    [...trustedArtifactCollectionWriteTexts].map((text) => [text, []]),
+  );
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    const calls = trustedArtifactCollectionWriteNodes.get(node.getText(sourceFile));
+    if (calls) calls.push(node);
+  });
+  const authorizedArtifactCollectionWrites = new Set(
+    [...trustedArtifactCollectionWriteNodes.values()].every((calls) => calls.length === 1)
+      ? [...trustedArtifactCollectionWriteNodes.values()].flat()
+      : [],
   );
 
   walk(sourceFile, (node) => {
@@ -1651,10 +1761,34 @@ function governedV2DependencyMutationFailures(sourceFile) {
       for (const path of governedPaths(node.expression)) recordPath(path);
       return;
     }
-    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
-    const owner = node.expression.expression;
-    const method = node.expression.name.text;
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
+    ) {
+      for (const path of governedPaths(node.operand)) recordPath(path);
+      return;
+    }
+    if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node))
+      && !ts.isVariableDeclarationList(node.initializer)
+    ) {
+      for (const target of assignmentTargetExpressions(node.initializer)) {
+        for (const path of governedPaths(target)) recordPath(path);
+      }
+      return;
+    }
+    if (!ts.isCallExpression(node)) return;
+    const callee = unwrapExpression(node.expression);
+    if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return;
+    const owner = callee.expression;
+    const method = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : callee.argumentExpression && staticStringValue(callee.argumentExpression);
     const ownerName = ts.isIdentifier(owner) ? owner.text : null;
+    if (method === null) {
+      for (const path of governedPaths(owner)) recordPath(path);
+      return;
+    }
     if (['set', 'delete', 'clear'].includes(method)) {
       for (const path of governedPaths(owner)) {
         if (!isAuthorizedArtifactCollectionWrite(node, path, method)) recordPath(path);
@@ -2266,6 +2400,18 @@ function governedSchemaMutationFailures(sourceFile) {
       if (governedPaths(node.expression).some(mutatesGovernedSchema)) mutated = true;
       return;
     }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
+      && governedPaths(node.operand).some(mutatesGovernedSchema)
+    ) mutated = true;
+    if (
+      (ts.isForInStatement(node) || ts.isForOfStatement(node))
+      && !ts.isVariableDeclarationList(node.initializer)
+      && assignmentTargetExpressions(node.initializer).some((target) => (
+        governedPaths(target).some(mutatesGovernedSchema)
+      ))
+    ) mutated = true;
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
     const owner = node.expression.expression;
     if (!ts.isIdentifier(owner) || !['Object', 'Reflect'].includes(owner.text)) return;
