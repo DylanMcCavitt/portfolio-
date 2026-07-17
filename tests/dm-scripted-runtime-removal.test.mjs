@@ -18,6 +18,7 @@ const NDJSON_MEDIA_TYPE = 'application/x-ndjson';
 
 const CLEAN_RUNTIME_FIXTURE = `
 import { ToolLoopAgent, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream, tool } from 'ai';
+import { z } from 'zod';
 function readDMRuntimeConfig(env) {
   const configuredContract = env.DM_CONTRACT?.trim();
   const contract: DMContractVersion = configuredContract === 'v2' ? 'v2' : 'v1';
@@ -29,7 +30,13 @@ function readDMRuntimeConfig(env) {
 const ConversationalActSchema = {};
 const LimitationCodeSchema = {};
 const FollowUpCodeSchema = {};
-const ArtifactReferenceSchema = {};
+const ArtifactReferenceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('project'), id: z.string().trim().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('resume'), id: z.string().trim().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('contact'), id: z.literal('contact') }),
+  z.strictObject({ kind: z.literal('evidence'), id: z.string().trim().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('links'), id: z.string().trim().min(1).max(200) }),
+]);
 const MAX_FINALIZATION_ARTIFACTS = 8;
 const FINALIZATION_ENUM_COPY = {
   conversational: {},
@@ -43,7 +50,7 @@ const AnswerSegmentInputSchema = z.discriminatedUnion('kind', [
 ]);
 const FinalAnswerInputSchema = z.strictObject({
   segments: z.array(AnswerSegmentInputSchema),
-  artifacts: z.array(z.unknown()),
+  artifacts: z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS),
   limitations: z.array(LimitationCodeSchema).max(4),
   followUp: FollowUpCodeSchema.optional(),
 });
@@ -429,6 +436,70 @@ test('rejects a behavior-gated local schema shadow at the v2 finalizer', async (
   const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
   assert.ok(result.failures.includes(
     'src/lib/dm/runtime.ts: v2 finalizer schema must retain one immutable, unshadowed top-level trusted declaration',
+  ));
+});
+
+test('rejects an aliased zod import even when a local strictObject wrapper preserves behavior', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime
+    .replace("import { z } from 'zod';", "import { z as zod } from 'zod';\nconst z = { ...zod, strictObject: (shape) => zod.strictObject(shape) };")
+  );
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: governed schemas must retain one unaliased, unshadowed, immutable top-level z import from zod',
+  ));
+});
+
+test('rejects a trailing spread that overrides the governed v2 markdown field', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '  followUp: z.string().trim().min(1).max(600).optional(),\n});',
+    "  followUp: z.string().trim().min(1).max(600).optional(),\n  ...{ markdown: z.string() },\n});",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 finalization schema must expose only bounded markdown, evidence ids, artifacts, and optional follow-up',
+  ));
+});
+
+test('rejects a behavior-changing project id refinement in the artifact reference schema', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    "z.strictObject({ kind: z.literal('project'), id: z.string().trim().min(1).max(200) })",
+    "z.strictObject({ kind: z.literal('project'), id: z.string().trim().min(1).max(200).refine((id) => id.startsWith('public-')) })",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: ArtifactReferenceSchema must retain its exact immutable trusted declaration and transitive artifact arms',
+  ));
+});
+
+test('rejects changing the finalization artifact limit from eight to zero', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const MAX_FINALIZATION_ARTIFACTS = 8;',
+    'const MAX_FINALIZATION_ARTIFACTS = 0;',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: MAX_FINALIZATION_ARTIFACTS must remain one immutable top-level constant set to 8 and bound to both finalizer schemas',
+  ));
+});
+
+test('rejects mutation of the governed v2 schema object', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    "const agentTools = contract === 'v2'",
+    "(V2FinalAnswerInputSchema as any).parse = (value) => value;\n  const agentTools = contract === 'v2'",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated',
   ));
 });
 

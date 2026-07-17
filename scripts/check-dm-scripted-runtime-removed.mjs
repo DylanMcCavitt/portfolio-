@@ -163,6 +163,38 @@ function toolBindingFailures(sourceFile) {
   return [];
 }
 
+function zodBindingFailures(sourceFile) {
+  const imports = [];
+  const shadows = [];
+  let bindingWritten = false;
+  walk(sourceFile, (node) => {
+    if (ts.isImportSpecifier(node)) {
+      const importedName = node.propertyName?.text ?? node.name.text;
+      if (importedName !== 'z') return;
+      const declaration = node.parent.parent.parent;
+      imports.push({
+        localName: node.name.text,
+        moduleName: ts.isImportDeclaration(declaration) && ts.isStringLiteral(declaration.moduleSpecifier)
+          ? declaration.moduleSpecifier.text
+          : null,
+      });
+      return;
+    }
+    if (declaresValueName(node, 'z')) shadows.push(node);
+    if (writesValueName(node, 'z')) bindingWritten = true;
+  });
+  if (
+    imports.length !== 1
+    || imports[0].localName !== 'z'
+    || imports[0].moduleName !== 'zod'
+    || shadows.length > 0
+    || bindingWritten
+  ) {
+    return ['src/lib/dm/runtime.ts: governed schemas must retain one unaliased, unshadowed, immutable top-level z import from zod'];
+  }
+  return [];
+}
+
 const SDK_PRIMITIVE_CALL_KINDS = new Map([
   ['ToolLoopAgent', 'constructor'],
   ['createUIMessageStream', 'call'],
@@ -875,8 +907,99 @@ function v2SchemaBindingFailures(sourceFile) {
   return [];
 }
 
+const TRUSTED_ARTIFACT_REFERENCE_SCHEMA = compactSyntax(`
+  const ArtifactReferenceSchema = z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('project'), id: z.string().trim().min(1).max(200) }),
+    z.strictObject({ kind: z.literal('resume'), id: z.string().trim().min(1).max(200) }),
+    z.strictObject({ kind: z.literal('contact'), id: z.literal('contact') }),
+    z.strictObject({ kind: z.literal('evidence'), id: z.string().trim().min(1).max(200) }),
+    z.strictObject({ kind: z.literal('links'), id: z.string().trim().min(1).max(200) }),
+  ]);
+`);
+
+function governedSchemaDeclarationFailures(sourceFile) {
+  const failures = [];
+  const artifactDeclarations = [];
+  const limitDeclarations = [];
+  let artifactWritten = false;
+  let limitWritten = false;
+  let limitReferences = 0;
+  walk(sourceFile, (node) => {
+    if (declaresValueName(node, 'ArtifactReferenceSchema')) artifactDeclarations.push(node);
+    if (declaresValueName(node, 'MAX_FINALIZATION_ARTIFACTS')) limitDeclarations.push(node);
+    if (writesValueName(node, 'ArtifactReferenceSchema')) artifactWritten = true;
+    if (writesValueName(node, 'MAX_FINALIZATION_ARTIFACTS')) limitWritten = true;
+    if (
+      ts.isIdentifier(node)
+      && node.text === 'MAX_FINALIZATION_ARTIFACTS'
+      && !(
+        ts.isVariableDeclaration(node.parent)
+        && node.parent.name === node
+      )
+    ) limitReferences += 1;
+  });
+  const artifactDeclaration = artifactDeclarations.find((node) => (
+    ts.isVariableDeclaration(node)
+    && ts.isVariableDeclarationList(node.parent)
+    && ts.isVariableStatement(node.parent.parent)
+    && node.parent.parent.parent === sourceFile
+    && (node.parent.flags & ts.NodeFlags.Const) !== 0
+  ));
+  if (
+    artifactDeclarations.length !== 1
+    || !artifactDeclaration
+    || compactNode(artifactDeclaration.parent.parent, sourceFile) !== TRUSTED_ARTIFACT_REFERENCE_SCHEMA
+    || artifactWritten
+  ) {
+    failures.push('src/lib/dm/runtime.ts: ArtifactReferenceSchema must retain its exact immutable trusted declaration and transitive artifact arms');
+  }
+  const limitDeclaration = limitDeclarations.find((node) => (
+    ts.isVariableDeclaration(node)
+    && ts.isVariableDeclarationList(node.parent)
+    && ts.isVariableStatement(node.parent.parent)
+    && node.parent.parent.parent === sourceFile
+    && (node.parent.flags & ts.NodeFlags.Const) !== 0
+    && ts.isNumericLiteral(node.initializer)
+    && node.initializer.text === '8'
+  ));
+  if (limitDeclarations.length !== 1 || !limitDeclaration || limitWritten || limitReferences !== 2) {
+    failures.push('src/lib/dm/runtime.ts: MAX_FINALIZATION_ARTIFACTS must remain one immutable top-level constant set to 8 and bound to both finalizer schemas');
+  }
+  return failures;
+}
+
+function governedSchemaMutationFailures(sourceFile) {
+  const governed = new Set(['V2FinalAnswerInputSchema', 'ArtifactReferenceSchema']);
+  let mutated = false;
+  walk(sourceFile, (node) => {
+    if (
+      ts.isBinaryExpression(node)
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      const path = staticPropertyPath(node.left);
+      if (path && governed.has(path[0])) mutated = true;
+    }
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
+    const owner = node.expression.expression;
+    if (!ts.isIdentifier(owner) || !['Object', 'Reflect'].includes(owner.text)) return;
+    const method = node.expression.name.text;
+    if (!['assign', 'defineProperty', 'defineProperties', 'setPrototypeOf'].includes(method)) return;
+    const path = node.arguments[0] ? staticPropertyPath(node.arguments[0]) : null;
+    if (path && governed.has(path[0])) mutated = true;
+  });
+  return mutated
+    ? ['src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated']
+    : [];
+}
+
 function schemaBoundaryFailures(sourceFile) {
-  const failures = v2SchemaBindingFailures(sourceFile);
+  const failures = [
+    ...zodBindingFailures(sourceFile),
+    ...v2SchemaBindingFailures(sourceFile),
+    ...governedSchemaDeclarationFailures(sourceFile),
+    ...governedSchemaMutationFailures(sourceFile),
+  ];
   const compact = (node) => node?.getText(sourceFile).replace(/\s+/g, '') ?? '';
   const expectations = [
     ['conversational', 'act', 'ConversationalActSchema'],
@@ -927,11 +1050,18 @@ function schemaBoundaryFailures(sourceFile) {
     ['artifacts', 'z.array(ArtifactReferenceSchema).max(MAX_FINALIZATION_ARTIFACTS)'],
     ['followUp', 'z.string().trim().min(1).max(600).optional()'],
   ]);
-  const actualV2Names = v2Object?.properties
-    .filter(ts.isPropertyAssignment)
-    .map((property) => propertyNameText(property.name))
-    .sort() ?? [];
-  if (actualV2Names.join(',') !== [...expectedV2Fields.keys()].sort().join(',')) {
+  const actualV2Names = v2Object?.properties.map((property) => (
+    ts.isPropertyAssignment(property)
+    && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+      ? propertyNameText(property.name)
+      : null
+  )) ?? [];
+  if (
+    actualV2Names.some((name) => name === null)
+    || new Set(actualV2Names).size !== expectedV2Fields.size
+    || actualV2Names.length !== expectedV2Fields.size
+    || [...actualV2Names].sort().join(',') !== [...expectedV2Fields.keys()].sort().join(',')
+  ) {
     failures.push('src/lib/dm/runtime.ts: v2 finalization schema must expose only bounded markdown, evidence ids, artifacts, and optional follow-up');
   } else {
     for (const [field, expected] of expectedV2Fields) {
