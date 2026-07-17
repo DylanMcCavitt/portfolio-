@@ -112,10 +112,37 @@ function createDMChatResponse(request, config = {}) {
         if (contract === 'v2' && isV2TextChunk(chunk)) v2Prose.forward(chunk, writer.write);
       }
       finalizationResult ??= limitedResult(finalizationAttempts > 0);
-      const terminalMarkdown = finalizationResult?.answer?.segments?.[0]?.text ?? null;
-      if (terminalMarkdown !== v2Prose.text) finalized = true;
-      if (contract === 'v1') metrics.visibleOutput();
+      if (contract === 'v2') {
+        v2Prose.close((chunk) => writer.write(chunk));
+        const terminalMarkdown = finalizationResult.status === 'accepted'
+          && finalizationResult.answer.segments.length === 1
+          ? finalizationResult.answer.segments[0]?.text
+          : null;
+        if (v2Prose.failed || terminalMarkdown !== v2Prose.text) {
+          const evidence = publicRun.evidenceLedger.snapshot();
+          metrics.setSource(sourceMode(evidence.map((item) => item.source)), evidence.length, true);
+          metrics.setUsage(inputTokens, outputTokens);
+          metrics.setErrorCategory('finalization_validation');
+          writer.write({
+            type: 'error',
+            errorText: 'DM could not safely finish this answer. Please try again.',
+          });
+          writer.write({ type: 'finish' });
+          metrics.error('finalization_validation');
+          return;
+        }
+      }
+      if (
+        finalizationResult.status === 'limited'
+        && (finalizationAttempts > 0 || v2FinalizationValidationFailed)
+      ) {
+        metrics.setErrorCategory('finalization_validation');
+      }
+      const evidence = publicRun.evidenceLedger.snapshot();
+      metrics.setSource(sourceMode(evidence.map((item) => item.source)), evidence.length, finalizationResult.status === 'limited');
+      metrics.setUsage(inputTokens, outputTokens);
       writer.write({ type: 'data-dm-answer', data: finalizationResult });
+      if (contract === 'v1') metrics.visibleOutput();
     },
   });
   new ToolLoopAgent({
@@ -826,6 +853,25 @@ test('the governed v2 finalization allowlist accepts the structural resolver pat
 
   assert.deepEqual(result.failures, []);
 });
+
+for (const [name, mutation] of [
+  ['follow-up', "finalizationResult.answer.followUp = 'forced';"],
+  ['artifact', "finalizationResult.answer.artifacts.push({ kind: 'contact', label: 'forged' });"],
+  ['prose', "finalizationResult.answer.segments[0].text = 'forged';"],
+]) {
+  test(`rejects post-integrity ${name} mutation before the terminal answer write`, async (t) => {
+    const root = await createCleanFixture(t);
+    await mutateRuntime(root, (runtime) => runtime.replace(
+      "writer.write({ type: 'data-dm-answer', data: finalizationResult });",
+      `${mutation}\n      writer.write({ type: 'data-dm-answer', data: finalizationResult });`,
+    ));
+
+    const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+    assert.ok(result.failures.includes(
+      'src/lib/dm/runtime.ts: terminal v2 finalization must remain closed from structural fallback through the sole approved answer write',
+    ));
+  });
+}
 
 test('rejects an aliased SDK tool hidden behind a behavior-mutating local wrapper', async (t) => {
   const root = await createCleanFixture(t);

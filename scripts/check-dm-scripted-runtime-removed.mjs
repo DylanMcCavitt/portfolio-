@@ -258,6 +258,12 @@ function walk(node, visit) {
   ts.forEachChild(node, (child) => walk(child, visit));
 }
 
+function enclosingBlock(node) {
+  let current = node;
+  while (current && !ts.isBlock(current)) current = current.parent;
+  return current ?? null;
+}
+
 function variableDeclaration(sourceFile, name) {
   let match = null;
   walk(sourceFile, (node) => {
@@ -1354,6 +1360,31 @@ function finalizationCallSiteFailures(sourceFile) {
   });
   if (answerWrites.length !== 1 || !executeBelongsToCall(answerWrites[0], 'createUIMessageStream')) {
     failures.push("src/lib/dm/runtime.ts: data-dm-answer must have exactly one validated stream write site");
+  } else {
+    const terminalBlock = enclosingBlock(answerWrites[0]);
+    const answerWriteIndex = terminalBlock?.statements.findIndex(
+      (statement) => statement.pos <= answerWrites[0].pos && statement.end >= answerWrites[0].end,
+    ) ?? -1;
+    const fallbackIndex = terminalBlock?.statements.findIndex(
+      (statement) => compactNode(statement, sourceFile) === 'finalizationResult??=limitedResult(finalizationAttempts>0);',
+    ) ?? -1;
+    const expectedTerminalStatements = [
+      'finalizationResult??=limitedResult(finalizationAttempts>0);',
+      "if(contract==='v2'){v2Prose.close((chunk)=>writer.write(chunk));constterminalMarkdown=finalizationResult.status==='accepted'&&finalizationResult.answer.segments.length===1?finalizationResult.answer.segments[0]?.text:null;if(v2Prose.failed||terminalMarkdown!==v2Prose.text){constevidence=publicRun.evidenceLedger.snapshot();metrics.setSource(sourceMode(evidence.map((item)=>item.source)),evidence.length,true);metrics.setUsage(inputTokens,outputTokens);metrics.setErrorCategory('finalization_validation');writer.write({type:'error',errorText:'DMcouldnotsafelyfinishthisanswer.Pleasetryagain.'});writer.write({type:'finish'});metrics.error('finalization_validation');return;}}",
+      "if(finalizationResult.status==='limited'&&(finalizationAttempts>0||v2FinalizationValidationFailed)){metrics.setErrorCategory('finalization_validation');}",
+      'constevidence=publicRun.evidenceLedger.snapshot();',
+      "metrics.setSource(sourceMode(evidence.map((item)=>item.source)),evidence.length,finalizationResult.status==='limited');",
+      'metrics.setUsage(inputTokens,outputTokens);',
+      "writer.write({type:'data-dm-answer',data:finalizationResult});",
+    ];
+    const actualTerminalStatements = terminalBlock && fallbackIndex >= 0 && answerWriteIndex >= fallbackIndex
+      ? terminalBlock.statements
+        .slice(fallbackIndex, answerWriteIndex + 1)
+        .map((statement) => compactNode(statement, sourceFile))
+      : [];
+    if (actualTerminalStatements.join('\n') !== expectedTerminalStatements.join('\n')) {
+      failures.push('src/lib/dm/runtime.ts: terminal v2 finalization must remain closed from structural fallback through the sole approved answer write');
+    }
   }
   return failures;
 }
