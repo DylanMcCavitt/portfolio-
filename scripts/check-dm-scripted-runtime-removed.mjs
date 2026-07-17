@@ -419,7 +419,10 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ts.isElementAccessExpression(node)
       && node.argumentExpression
       && computedName(node.argumentExpression) === null
-      && couldProduceCallable(node.expression)
+      && (
+        couldProduceCallable(node.expression)
+        || (ts.isCallExpression(node.parent) && node.parent.expression === node)
+      )
     ) unsafe = true;
     if (
       ts.isCallExpression(node)
@@ -705,8 +708,11 @@ function trustedPrimitiveMutationFailures(sourceFile) {
   const aliases = new Map();
   const constBindings = immutableConstBindings(sourceFile);
   const aliasAssignments = new Set();
+  const intrinsicValues = new Map();
+  const ambiguousIntrinsicValues = new Set();
   const intrinsicPrototypeForValue = (node) => {
     const target = unwrapExpression(node);
+    if (ts.isIdentifier(target) && intrinsicValues.has(target.text)) return intrinsicValues.get(target.text);
     if (ts.isArrayLiteralExpression(target)) return ['Array', 'prototype'];
     if (ts.isObjectLiteralExpression(target)) return ['Object', 'prototype'];
     if (ts.isStringLiteral(target) || ts.isNoSubstitutionTemplateLiteral(target)) return ['String', 'prototype'];
@@ -717,6 +723,37 @@ function trustedPrimitiveMutationFailures(sourceFile) {
     ) return [target.expression.text, 'prototype'];
     return null;
   };
+  let intrinsicValuesChanged = true;
+  while (intrinsicValuesChanged) {
+    intrinsicValuesChanged = false;
+    walk(sourceFile, (node) => {
+      let name = null;
+      let initializer = null;
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        name = node.name.text;
+        initializer = node.initializer;
+      } else if (
+        ts.isBinaryExpression(node)
+        && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isIdentifier(unwrapExpression(node.left))
+      ) {
+        name = unwrapExpression(node.left).text;
+        initializer = node.right;
+      }
+      if (!name || !initializer) return;
+      if (ambiguousIntrinsicValues.has(name)) return;
+      const prototype = intrinsicPrototypeForValue(initializer);
+      const existing = intrinsicValues.get(name);
+      if (prototype && existing && existing.join('.') !== prototype.join('.')) {
+        intrinsicValues.delete(name);
+        ambiguousIntrinsicValues.add(name);
+        intrinsicValuesChanged = true;
+      } else if (prototype && !existing) {
+        intrinsicValues.set(name, prototype);
+        intrinsicValuesChanged = true;
+      }
+    });
+  }
   const resolveDirectPath = (node) => {
     const expression = unwrapExpression(node);
     if (
@@ -802,12 +839,33 @@ function trustedPrimitiveMutationFailures(sourceFile) {
     (path[0] === 'z' && path.length > 1)
     || (GOVERNED_INTRINSIC_PROTOTYPES.has(path[0]) && path[1] === 'prototype')
   );
+  const governedStoredValue = (node) => {
+    const path = resolvePath(node);
+    return governed(path) || path?.join('.') === 'z';
+  };
   let mutated = false;
   walk(sourceFile, (node) => {
     const escapesZ = (expression) => resolvePath(expression)?.join('.') === 'z';
     if (ts.isReturnStatement(node) && node.expression && escapesZ(node.expression)) mutated = true;
     if (ts.isArrowFunction(node) && !ts.isBlock(node.body) && escapesZ(node.body)) mutated = true;
     if (ts.isYieldExpression(node) && node.expression && escapesZ(node.expression)) mutated = true;
+    if (ts.isVariableDeclaration(node) && node.initializer && governedStoredValue(node.initializer)) mutated = true;
+    if (
+      ts.isBinaryExpression(node)
+      && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && governedStoredValue(node.right)
+    ) mutated = true;
+    if (
+      ts.isArrayLiteralExpression(node)
+      && node.elements.some((element) => (
+        !ts.isOmittedExpression(element)
+        && governedStoredValue(ts.isSpreadElement(element) ? element.expression : element)
+      ))
+    ) mutated = true;
+    if (
+      ts.isPropertyAssignment(node)
+      && governedStoredValue(node.initializer)
+    ) mutated = true;
     if (
       ts.isBinaryExpression(node)
       && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
@@ -877,7 +935,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
     const existing = aliases.get(name) ?? [];
     const existingKeys = new Set(existing.map((path) => path.join('.')));
     const additions = resolveAliasPaths(paths).filter((path) => (
-      !(path.length === 1 && path[0] === name) && !existingKeys.has(path.join('.'))
+      path.join('.') !== name && !existingKeys.has(path.join('.'))
     ));
     if (additions.length === 0) return false;
     aliases.set(name, [...existing, ...additions]);
@@ -961,6 +1019,13 @@ function governedV2DependencyMutationFailures(sourceFile) {
   const recordAssignmentAliases = (name, initializer) => {
     const expression = unwrapExpression(initializer);
     const target = unwrapExpression(name);
+    const targetPath = staticPropertyPath(target);
+    if (targetPath && targetPath.length > 1) {
+      return recordAlias(
+        targetPath.join('.'),
+        resolveAliasPaths(possiblePropertyPaths(expression)),
+      );
+    }
     if (ts.isIdentifier(target) && ts.isObjectLiteralExpression(expression)) {
       let changed = false;
       for (const property of expression.properties) {
@@ -1037,6 +1102,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
       && !ts.isBlock(node.body)
     ) recordGovernedEscape(node.body);
     if (ts.isYieldExpression(node) && node.expression) recordGovernedEscape(node.expression);
+    if (ts.isThrowStatement(node) && node.expression) recordGovernedEscape(node.expression);
     if (ts.isPropertyDeclaration(node) && node.initializer) recordGovernedEscape(node.initializer);
   });
   walk(sourceFile, (node) => {
@@ -1530,7 +1596,7 @@ function governedSchemaMutationFailures(sourceFile) {
     const existing = aliases.get(name) ?? [];
     const existingKeys = new Set(existing.map((path) => path.join('.')));
     const additions = resolveAliasPaths(paths).filter((path) => (
-      !(path.length === 1 && path[0] === name) && !existingKeys.has(path.join('.'))
+      path.join('.') !== name && !existingKeys.has(path.join('.'))
     ));
     if (additions.length === 0) return false;
     aliases.set(name, [...existing, ...additions]);
@@ -1578,6 +1644,13 @@ function governedSchemaMutationFailures(sourceFile) {
   const recordAssignmentAliases = (name, initializer) => {
     const expression = unwrapExpression(initializer);
     const target = unwrapExpression(name);
+    const targetPath = staticPropertyPath(target);
+    if (targetPath && targetPath.length > 1) {
+      return recordAlias(
+        targetPath.join('.'),
+        resolveAliasPaths(possiblePropertyPaths(expression)),
+      );
+    }
     if (ts.isIdentifier(target) && ts.isObjectLiteralExpression(expression)) {
       let changed = false;
       for (const property of expression.properties) {
@@ -1641,6 +1714,9 @@ function governedSchemaMutationFailures(sourceFile) {
       && governedPaths(node.body).some(mutatesGovernedSchema)
     ) mutated = true;
     if (ts.isYieldExpression(node) && node.expression && governedPaths(node.expression).some(mutatesGovernedSchema)) {
+      mutated = true;
+    }
+    if (ts.isThrowStatement(node) && node.expression && governedPaths(node.expression).some(mutatesGovernedSchema)) {
       mutated = true;
     }
     if (ts.isPropertyDeclaration(node) && node.initializer && governedPaths(node.initializer).some(mutatesGovernedSchema)) {
