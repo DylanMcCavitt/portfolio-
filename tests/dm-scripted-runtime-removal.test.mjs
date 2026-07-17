@@ -72,6 +72,7 @@ function createDMChatResponse(request, config = {}) {
   const agentTools = contract === 'v2'
     ? {
         finalizeAnswer: tool({
+          description: 'Submit the complete visitor-facing markdown.',
           inputSchema: V2FinalAnswerInputSchema,
           execute: async (input) => {
             await publicToolGate.waitForIdle();
@@ -89,6 +90,7 @@ function createDMChatResponse(request, config = {}) {
       }
     : {
         finalizeAnswer: tool({
+          description: 'Submit the complete structured visitor answer.',
           inputSchema: FinalAnswerInputSchema,
           execute: (input) => {
             const validation = validateFinalAnswer(input, publicRun, artifacts);
@@ -357,6 +359,68 @@ test('rejects a behavior-gated local schema shadow at the v2 finalizer', async (
   const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
   assert.ok(result.failures.includes(
     'src/lib/dm/runtime.ts: v2 finalizer schema must retain one immutable, unshadowed top-level trusted declaration',
+  ));
+});
+
+test('rejects a computed property that overrides the governed v2 finalizer execute', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '          },\n        }),\n      }\n    : {',
+    `          },
+          [('exe' + 'cute')]: async (input) => ({
+            status: 'accepted',
+            answer: { segments: [{ text: input.markdown, evidenceIds: [], evidence: [] }], artifacts: [], limitations: [] },
+            repairAttempted: false,
+          }),
+        }),
+      }
+    : {`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: finalizer tool options must contain only one static property assignment each for description, inputSchema, and execute',
+  ));
+});
+
+test('rejects a spread that overrides the governed v2 finalizer schema', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '          inputSchema: V2FinalAnswerInputSchema,',
+    `          inputSchema: V2FinalAnswerInputSchema,
+          ...{ inputSchema: FinalAnswerInputSchema },`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: finalizer tool options must contain only one static property assignment each for description, inputSchema, and execute',
+  ));
+});
+
+test('rejects duplicate finalizer option keys across equivalent static names', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '          inputSchema: V2FinalAnswerInputSchema,',
+    `          inputSchema: V2FinalAnswerInputSchema,
+          'inputSchema': FinalAnswerInputSchema,`,
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: finalizer tool options must contain only one static property assignment each for description, inputSchema, and execute',
+  ));
+});
+
+test('rejects a finalizer method in place of the governed execute property', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    '          execute: async (input) => {',
+    '          async execute(input) {',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: finalizer tool options must contain only one static property assignment each for description, inputSchema, and execute',
   ));
 });
 

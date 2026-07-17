@@ -383,6 +383,21 @@ function objectProperty(object, name) {
   )) ?? null;
 }
 
+const FINALIZER_OPTION_NAMES = ['description', 'inputSchema', 'execute'];
+
+function closedFinalizerOptions(object) {
+  if (!ts.isObjectLiteralExpression(object) || object.properties.length !== FINALIZER_OPTION_NAMES.length) return null;
+  const properties = new Map();
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) return null;
+    if (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) return null;
+    const name = propertyNameText(property.name);
+    if (!FINALIZER_OPTION_NAMES.includes(name) || properties.has(name)) return null;
+    properties.set(name, property);
+  }
+  return FINALIZER_OPTION_NAMES.every((name) => properties.has(name)) ? properties : null;
+}
+
 function compactNode(node, sourceFile) {
   return node?.getText(sourceFile).replace(/\s+/g, '').replace(/,([}\]])/g, '$1') ?? '';
 }
@@ -465,10 +480,11 @@ function finalizeExecuteForSchema(root, sourceFile, schemaName) {
   walk(root, (node) => {
     if (match || !ts.isCallExpression(node) || !callIsNamed(node, 'tool')) return;
     const options = node.arguments[0];
-    if (!ts.isObjectLiteralExpression(options)) return;
-    const inputSchema = objectProperty(options, 'inputSchema');
+    const closedOptions = closedFinalizerOptions(options);
+    if (!closedOptions) return;
+    const inputSchema = closedOptions.get('inputSchema');
     if (compactNode(inputSchema?.initializer, sourceFile) !== schemaName) return;
-    const execute = objectProperty(options, 'execute');
+    const execute = closedOptions.get('execute');
     if (!execute || !ts.isArrowFunction(execute.initializer)) return;
     match = execute.initializer;
   });
@@ -676,15 +692,23 @@ function v2ContractFailures(sourceFile) {
   }
 
   const finalizerSchemas = [];
+  let finalizerOptionsClosed = true;
   walk(chatResponse ?? sourceFile, (node) => {
     if (!ts.isPropertyAssignment(node) || propertyNameText(node.name) !== 'finalizeAnswer') return;
     const call = node.initializer;
     if (!ts.isCallExpression(call) || !callIsNamed(call, 'tool')) return;
     const options = call.arguments[0];
-    if (!ts.isObjectLiteralExpression(options)) return;
-    const inputSchema = objectProperty(options, 'inputSchema');
+    const closedOptions = closedFinalizerOptions(options);
+    if (!closedOptions) {
+      finalizerOptionsClosed = false;
+      return;
+    }
+    const inputSchema = closedOptions.get('inputSchema');
     finalizerSchemas.push(compact(inputSchema?.initializer));
   });
+  if (!finalizerOptionsClosed) {
+    failures.push('src/lib/dm/runtime.ts: finalizer tool options must contain only one static property assignment each for description, inputSchema, and execute');
+  }
   if (
     finalizerSchemas.length !== 2
     || finalizerSchemas.filter((schema) => schema === 'FinalAnswerInputSchema').length !== 1
@@ -733,7 +757,7 @@ function v2ContractFailures(sourceFile) {
     "finalizationResult={status:'accepted',answer:resolveV2FinalAnswer(input,publicRun,artifacts),repairAttempted:false};",
     'returnfinalizationResult;',
   ];
-  const actualExecuteStatements = ts.isBlock(v2Execute?.body)
+  const actualExecuteStatements = v2Execute && ts.isBlock(v2Execute.body)
     ? v2Execute.body.statements.map((statement) => compactNode(statement, sourceFile))
     : [];
   const expectedResolverStatements = [
