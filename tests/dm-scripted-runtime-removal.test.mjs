@@ -67,6 +67,122 @@ const DM_V2_SYSTEM_INSTRUCTIONS = [
   'Emit markdown through the standard response text stream and ensure finalizeAnswer exactly equals that streamed text.',
   'The finalizer is an integrity echo, not a second answer.',
 ];
+const MAX_V2_PROSE_CODE_UNITS = 6_000;
+type V2TextChunk = Extract<UIMessageChunk, {
+  type: 'text-start' | 'text-delta' | 'text-end';
+}>;
+interface BoundedV2Prose {
+  readonly text: string;
+  readonly failed: boolean;
+  forward(chunk: V2TextChunk, write: (chunk: UIMessageChunk) => void): boolean;
+  close(write: (chunk: UIMessageChunk) => void): void;
+}
+function isV2TextChunk(chunk: UIMessageChunk): chunk is V2TextChunk {
+  return chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end';
+}
+function createBoundedV2Prose(): BoundedV2Prose {
+  const sourceOpen = new Set<string>();
+  const forwardedOpen = new Set<string>();
+  const pendingHighSurrogate = new Map<string, string>();
+  let text = '';
+  let failed = false;
+
+  const fail = (): void => {
+    failed = true;
+  };
+
+  const forward = (chunk: V2TextChunk, write: (chunk: UIMessageChunk) => void): boolean => {
+    if (chunk.type === 'text-start') {
+      if (sourceOpen.has(chunk.id)) fail();
+      else sourceOpen.add(chunk.id);
+      return false;
+    }
+
+    if (!sourceOpen.has(chunk.id)) {
+      fail();
+      return false;
+    }
+
+    if (chunk.type === 'text-end') {
+      if (pendingHighSurrogate.has(chunk.id)) fail();
+      pendingHighSurrogate.delete(chunk.id);
+      sourceOpen.delete(chunk.id);
+      if (forwardedOpen.delete(chunk.id)) {
+        write({ type: 'text-end', id: chunk.id });
+      }
+      return false;
+    }
+
+    if (failed || chunk.delta.length === 0) return false;
+    const combined = \`\${pendingHighSurrogate.get(chunk.id) ?? ''}\${chunk.delta}\`;
+    pendingHighSurrogate.delete(chunk.id);
+    const bounded = takeBoundedCompleteCodePoints(combined, MAX_V2_PROSE_CODE_UNITS - text.length);
+    if (bounded.pendingHighSurrogate) pendingHighSurrogate.set(chunk.id, bounded.pendingHighSurrogate);
+    if (bounded.invalid || bounded.overflow) fail();
+    if (!bounded.text) return false;
+    if (!forwardedOpen.has(chunk.id)) {
+      forwardedOpen.add(chunk.id);
+      write({ type: 'text-start', id: chunk.id });
+    }
+    text += bounded.text;
+    write({ type: 'text-delta', id: chunk.id, delta: bounded.text });
+    return true;
+  };
+
+  return {
+    get text() {
+      return text;
+    },
+    get failed() {
+      return failed;
+    },
+    forward,
+    close(write) {
+      if (sourceOpen.size > 0 || pendingHighSurrogate.size > 0) fail();
+      for (const id of forwardedOpen) write({ type: 'text-end', id });
+      sourceOpen.clear();
+      forwardedOpen.clear();
+      pendingHighSurrogate.clear();
+    },
+  };
+}
+function takeBoundedCompleteCodePoints(
+  input: string,
+  remainingCodeUnits: number,
+): { text: string; pendingHighSurrogate: string; overflow: boolean; invalid: boolean } {
+  let accepted = '';
+  let pendingHighSurrogate = '';
+  let overflow = false;
+  let invalid = false;
+  for (let index = 0; index < input.length;) {
+    const first = input.charCodeAt(index);
+    let point = input[index] as string;
+    let width = 1;
+    if (first >= 0xD800 && first <= 0xDBFF) {
+      if (index + 1 >= input.length) {
+        pendingHighSurrogate = point;
+        break;
+      }
+      const second = input.charCodeAt(index + 1);
+      if (second < 0xDC00 || second > 0xDFFF) {
+        invalid = true;
+        break;
+      }
+      point += input[index + 1];
+      width = 2;
+    } else if (first >= 0xDC00 && first <= 0xDFFF) {
+      invalid = true;
+      break;
+    }
+    if (accepted.length + width > remainingCodeUnits) {
+      overflow = true;
+      break;
+    }
+    accepted += point;
+    index += width;
+  }
+  return { text: accepted, pendingHighSurrogate, overflow, invalid };
+}
 function createDMChatResponse(request, config = {}) {
   const contract = config.contract ?? 'v1';
   const v2Prose = createBoundedV2Prose();
@@ -370,6 +486,58 @@ test('rejects an unbounded v2 prose schema', async (t) => {
   const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
   assert.ok(result.failures.includes(
     'src/lib/dm/runtime.ts: v2 finalization field markdown must remain z.string().min(1).max(6_000).refine((value) => value.trim().length > 0)',
+  ));
+});
+
+test('rejects forwarding raw v2 deltas instead of bounded canonical prose', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    "write({ type: 'text-delta', id: chunk.id, delta: bounded.text });",
+    "write({ type: 'text-delta', id: chunk.id, delta: chunk.delta });",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 prose emission must remain Unicode-safe, bounded, and canonical',
+  ));
+});
+
+test('rejects forged v2 emitted prose that diverges from the accumulator', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    "write({ type: 'text-delta', id: chunk.id, delta: bounded.text });",
+    "write({ type: 'text-delta', id: chunk.id, delta: `FORGED:${bounded.text}` });",
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 prose emission must remain Unicode-safe, bounded, and canonical',
+  ));
+});
+
+test('rejects widening the v2 prose wire bound beyond the schema bound', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'const MAX_V2_PROSE_CODE_UNITS = 6_000;',
+    'const MAX_V2_PROSE_CODE_UNITS = 60_000;',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 prose emission must remain Unicode-safe, bounded, and canonical',
+  ));
+});
+
+test('rejects accepting invalid Unicode in the bounded v2 prose stream', async (t) => {
+  const root = await createCleanFixture(t);
+  await mutateRuntime(root, (runtime) => runtime.replace(
+    'if (bounded.invalid || bounded.overflow) fail();',
+    'if (bounded.overflow) fail();',
+  ));
+
+  const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+  assert.ok(result.failures.includes(
+    'src/lib/dm/runtime.ts: v2 prose emission must remain Unicode-safe, bounded, and canonical',
   ));
 });
 

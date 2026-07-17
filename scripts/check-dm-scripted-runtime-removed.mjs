@@ -1194,6 +1194,147 @@ function schemaBoundaryFailures(sourceFile) {
   return failures;
 }
 
+const EXPECTED_V2_PROSE_HELPER_BODIES = new Map([
+  ['isV2TextChunk', "{returnchunk.type==='text-start'||chunk.type==='text-delta'||chunk.type==='text-end';}"],
+  ['createBoundedV2Prose', "{constsourceOpen=newSet<string>();constforwardedOpen=newSet<string>();constpendingHighSurrogate=newMap<string,string>();lettext='';letfailed=false;constfail=():void=>{failed=true;};constforward=(chunk:V2TextChunk,write:(chunk:UIMessageChunk)=>void):boolean=>{if(chunk.type==='text-start'){if(sourceOpen.has(chunk.id))fail();elsesourceOpen.add(chunk.id);returnfalse;}if(!sourceOpen.has(chunk.id)){fail();returnfalse;}if(chunk.type==='text-end'){if(pendingHighSurrogate.has(chunk.id))fail();pendingHighSurrogate.delete(chunk.id);sourceOpen.delete(chunk.id);if(forwardedOpen.delete(chunk.id)){write({type:'text-end',id:chunk.id});}returnfalse;}if(failed||chunk.delta.length===0)returnfalse;constcombined=`${pendingHighSurrogate.get(chunk.id)??''}${chunk.delta}`;pendingHighSurrogate.delete(chunk.id);constbounded=takeBoundedCompleteCodePoints(combined,MAX_V2_PROSE_CODE_UNITS-text.length);if(bounded.pendingHighSurrogate)pendingHighSurrogate.set(chunk.id,bounded.pendingHighSurrogate);if(bounded.invalid||bounded.overflow)fail();if(!bounded.text)returnfalse;if(!forwardedOpen.has(chunk.id)){forwardedOpen.add(chunk.id);write({type:'text-start',id:chunk.id});}text+=bounded.text;write({type:'text-delta',id:chunk.id,delta:bounded.text});returntrue;};return{gettext(){returntext;},getfailed(){returnfailed;},forward,close(write){if(sourceOpen.size>0||pendingHighSurrogate.size>0)fail();for(constidofforwardedOpen)write({type:'text-end',id});sourceOpen.clear();forwardedOpen.clear();pendingHighSurrogate.clear();}};}"],
+  ['takeBoundedCompleteCodePoints', "{letaccepted='';letpendingHighSurrogate='';letoverflow=false;letinvalid=false;for(letindex=0;index<input.length;){constfirst=input.charCodeAt(index);letpoint=input[index]asstring;letwidth=1;if(first>=0xD800&&first<=0xDBFF){if(index+1>=input.length){pendingHighSurrogate=point;break;}constsecond=input.charCodeAt(index+1);if(second<0xDC00||second>0xDFFF){invalid=true;break;}point+=input[index+1];width=2;}elseif(first>=0xDC00&&first<=0xDFFF){invalid=true;break;}if(accepted.length+width>remainingCodeUnits){overflow=true;break;}accepted+=point;index+=width;}return{text:accepted,pendingHighSurrogate,overflow,invalid};}"],
+]);
+
+function isNamedPropertyAccess(node, objectName, propertyName) {
+  const expression = unwrapExpression(node);
+  return ts.isPropertyAccessExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.expression.text === objectName
+    && expression.name.text === propertyName;
+}
+
+function isTextDeltaWrite(node) {
+  if (!ts.isCallExpression(node) || node.arguments.length !== 1 || !ts.isObjectLiteralExpression(node.arguments[0])) return false;
+  const type = objectProperty(node.arguments[0], 'type')?.initializer;
+  return Boolean(type) && ts.isStringLiteral(type) && type.text === 'text-delta';
+}
+
+function isCanonicalBoundedTextDeltaWrite(node) {
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || node.expression.text !== 'write') return false;
+  if (node.arguments.length !== 1 || !ts.isObjectLiteralExpression(node.arguments[0])) return false;
+  const properties = node.arguments[0].properties;
+  if (properties.length !== 3 || properties.some((property) => !ts.isPropertyAssignment(property))) return false;
+  const fields = new Map(properties.map((property) => [propertyNameText(property.name), property.initializer]));
+  const type = fields.get('type');
+  const id = fields.get('id');
+  const delta = fields.get('delta');
+  return fields.size === 3
+    && Boolean(type)
+    && Boolean(id)
+    && Boolean(delta)
+    && ts.isStringLiteral(type)
+    && type.text === 'text-delta'
+    && isNamedPropertyAccess(id, 'chunk', 'id')
+    && isNamedPropertyAccess(delta, 'bounded', 'text');
+}
+
+function v2ProseEmissionFailures(sourceFile) {
+  const failure = 'src/lib/dm/runtime.ts: v2 prose emission must remain Unicode-safe, bounded, and canonical';
+  const limitDeclarations = [];
+  const helperDeclarations = new Map(
+    [...EXPECTED_V2_PROSE_HELPER_BODIES.keys()].map((name) => [name, []]),
+  );
+  let governedBindingWritten = false;
+
+  walk(sourceFile, (node) => {
+    if (
+      ts.isVariableDeclaration(node)
+      && bindingNameContains(node.name, 'MAX_V2_PROSE_CODE_UNITS')
+    ) limitDeclarations.push(node);
+    if (ts.isFunctionDeclaration(node) && node.name && helperDeclarations.has(node.name.text)) {
+      helperDeclarations.get(node.name.text).push(node);
+    }
+    for (const name of ['MAX_V2_PROSE_CODE_UNITS', ...EXPECTED_V2_PROSE_HELPER_BODIES.keys()]) {
+      if (writesValueName(node, name)) governedBindingWritten = true;
+    }
+  });
+
+  const limit = limitDeclarations[0];
+  const limitStatement = limit?.parent?.parent;
+  const validLimit = limitDeclarations.length === 1
+    && ts.isIdentifier(limit.name)
+    && limit.name.text === 'MAX_V2_PROSE_CODE_UNITS'
+    && limit.initializer?.getText(sourceFile) === '6_000'
+    && ts.isVariableStatement(limitStatement)
+    && limitStatement.parent === sourceFile
+    && (limit.parent.flags & ts.NodeFlags.Const) !== 0;
+
+  let validHelpers = true;
+  for (const [name, expectedBody] of EXPECTED_V2_PROSE_HELPER_BODIES) {
+    const declarations = helperDeclarations.get(name);
+    const declaration = declarations[0];
+    if (
+      declarations.length !== 1
+      || declaration.parent !== sourceFile
+      || compactNode(declaration.body, sourceFile) !== expectedBody
+    ) validHelpers = false;
+  }
+  if (!validLimit || !validHelpers || governedBindingWritten) return [failure];
+
+  const proseHelper = helperDeclarations.get('createBoundedV2Prose')?.[0];
+  const boundedDeclarations = [];
+  const textDeclarations = [];
+  const textWrites = [];
+  const boundedWrites = [];
+  const writerWrites = [];
+  const textDeltaWrites = [];
+  walk(proseHelper, (node) => {
+    if (ts.isVariableDeclaration(node) && bindingNameContains(node.name, 'bounded')) boundedDeclarations.push(node);
+    if (ts.isVariableDeclaration(node) && bindingNameContains(node.name, 'text')) textDeclarations.push(node);
+    if (writesValueName(node, 'text')) textWrites.push(node);
+    if (writesValueName(node, 'bounded')) boundedWrites.push(node);
+    if (writesValueName(node, 'write')) writerWrites.push(node);
+    if (isTextDeltaWrite(node)) textDeltaWrites.push(node);
+  });
+  const bounded = boundedDeclarations[0];
+  const boundedCall = bounded?.initializer && unwrapExpression(bounded.initializer);
+  const boundedCallIsTrusted = ts.isCallExpression(boundedCall)
+    && ts.isIdentifier(boundedCall.expression)
+    && boundedCall.expression.text === 'takeBoundedCompleteCodePoints'
+    && boundedCall.arguments.length === 2
+    && ts.isIdentifier(unwrapExpression(boundedCall.arguments[0]))
+    && unwrapExpression(boundedCall.arguments[0]).text === 'combined'
+    && compactNode(boundedCall.arguments[1], sourceFile) === 'MAX_V2_PROSE_CODE_UNITS-text.length';
+  const accumulation = textWrites[0];
+  const canonicalAccumulation = ts.isBinaryExpression(accumulation)
+    && accumulation.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken
+    && ts.isIdentifier(accumulation.left)
+    && accumulation.left.text === 'text'
+    && isNamedPropertyAccess(accumulation.right, 'bounded', 'text');
+  const canonicalBinding = boundedDeclarations.length === 1
+    && bounded
+    && ts.isIdentifier(bounded.name)
+    && bounded.name.text === 'bounded'
+    && ts.isVariableDeclarationList(bounded.parent)
+    && (bounded.parent.flags & ts.NodeFlags.Const) !== 0
+    && boundedCallIsTrusted
+    && textDeclarations.length === 1
+    && ts.isIdentifier(textDeclarations[0].name)
+    && textDeclarations[0].name.text === 'text'
+    && compactNode(textDeclarations[0].initializer, sourceFile) === "''"
+    && textWrites.length === 1
+    && canonicalAccumulation
+    && boundedWrites.length === 0
+    && writerWrites.length === 0
+    && textDeltaWrites.length === 1
+    && isCanonicalBoundedTextDeltaWrite(textDeltaWrites[0]);
+  const allTextDeltaWrites = [];
+  walk(sourceFile, (node) => {
+    if (isTextDeltaWrite(node)) allTextDeltaWrites.push(node);
+  });
+
+  return canonicalBinding
+    && allTextDeltaWrites.length === 1
+    && allTextDeltaWrites[0] === textDeltaWrites[0]
+    ? []
+    : [failure];
+}
+
 function finalizationCopyFailures(sourceFile) {
   const failures = [];
   const declaration = variableDeclaration(sourceFile, FINALIZATION_COPY_IDENTIFIER);
@@ -1513,6 +1654,7 @@ export function finalizationBoundaryFailures(runtime) {
   failures.push(...toolBindingFailures(sourceFile));
   failures.push(...sdkPrimitiveBindingFailures(sourceFile));
   failures.push(...schemaBoundaryFailures(sourceFile));
+  failures.push(...v2ProseEmissionFailures(sourceFile));
   failures.push(...finalizationCopyFailures(sourceFile));
   failures.push(...v2ContractFailures(sourceFile));
   failures.push(...v2ArtifactHelperFailures(sourceFile));
