@@ -440,7 +440,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       || ts.isCallExpression(expression)
       || (ts.isIdentifier(expression) && callableBindings.has(expression.text))
       || callablePaths.has(path?.join('.'))
-      || (path && callableContainers.has(path[0]));
+      || (path && path.some((_, index) => callableContainers.has(path.slice(0, index + 1).join('.'))));
   };
   walk(sourceFile, (node) => {
     if (ts.isIdentifier(node) && DYNAMIC_CODE_NAMES.has(node.text)) unsafe = true;
@@ -775,6 +775,7 @@ const GOVERNED_INTRINSIC_PROTOTYPES = new Set([
 
 function trustedPrimitiveMutationFailures(sourceFile) {
   const aliases = new Map();
+  const intrinsicContainers = new Map();
   const constBindings = immutableConstBindings(sourceFile);
   const aliasAssignments = new Set();
   const intrinsicValues = new Map();
@@ -831,6 +832,10 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       for (let length = path.length; length > 0; length -= 1) {
         const replacement = aliases.get(path.slice(0, length).join('.'));
         if (replacement) return [...replacement, ...path.slice(length)];
+        const intrinsic = intrinsicContainers.get(path.slice(0, length).join('.'));
+        if (intrinsic && path.length > length) {
+          return [...intrinsic, ...path.slice(length + 1)];
+        }
       }
       return path;
     };
@@ -842,7 +847,6 @@ function trustedPrimitiveMutationFailures(sourceFile) {
           : null;
       return name
         && GOVERNED_INTRINSIC_PROTOTYPES.has(name)
-        && name !== 'UnknownIntrinsic'
         ? name
         : null;
     };
@@ -868,11 +872,17 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       ) return targetPath;
       return intrinsic
         && GOVERNED_INTRINSIC_PROTOTYPES.has(intrinsic)
-        && intrinsic !== 'UnknownIntrinsic'
         && property === 'prototype'
         ? [intrinsic, 'prototype']
         : null;
     };
+    if (
+      ts.isCallExpression(expression)
+      && resolvedCalleePath(expression.expression)?.join('.') === 'Object.getOwnPropertyDescriptors'
+    ) {
+      const intrinsic = canonicalIntrinsic(expression.arguments[0] && resolvedCalleePath(expression.arguments[0]));
+      if (intrinsic) return [intrinsic, '$descriptors'];
+    }
     const pluralDescriptorEntry = (member) => {
       if (
         (!ts.isPropertyAccessExpression(member) && !ts.isElementAccessExpression(member))
@@ -916,6 +926,10 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       && propertyNameText(expression.name ?? expression.argumentExpression) === '__proto__'
     ) return intrinsicPrototypeForValue(expression.expression);
     if (ts.isPropertyAccessExpression(expression)) {
+      const descriptorParent = resolvedCalleePath(expression.expression);
+      if (descriptorParent?.length === 2 && descriptorParent[1] === '$descriptors' && expression.name.text === 'prototype') {
+        return [descriptorParent[0], 'prototype'];
+      }
       const parent = resolveDirectPath(expression.expression);
       if (parent) return [...parent, expression.name.text];
     }
@@ -924,6 +938,10 @@ function trustedPrimitiveMutationFailures(sourceFile) {
       const property = ts.isNumericLiteral(argument)
         ? argument.text
         : staticStringValue(argument, constBindings);
+      const descriptorParent = property === null ? null : resolvedCalleePath(expression.expression);
+      if (descriptorParent?.length === 2 && descriptorParent[1] === '$descriptors' && property === 'prototype') {
+        return [descriptorParent[0], 'prototype'];
+      }
       const parent = property === null ? null : resolveDirectPath(expression.expression);
       if (parent && property !== null) return [...parent, property];
     }
@@ -946,6 +964,20 @@ function trustedPrimitiveMutationFailures(sourceFile) {
     const target = unwrapExpression(name);
     const expression = unwrapExpression(initializer);
     const targetPath = staticPropertyPath(target, constBindings);
+    if (!targetPath && ts.isElementAccessExpression(target)) {
+      const container = staticPropertyPath(target.expression, constBindings)?.join('.');
+      const source = expandAlias(resolveDirectPath(expression));
+      const intrinsic = source?.length === 1 && GOVERNED_INTRINSIC_PROTOTYPES.has(source[0])
+        ? source
+        : null;
+      if (container && intrinsic) {
+        const existing = intrinsicContainers.get(container);
+        const next = existing && existing[0] !== intrinsic[0] ? ['UnknownIntrinsic'] : intrinsic;
+        if (existing?.join('.') === next.join('.')) return false;
+        intrinsicContainers.set(container, next);
+        return true;
+      }
+    }
     if (targetPath && targetPath.length > 1) {
       const path = expandAlias(resolveDirectPath(expression));
       return path ? storeAlias(targetPath.join('.'), path) : false;
