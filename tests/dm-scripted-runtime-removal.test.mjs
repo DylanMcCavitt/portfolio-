@@ -16,10 +16,44 @@ const PROJECT_DRAFT_TOKEN = 'ProjectDraft';
 const CHAT_STREAM_TOKEN = 'createDMChatStream';
 const READ_NDJSON_TOKEN = 'readNdjson';
 const NDJSON_MEDIA_TYPE = 'application/x-ndjson';
+const GOVERNANCE_CLAIM_ID = 'dm-v2-validator-governance';
+const GOVERNANCE_CLAIM_STATEMENT = 'DM v2 runtime finalization is limited to documented structural, same-run provenance, source, integrity, and operational controls; behavior quality stays in prompts, approved public content, and evaluations';
+
+const GOVERNANCE_DOCUMENT_FIXTURES = {
+  'docs/agents/dm-validator-governance.md': `# DM v2 validator governance
+
+## Hard-control allowlist
+
+- strict bounded schema types and sizes;
+- current-run provenance by filtering unknown evidence ids;
+- deterministic exclusion of forbidden/private sources and tools;
+- exact streamed-prose/finalizer integrity;
+
+## Behavior stays out of runtime rejection
+
+Runtime code must not reject, rewrite, force, or gate v2 prose.
+
+The public source boundary remains hard: published database projects, approved
+public RAG sources, and canonical résumé/contact data only. Semantic privacy
+quality is evaluated; private-source exclusion is deterministic.
+
+## Exception evidence
+
+## Implementation and review checklist
+`,
+  'docs/agents/dm-evals.md': `[validator-governance rule](./dm-validator-governance.md):
+prompt/content/eval judgments rather than runtime rejection
+rules. Published DB projects, approved public RAG sources, canonical
+résumé/contact data, semantic privacy judgment, and deterministic private-source
+exclusion remain mandatory.
+`,
+  'docs/agents/scope-ledger.md': '[`docs/agents/dm-validator-governance.md`](./dm-validator-governance.md): hard\ncontrols protect structure, same-run provenance, private-source exclusion, and\noperations, while answer quality and semantic privacy wording remain evaluated\nbehavior. The rule does not weaken the published-project, approved-public-RAG,\nor canonical résumé/contact source boundary above.\n',
+};
 
 const CLEAN_RUNTIME_FIXTURE = `
 import { ToolLoopAgent, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream, tool } from 'ai';
 import { z } from 'zod';
+import { createDMMetricsRecorder } from './metrics';
 function readDMRuntimeConfig(env) {
   const configuredContract = env.DM_CONTRACT?.trim();
   const contract: DMContractVersion = configuredContract === 'v2' ? 'v2' : 'v1';
@@ -218,18 +252,69 @@ function createDMChatResponse(request, config = {}) {
           description: 'Submit the complete structured visitor answer.',
           inputSchema: FinalAnswerInputSchema,
           execute: (input) => {
+            if (finalizationResult) return finalizationResult;
             const validation = validateFinalAnswer(input, publicRun, artifacts);
+            if (validation.ok) {
+              finalizationResult = {
+                status: 'accepted',
+                answer: validation.answer,
+                repairAttempted: finalizationAttempts > 1,
+              };
+              return finalizationResult;
+            }
             finalizationResult = limitedResult(true);
-            return validation;
+            return finalizationResult;
           },
         }),
       };
   const stream = createUIMessageStream({
+    onError(error) {
+      if (abort.signal.aborted) metrics.setErrorCategory(abort.timedOut() ? 'timeout' : 'aborted');
+      metrics.error('unknown');
+      return safeErrorMessage(error);
+    },
     async execute({ writer }) {
+      metrics.modelStarted();
       for (const chunk of []) {
         if (contract === 'v2' && isV2TextChunk(chunk)) {
           v2Prose.forward(chunk, (forwardedChunk) => writer.write(forwardedChunk));
         }
+        writer.write({
+          type: 'tool-input-start',
+          toolCallId: chunk.toolCallId,
+          toolName: 'finalizeAnswer',
+        });
+        writer.write(chunk as UIMessageChunk);
+        metrics.visibleOutput();
+      }
+      const category = 'unknown';
+      metrics.setErrorCategory(category);
+      metrics.visibleOutput();
+      if (abort.signal.aborted) {
+        v2Prose.close((chunk) => writer.write(chunk));
+        writer.write({ type: 'error', errorText: 'DM took too long to answer. Please try again.' });
+        writer.write({ type: 'finish' });
+        metrics.setErrorCategory(abort.timedOut() ? 'timeout' : 'aborted');
+        metrics.finish(abort.timedOut() ? 'timeout' : 'aborted');
+      }
+      if (streamFailed) {
+        v2Prose.close((chunk) => writer.write(chunk));
+        writer.write({ type: 'finish' });
+        metrics.error('unknown');
+      }
+      if (abort.signal.aborted) {
+        v2Prose.close((chunk) => writer.write(chunk));
+        metrics.setErrorCategory(abort.timedOut() ? 'timeout' : 'aborted');
+        metrics.finish(abort.timedOut() ? 'timeout' : 'aborted');
+        writer.write({ type: 'error', errorText: 'DM took too long to answer. Please try again.' });
+        writer.write({ type: 'finish' });
+      }
+      {
+        const error = new Error('fixture');
+        metrics.error('unknown');
+        v2Prose.close((chunk) => writer.write(chunk));
+        writer.write({ type: 'error', errorText: safeErrorMessage(error) });
+        writer.write({ type: 'finish' });
       }
       finalizationResult ??= limitedResult(finalizationAttempts > 0);
       if (contract === 'v2') {
@@ -270,7 +355,8 @@ function createDMChatResponse(request, config = {}) {
   new ToolLoopAgent({
     instructions: buildDMSystemInstructions(siteBrief, contract),
     tools: agentTools,
-    experimental_repairToolCall: async () => {
+    experimental_repairToolCall: async ({ toolCall }) => {
+      if (toolCall.toolName !== 'finalizeAnswer' || finalizationResult) return null;
       if (contract === 'v2') {
         finalized = true;
         return null;
@@ -370,8 +456,22 @@ async function createCleanFixture(t) {
       CLEAN_RUNTIME_FIXTURE,
     ),
     writeFixtureFile(root, 'claims.json', `${JSON.stringify({
-      claims: [{ id: REMOVAL_CLAIM_ID, statement: REMOVAL_CLAIM_STATEMENT }],
+      claims: [{ id: REMOVAL_CLAIM_ID, statement: REMOVAL_CLAIM_STATEMENT }, {
+        id: GOVERNANCE_CLAIM_ID,
+        statement: GOVERNANCE_CLAIM_STATEMENT,
+        subjectRefs: [
+          'docs/agents/dm-validator-governance.md',
+          'docs/agents/dm-evals.md',
+          'docs/agents/scope-ledger.md',
+          'src/lib/dm/runtime.ts',
+          'scripts/check-dm-scripted-runtime-removed.mjs',
+          'tests/dm-scripted-runtime-removal.test.mjs',
+        ],
+      }],
     })}\n`),
+    ...Object.entries(GOVERNANCE_DOCUMENT_FIXTURES).map(([path, contents]) => (
+      writeFixtureFile(root, path, contents)
+    )),
     writeFixtureFile(root, 'src/pages/api/dm/chat.ts', 'export const POST = true;\n'),
     writeFixtureFile(root, 'src/scripts/dm.ts', 'new DefaultChatTransport();\n'),
     writeFixtureFile(root, 'scripts/dm-eval.ts', 'export const liveEval = true;\n'),
@@ -477,6 +577,59 @@ test('requires the truthful replacement claim and rejects the superseded identit
   assert.ok(result.failures.includes(`claims.json: missing ${REMOVAL_CLAIM_ID} claim`));
   assert.ok(result.failures.includes('claims.json: superseded dm-removed-scripted-runtime claim must not remain active'));
   assert.ok(result.failures.includes('claims.json: superseded dm-legacy-scripted-runtime-removed claim must not remain active'));
+});
+
+test('rejects missing canonical v2 governance prose and cross-document links', async (t) => {
+  await t.test('rule contract anchor', async (subtest) => {
+    const root = await createCleanFixture(subtest);
+    await writeFixtureFile(
+      root,
+      'docs/agents/dm-validator-governance.md',
+      GOVERNANCE_DOCUMENT_FIXTURES['docs/agents/dm-validator-governance.md'].replace(
+        'Runtime code must not reject, rewrite, force, or gate v2 prose.',
+        'Runtime code may edit v2 prose for quality.',
+      ),
+    );
+
+    const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+    assert.ok(result.failures.includes(
+      'docs/agents/dm-validator-governance.md: missing canonical DM v2 governance anchor "Runtime code must not reject, rewrite, force, or gate v2 prose"',
+    ));
+  });
+
+  await t.test('evaluation link', async (subtest) => {
+    const root = await createCleanFixture(subtest);
+    await writeFixtureFile(
+      root,
+      'docs/agents/dm-evals.md',
+      GOVERNANCE_DOCUMENT_FIXTURES['docs/agents/dm-evals.md'].replace(
+        '[validator-governance rule](./dm-validator-governance.md)',
+        'validator governance is documented elsewhere',
+      ),
+    );
+
+    const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+    assert.ok(result.failures.includes(
+      'docs/agents/dm-evals.md: missing canonical DM v2 governance anchor "[validator-governance rule](./dm-validator-governance.md)"',
+    ));
+  });
+
+  await t.test('scope link', async (subtest) => {
+    const root = await createCleanFixture(subtest);
+    await writeFixtureFile(
+      root,
+      'docs/agents/scope-ledger.md',
+      GOVERNANCE_DOCUMENT_FIXTURES['docs/agents/scope-ledger.md'].replace(
+        '[`docs/agents/dm-validator-governance.md`](./dm-validator-governance.md)',
+        'DM v2 governance',
+      ),
+    );
+
+    const result = await checkScriptedRuntimeRemoval({ projectRoot: root });
+    assert.ok(result.failures.includes(
+      'docs/agents/scope-ledger.md: missing canonical DM v2 governance anchor "[`docs/agents/dm-validator-governance.md`](./dm-validator-governance.md)"',
+    ));
+  });
 });
 
 test('requires the v1-default fail-closed contract selector', async (t) => {
@@ -647,6 +800,67 @@ test('rejects an aliased metrics error outcome after successful answer emission'
   );
 
   assertStreamSinkMutationRejected(mutated);
+});
+
+test('rejects pre-integrity aliases that mutate finalized answer metadata', async (t) => {
+  const runtime = await liveRuntimeSource();
+  const mutations = [
+    "const alias = finalizationResult.answer; alias.followUp = 'forged';",
+    "const alias = finalizationResult.answer.artifacts; alias.push({ kind: 'contact', id: 'contact' } as never);",
+    "const alias = finalizationResult.answer.segments[0].evidence; alias.push({ id: 'forged' } as never);",
+    "const alias = finalizationResult.answer.segments[0].evidenceIds; alias.push('forged');",
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    await t.test(String(index), () => {
+      const mutated = runtime.replace(
+        '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+        `        if (finalizationResult) { ${mutation} }
+        finalizationResult ??= limitedResult(finalizationAttempts > 0);`,
+      );
+      assert.ok(finalizationBoundaryFailures(mutated).includes(
+        'src/lib/dm/runtime.ts: finalizationResult must remain immutable outside approved assignment and terminal read sites',
+      ));
+    });
+  }
+});
+
+test('rejects deletion of v2 stream-failure finish and metrics completion', async (t) => {
+  const runtime = await liveRuntimeSource();
+  const mutations = [
+    runtime.replace(
+      "            writer.write({ type: 'finish' });\n          }\n          metrics.error('unknown');",
+      "          }\n          metrics.error('unknown');",
+    ),
+    runtime.replace(
+      "          metrics.error('unknown');\n          return;\n        }\n\n        finalizationResult ??=",
+      '          return;\n        }\n\n        finalizationResult ??=',
+    ),
+  ];
+  for (const [index, mutated] of mutations.entries()) {
+    await t.test(String(index), () => assertStreamSinkMutationRejected(mutated));
+  }
+});
+
+test('rejects an aliased and locally wrapped DM metrics recorder factory', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime
+    .replace('  createDMMetricsRecorder,', '  createDMMetricsRecorder as sdkDMMetricsRecorder,')
+    .replace(
+      'export function createDMChatResponse(',
+      `const createDMMetricsRecorder = (options: Parameters<typeof sdkDMMetricsRecorder>[0]) => {
+  const recorder = sdkDMMetricsRecorder(options);
+  return {
+    ...recorder,
+    finish: (outcome: Parameters<typeof recorder.finish>[0]) => recorder.finish(outcome === 'completed' ? 'error' : outcome),
+  };
+};
+
+export function createDMChatResponse(`,
+    );
+
+  assert.ok(finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: createDMMetricsRecorder must retain one unaliased, unshadowed, immutable import from ./metrics',
+  ));
 });
 
 test('requires v2 markdown to reject whitespace-only input without transforming it', async (t) => {

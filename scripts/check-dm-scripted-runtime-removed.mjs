@@ -50,6 +50,48 @@ export const FORBIDDEN_TOKENS = [
 export const REMOVAL_CLAIM_ID = 'dm-finalization-contract-boundary';
 export const REMOVAL_CLAIM_STATEMENT = 'the legacy scripted DM runtime and custom NDJSON protocol are absent; DM defaults to the v1 enum-controlled finalizer while opt-in v2 streams Unicode-safe bounded canonical prose and attaches only an exact matching finalizer plus current-run evidence and artifact metadata at the terminal boundary';
 
+const GOVERNANCE_CLAIM_ID = 'dm-v2-validator-governance';
+const GOVERNANCE_CLAIM_STATEMENT = 'DM v2 runtime finalization is limited to documented structural, same-run provenance, source, integrity, and operational controls; behavior quality stays in prompts, approved public content, and evaluations';
+const GOVERNANCE_DOCUMENTS = {
+  rule: 'docs/agents/dm-validator-governance.md',
+  evals: 'docs/agents/dm-evals.md',
+  scope: 'docs/agents/scope-ledger.md',
+};
+const GOVERNANCE_CLAIM_SUBJECT_REFS = [
+  GOVERNANCE_DOCUMENTS.rule,
+  GOVERNANCE_DOCUMENTS.evals,
+  GOVERNANCE_DOCUMENTS.scope,
+  'src/lib/dm/runtime.ts',
+  'scripts/check-dm-scripted-runtime-removed.mjs',
+  'tests/dm-scripted-runtime-removal.test.mjs',
+];
+const GOVERNANCE_DOCUMENT_ANCHORS = {
+  [GOVERNANCE_DOCUMENTS.rule]: [
+    '# DM v2 validator governance',
+    '## Hard-control allowlist',
+    'strict bounded schema types and sizes',
+    'current-run provenance by filtering unknown evidence ids',
+    'deterministic exclusion of forbidden/private sources and tools',
+    'exact streamed-prose/finalizer integrity',
+    '## Behavior stays out of runtime rejection',
+    'Runtime code must not reject, rewrite, force, or gate v2 prose',
+    'The public source boundary remains hard: published database projects, approved public RAG sources, and canonical résumé/contact data only.',
+    'Semantic privacy quality is evaluated; private-source exclusion is deterministic.',
+    '## Exception evidence',
+    '## Implementation and review checklist',
+  ],
+  [GOVERNANCE_DOCUMENTS.evals]: [
+    '[validator-governance rule](./dm-validator-governance.md)',
+    'prompt/content/eval judgments rather than runtime rejection rules.',
+    'Published DB projects, approved public RAG sources, canonical résumé/contact data, semantic privacy judgment, and deterministic private-source exclusion remain mandatory.',
+  ],
+  [GOVERNANCE_DOCUMENTS.scope]: [
+    '[`docs/agents/dm-validator-governance.md`](./dm-validator-governance.md)',
+    'hard controls protect structure, same-run provenance, private-source exclusion, and operations, while answer quality and semantic privacy wording remain evaluated behavior.',
+    'The rule does not weaken the published-project, approved-public-RAG, or canonical résumé/contact source boundary above.',
+  ],
+};
+
 const SUPERSEDED_REMOVAL_CLAIM_IDS = new Set([
   'dm-removed-scripted-runtime',
   'dm-legacy-scripted-runtime-removed',
@@ -63,6 +105,10 @@ const EXPECTED_FINALIZATION_COPY_ACCESSES = new Map([
   ['limitation:code', 1],
   ['followUp:input.followUp', 1],
 ]);
+
+function normalizeDocumentationText(text) {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
 function normalizePath(path) {
   return path.split(sep).join('/');
@@ -193,6 +239,35 @@ function zodBindingFailures(sourceFile) {
     return ['src/lib/dm/runtime.ts: governed schemas must retain one unaliased, unshadowed, immutable top-level z import from zod'];
   }
   return [];
+}
+
+function metricsRecorderBindingFailures(sourceFile) {
+  const imports = [];
+  const shadows = [];
+  let bindingWritten = false;
+  walk(sourceFile, (node) => {
+    if (ts.isImportSpecifier(node)) {
+      const importedName = node.propertyName?.text ?? node.name.text;
+      if (importedName !== 'createDMMetricsRecorder') return;
+      const declaration = node.parent.parent.parent;
+      imports.push({
+        localName: node.name.text,
+        moduleName: ts.isImportDeclaration(declaration) && ts.isStringLiteral(declaration.moduleSpecifier)
+          ? declaration.moduleSpecifier.text
+          : null,
+      });
+      return;
+    }
+    if (declaresValueName(node, 'createDMMetricsRecorder')) shadows.push(node);
+    if (writesValueName(node, 'createDMMetricsRecorder')) bindingWritten = true;
+  });
+  return imports.length === 1
+    && imports[0].localName === 'createDMMetricsRecorder'
+    && imports[0].moduleName === './metrics'
+    && shadows.length === 0
+    && !bindingWritten
+    ? []
+    : ['src/lib/dm/runtime.ts: createDMMetricsRecorder must retain one unaliased, unshadowed, immutable import from ./metrics'];
 }
 
 const SDK_PRIMITIVE_CALL_KINDS = new Map([
@@ -1227,6 +1302,56 @@ const APPROVED_METRICS_CALL_COUNTS = new Map([
   ["finish('completed')", 1],
 ]);
 
+const APPROVED_FINALIZATION_RESULT_STATEMENT_COUNTS = new Map([
+  ['if(finalizationResult)returnfinalizationResult;', 2],
+  ['returnfinalizationResult;', 5],
+  ["finalizationResult={status:'accepted',answer:resolveV2FinalAnswer(input,publicRun,artifacts),repairAttempted:false};", 1],
+  ["finalizationResult={status:'accepted',answer:validation.answer,repairAttempted:finalizationAttempts>1};", 1],
+  ['finalizationResult=limitedResult(true);', 1],
+  ["if(toolCall.toolName!=='finalizeAnswer'||finalizationResult)returnnull;", 1],
+  ['finalizationResult??=limitedResult(finalizationAttempts>0);', 1],
+  ["terminalMarkdown=finalizationResult.status==='accepted'&&finalizationResult.answer.segments.length===1?finalizationResult.answer.segments[0]?.text:null", 3],
+  ["if(finalizationResult.status==='limited'&&(finalizationAttempts>0||v2FinalizationValidationFailed)){metrics.setErrorCategory('finalization_validation');}", 1],
+  ["metrics.setSource(sourceMode(evidence.map((item)=>item.source)),evidence.length,finalizationResult.status==='limited');", 1],
+  ["writer.write({type:'data-dm-answer',data:finalizationResult});", 1],
+]);
+
+function enclosingStatementOrDeclaration(node) {
+  let current = node;
+  while (current && !ts.isStatement(current) && !ts.isVariableDeclaration(current)) current = current.parent;
+  return current ?? null;
+}
+
+function finalizationResultMutationFailures(sourceFile) {
+  const failure = 'src/lib/dm/runtime.ts: finalizationResult must remain immutable outside approved assignment and terminal read sites';
+  const chatResponse = functionDeclaration(sourceFile, 'createDMChatResponse');
+  const declarations = [];
+  const references = new Map();
+  walk(chatResponse ?? sourceFile, (node) => {
+    if (ts.isVariableDeclaration(node) && bindingNameContains(node.name, 'finalizationResult')) {
+      declarations.push(node);
+    }
+    if (!ts.isIdentifier(node) || node.text !== 'finalizationResult') return;
+    if (ts.isVariableDeclaration(node.parent) && node.parent.name === node) return;
+    const statement = enclosingStatementOrDeclaration(node);
+    const key = compactNode(statement, sourceFile);
+    references.set(key, (references.get(key) ?? 0) + 1);
+  });
+  const declaration = declarations[0];
+  const validDeclaration = declarations.length === 1
+    && ts.isIdentifier(declaration.name)
+    && declaration.name.text === 'finalizationResult'
+    && declaration.initializer?.kind === ts.SyntaxKind.NullKeyword
+    && ts.isVariableDeclarationList(declaration.parent)
+    && (declaration.parent.flags & ts.NodeFlags.Let) !== 0;
+  if (!validDeclaration) return [failure];
+  if (references.size !== APPROVED_FINALIZATION_RESULT_STATEMENT_COUNTS.size) return [failure];
+  for (const [key, approvedCount] of APPROVED_FINALIZATION_RESULT_STATEMENT_COUNTS) {
+    if (references.get(key) !== approvedCount) return [failure];
+  }
+  return [];
+}
+
 function directOwnedCall(node, owner) {
   if (!ts.isIdentifier(node) || node.text !== owner) return null;
   const access = node.parent;
@@ -1262,6 +1387,31 @@ function closedSinkReferences(container, owner, approvedCalls, declaration) {
     if (!approvedCalls.has(key) || count > approvedCalls.get(key)) return false;
   }
   return true;
+}
+
+function streamFailureCompletionIsClosed(chatResponse, sourceFile) {
+  const execute = (() => {
+    let match = null;
+    walk(chatResponse, (node) => {
+      if (!match && ts.isMethodDeclaration(node) && propertyNameText(node.name) === 'execute') match = node;
+    });
+    return match;
+  })();
+  const hasLiveExitTopology = Boolean(
+    execute?.body?.statements.some((statement) => ts.isTryStatement(statement))
+    && compactNode(chatResponse, sourceFile).includes('streamFailed'),
+  );
+  if (!hasLiveExitTopology) return true;
+
+  const branches = [];
+  walk(chatResponse, (node) => {
+    if (ts.isIfStatement(node) && ts.isIdentifier(unwrapExpression(node.expression)) && unwrapExpression(node.expression).text === 'streamFailed') {
+      branches.push(node);
+    }
+  });
+  return branches.length === 1
+    && compactNode(branches[0], sourceFile)
+      === "if(streamFailed){if(contract==='v2'){v2Prose.close((chunk)=>writer.write(chunk));writer.write({type:'finish'});}metrics.error('unknown');return;}";
 }
 
 function streamCompletionSinkFailures(sourceFile) {
@@ -1309,6 +1459,7 @@ function streamCompletionSinkFailures(sourceFile) {
     || !validMetricsDeclaration
     || !closedSinkReferences(execute, 'writer', APPROVED_WRITER_CALL_COUNTS, writerIdentifier)
     || !closedSinkReferences(chatResponse, 'metrics', APPROVED_METRICS_CALL_COUNTS, metrics.name)
+    || !streamFailureCompletionIsClosed(chatResponse, sourceFile)
   ) return [failure];
   return [];
 }
@@ -1776,9 +1927,11 @@ export function finalizationBoundaryFailures(runtime) {
   }
   failures.push(...toolBindingFailures(sourceFile));
   failures.push(...sdkPrimitiveBindingFailures(sourceFile));
+  failures.push(...metricsRecorderBindingFailures(sourceFile));
   failures.push(...schemaBoundaryFailures(sourceFile));
   failures.push(...v2ProseEmissionFailures(sourceFile));
   failures.push(...streamCompletionSinkFailures(sourceFile));
+  failures.push(...finalizationResultMutationFailures(sourceFile));
   failures.push(...finalizationCopyFailures(sourceFile));
   failures.push(...v2ContractFailures(sourceFile));
   failures.push(...v2ArtifactHelperFailures(sourceFile));
@@ -1806,10 +1959,50 @@ async function removalClaimFailures(projectRoot) {
   return failures;
 }
 
+async function governanceDocumentationFailures(projectRoot) {
+  const failures = [];
+  const claims = JSON.parse(await readFile(resolve(projectRoot, CLAIMS_PATH), 'utf8'));
+  const claim = (claims.claims ?? []).find((item) => item.id === GOVERNANCE_CLAIM_ID);
+  if (!claim) {
+    failures.push(`${CLAIMS_PATH}: missing ${GOVERNANCE_CLAIM_ID} claim`);
+  } else {
+    if (claim.statement !== GOVERNANCE_CLAIM_STATEMENT) {
+      failures.push(`${CLAIMS_PATH}: ${GOVERNANCE_CLAIM_ID} must describe the documented v2 validator boundary exactly`);
+    }
+    const subjectRefs = new Set(claim.subjectRefs ?? []);
+    for (const subjectRef of GOVERNANCE_CLAIM_SUBJECT_REFS) {
+      if (!subjectRefs.has(subjectRef)) {
+        failures.push(`${CLAIMS_PATH}: ${GOVERNANCE_CLAIM_ID} must cover ${subjectRef}`);
+      }
+    }
+  }
+
+  for (const [path, anchors] of Object.entries(GOVERNANCE_DOCUMENT_ANCHORS)) {
+    let text;
+    try {
+      text = await readFile(resolve(projectRoot, path), 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        failures.push(`${path}: required DM v2 governance document is missing`);
+        continue;
+      }
+      throw error;
+    }
+    const normalizedText = normalizeDocumentationText(text);
+    for (const anchor of anchors) {
+      if (!normalizedText.includes(anchor)) {
+        failures.push(`${path}: missing canonical DM v2 governance anchor ${JSON.stringify(anchor)}`);
+      }
+    }
+  }
+  return failures;
+}
+
 export async function checkScriptedRuntimeRemoval({ projectRoot = process.cwd() } = {}) {
   const root = resolve(projectRoot);
   const failures = await removedFileFailures(root);
   failures.push(...await removalClaimFailures(root));
+  failures.push(...await governanceDocumentationFailures(root));
 
   const sourceFiles = [];
   for (const sourceRoot of SOURCE_SCAN_ROOTS) {
