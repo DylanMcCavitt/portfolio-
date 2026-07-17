@@ -396,7 +396,7 @@ async function mutateRuntime(root, transform) {
 }
 
 async function liveRuntimeSource() {
-  return readFile(new URL('../src/lib/dm/runtime.ts', import.meta.url), 'utf8');
+  return readFile(join(import.meta.dirname, '../src/lib/dm/runtime.ts'), 'utf8');
 }
 
 function assertStreamSinkMutationRejected(runtime) {
