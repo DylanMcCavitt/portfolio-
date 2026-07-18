@@ -414,12 +414,32 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return sourceFile;
   };
-  const bindingInitializers = (name, initializer, entries = []) => {
+  const bindingInitializers = (name, initializer, entries = [], seen = new Set()) => {
     const target = unwrapExpression(name);
     const value = unwrapExpression(initializer);
     if (ts.isIdentifier(target)) {
       entries.push({ name: target.text, initializer: value });
       return entries;
+    }
+    if (ts.isIdentifier(value) && !seen.has(value.text)) {
+      const declaration = (initializerDeclarations.get(value.text) ?? [])
+        .filter(({ scope }) => {
+          for (let current = value; current; current = current.parent) {
+            if (current === scope) return true;
+          }
+          return false;
+        })
+        .sort((left, right) => (
+          (left.scope.end - left.scope.pos) - (right.scope.end - right.scope.pos)
+        ))[0];
+      if (declaration) {
+        return bindingInitializers(
+          target,
+          declaration.initializer,
+          entries,
+          new Set(seen).add(value.text),
+        );
+      }
     }
     if (ts.isObjectBindingPattern(target) && ts.isObjectLiteralExpression(value)) {
       for (const element of target.elements) {
@@ -436,7 +456,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
         const selected = ts.isShorthandPropertyAssignment(property)
           ? property.name
           : property.initializer;
-        bindingInitializers(element.name, selected, entries);
+        bindingInitializers(element.name, selected, entries, seen);
       }
     }
     if (ts.isArrayBindingPattern(target) && ts.isArrayLiteralExpression(value)) {
@@ -448,6 +468,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
           element.name,
           ts.isSpreadElement(selected) ? selected.expression : selected,
           entries,
+          seen,
         );
       }
     }
@@ -713,8 +734,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
         else if (fn.body) visit(fn.body);
         const callSubstitutions = new Map(substitutions);
         for (const [index, parameter] of fn.parameters.entries()) {
-          if (ts.isIdentifier(parameter.name) && expression.arguments[index]) {
-            callSubstitutions.set(parameter.name.text, expression.arguments[index]);
+          const argument = expression.arguments[index];
+          if (!argument) continue;
+          for (const [binding, selection] of parameterBindingPaths(parameter.name)) {
+            let values = [argument];
+            for (const key of selection) {
+              values = values.flatMap((value) => literalMemberValues(value, key));
+            }
+            if (values.length > 0) callSubstitutions.set(binding, values[0]);
           }
         }
         for (const returned of returns) {
@@ -1477,8 +1504,16 @@ function dynamicCodeExecutionFailures(sourceFile) {
     });
     const callee = unwrapExpression(call.expression);
     if (ts.isIdentifier(callee)) {
-      const initializer = visibleInitializerDeclaration(callee)?.initializer
-        ?? visibleAssignedValue(callee)?.value;
+      const resolveInvocationInitializer = (identifier, seen = new Set()) => {
+        if (seen.has(identifier.text)) return identifier;
+        const initializer = visibleInitializerDeclaration(identifier)?.initializer
+          ?? visibleAssignedValue(identifier)?.value;
+        const value = initializer && unwrapExpression(initializer);
+        return value && ts.isIdentifier(value)
+          ? resolveInvocationInitializer(value, new Set(seen).add(identifier.text))
+          : value;
+      };
+      const initializer = resolveInvocationInitializer(callee);
       const boundCall = initializer && unwrapExpression(initializer);
       if (boundCall && ts.isCallExpression(boundCall)) {
         const boundCallee = unwrapExpression(boundCall.expression);
@@ -3242,6 +3277,11 @@ function governedV2DependencyMutationFailures(sourceFile) {
     while (current && current !== sourceFile) {
       if (ts.isBlock(current)) scopes.push(`block:${current.pos}`);
       if (ts.isCatchClause(current)) scopes.push(`catch:${current.pos}`);
+      if (
+        ts.isForStatement(current)
+        || ts.isForInStatement(current)
+        || ts.isForOfStatement(current)
+      ) scopes.push(`loop:${current.pos}`);
       if (ts.isFunctionLike(current)) scopes.push(`function:${current.pos}`);
       current = current.parent;
     }

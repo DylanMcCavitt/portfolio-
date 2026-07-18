@@ -1023,6 +1023,8 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; let callable: any = null; callable ||= fn; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; let callable: any = fn; callable &&= fn; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } const pick = (box: any) => box.C; const C = pick({ C: Holder }); const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const prebound = identity.bind(null, fn); const bound = prebound; const callable = bound(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const pick = ({ C }: any) => C; const C = pick({ C: Holder }); const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1119,6 +1121,17 @@ test('keeps unrelated callable names from tainting safe destructured bindings', 
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        function unrelated() { const value = () => 'callable'; void value; } { const { value } = { value: { safe: true } }; const [item] = [{ safe: true }]; const safeKey = getPublicToolName(); void (value as any)[safeKey]; void (item as any)[safeKey]; } void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('keeps unrelated callable names from tainting destructuring through safe aliases', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        function unrelated() { const value = () => 'callable'; const item = () => 'callable'; void value; void item; } { const source = { value: { safe: true } }; const items = [{ safe: true }]; const { value } = source; const [item] = items; const safeKey = getPublicToolName(); void (value as any)[safeKey]; void (item as any)[safeKey]; } void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
@@ -2256,6 +2269,23 @@ test('keeps catch-scoped run shadowing from suppressing authenticated run govern
   const mutated = runtime.replace(
     helperStart,
     `${helperStart}\n  try { throw { evidenceLedger: { safe: true } }; } catch (run) { void run; }\n  run.evidenceLedger = { ...run.evidenceLedger };`,
+  );
+  assert.ok(finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency publicRun.evidenceLedger must not be replaced or redefined',
+  ));
+});
+
+test('keeps loop-scoped run shadowing from suppressing authenticated run governance', async () => {
+  const runtime = await liveRuntimeSource();
+  const helperStart = `function createRuntimePublicTools(
+  run: PublicAgentToolRun,
+  artifacts: RunArtifacts,
+  metrics: ReturnType<typeof createDMMetricsRecorder>,
+  gate: PublicToolGate,
+) {`;
+  const mutated = runtime.replace(
+    helperStart,
+    `${helperStart}\n  for (let run = { evidenceLedger: { safe: true } }; false;) { void run; }\n  run.evidenceLedger = { ...run.evidenceLedger };`,
   );
   assert.ok(finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed v2 dependency publicRun.evidenceLedger must not be replaced or redefined',
