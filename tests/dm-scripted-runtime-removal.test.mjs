@@ -991,6 +991,17 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; class Holder { expose() { return fn; } } let C: any; C = Holder; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } class Other {} const C = getPublicToolName() ? Holder : Other; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { static expose() { return fn; } } class Other {} const C = getPublicToolName() ? Holder : Other; const callable = C.expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const passthrough = (value: any) => { let alias: any; alias = value; return alias; }; const callable = passthrough(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (...values: any[]) => values[0]; const callable = identity(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const args = [fn]; const callable = identity.apply(null, args); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const delegate = (value: any) => identity(value); const callable = delegate(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const handler = { get: () => expose }; const holder: any = new Proxy({}, handler); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const target = { expose }; const holder: any = new Proxy(target, {}); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const proto = { expose }; const holder: any = {}; holder.__proto__ = proto; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const proto = { expose }; const holder: any = { __proto__: proto }; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const [C] = [Holder]; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const namespace = { C: Holder }; const callable = new namespace.C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const identity = (value: any) => value; const C = identity(Holder); const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1043,6 +1054,28 @@ test('lets explicit safe callable members override computed owner wildcards', as
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        const fn = () => 'callable'; const dynamicName = getPublicToolName(); const holder = { [dynamicName]() { return fn; }, safe() { return 1; } }; const value: any = holder.safe(); const safeKey = getPublicToolName(); void value[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('allows explicit safe callable members with structured and local outputs', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const fn = () => 'callable'; const dynamicName = getPublicToolName(); const safeConstant = { safe: true }; const holder = { [dynamicName]() { return fn; }, object() { return { safe: true }; }, array() { return ['safe']; }, missing() { return undefined; }, constant() { return safeConstant; } }; const objectValue: any = holder.object(); const arrayValue: any = holder.array(); const missingValue: any = holder.missing(); const constantValue: any = holder.constant(); const safeKey = getPublicToolName(); void objectValue[safeKey]; void arrayValue[safeKey]; void missingValue?.[safeKey]; void constantValue[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('does not infer callable passthrough from an unknown identifier call alone', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const callback = () => 'safe'; declare const register: (value: unknown) => { safe: true }; const ordinary: any = register(callback); const safeKey = getPublicToolName(); void ordinary[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
@@ -2100,6 +2133,28 @@ test('distinguishes governed aggregate aliases across block-scoped bindings', as
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
+  ));
+});
+
+test('preserves function-scoped var governed aliases across sibling closures', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {',
+    "function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {\n  if (reference.id === 'var-scope') { if (reference.id) { var box: any = { value: artifacts }; } const poison = () => { box.value.projects = new Map(); }; poison(); }",
+  );
+  assert.ok(finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ));
+});
+
+test('does not apply the global governed run alias to a shadowing local binding', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const run = { evidenceLedger: { safe: true } }; const inspect = (value: unknown) => value; inspect(run);\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency publicRun.evidenceLedger must not escape through an unapproved helper parameter',
   ));
 });
 

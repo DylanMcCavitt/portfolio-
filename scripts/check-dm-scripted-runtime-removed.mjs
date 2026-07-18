@@ -455,7 +455,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
   };
   const classAliasSources = (node) => {
     const expression = unwrapExpression(node);
-    if (ts.isIdentifier(expression) && classNames.has(expression.text)) return new Set([expression.text]);
+    const path = staticPropertyPath(expression, constBindings)?.join('.');
+    if (path && classNames.has(path)) return new Set([path]);
     if (ts.isClassExpression(expression)) {
       const name = classBindingName(expression);
       return new Set(name ? [name] : []);
@@ -477,19 +478,78 @@ function dynamicCodeExecutionFailures(sourceFile) {
         ...classAliasSources(expression.right),
       ]);
     }
+    if (ts.isCallExpression(expression)) {
+      const calleePath = staticPropertyPath(expression.expression, constBindings)?.join('.');
+      const fn = calleePath && functionNodes.get(calleePath);
+      if (fn) {
+        const returns = [];
+        const visit = (current) => {
+          if (current !== fn && ts.isFunctionLike(current)) return;
+          if (ts.isReturnStatement(current) && current.expression) returns.push(current.expression);
+          ts.forEachChild(current, visit);
+        };
+        if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) returns.push(fn.body);
+        else if (fn.body) visit(fn.body);
+        for (const returned of returns) {
+          const returnedPath = staticPropertyPath(returned, constBindings);
+          const parameterIndex = returnedPath && fn.parameters.findIndex((parameter) => (
+            ts.isIdentifier(parameter.name) && parameter.name.text === returnedPath[0]
+          ));
+          const argument = parameterIndex >= 0 ? expression.arguments[parameterIndex] : null;
+          if (argument && returnedPath && returnedPath.length === 1) {
+            return classAliasSources(argument);
+          }
+        }
+      }
+    }
     return new Set();
+  };
+  const recordClassAliasPath = (name, initializer) => {
+    const sources = classAliasSources(initializer);
+    if (sources.size === 0) return false;
+    const existing = classAliases.get(name) ?? new Set();
+    const before = existing.size;
+    for (const source of sources) existing.add(source);
+    classAliases.set(name, existing);
+    classNames.add(name);
+    return existing.size !== before;
   };
   const recordClassAlias = (target, initializer) => {
     const name = unwrapExpression(target);
-    if (!ts.isIdentifier(name)) return false;
-    const sources = classAliasSources(initializer);
-    if (sources.size === 0) return false;
-    const existing = classAliases.get(name.text) ?? new Set();
-    const before = existing.size;
-    for (const source of sources) existing.add(source);
-    classAliases.set(name.text, existing);
-    classNames.add(name.text);
-    return existing.size !== before;
+    if (ts.isIdentifier(name)) {
+      let changed = recordClassAliasPath(name.text, initializer);
+      const value = unwrapExpression(initializer);
+      if (ts.isObjectLiteralExpression(value)) {
+        for (const property of value.properties) {
+          if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue;
+          const propertyName = propertyNameText(property.name);
+          const propertyValue = ts.isShorthandPropertyAssignment(property) ? property.name : property.initializer;
+          changed = recordClassAliasPath(`${name.text}.${propertyName}`, propertyValue) || changed;
+        }
+      }
+      return changed;
+    }
+    if (
+      (ts.isArrayBindingPattern(name) || ts.isArrayLiteralExpression(name))
+      && ts.isArrayLiteralExpression(unwrapExpression(initializer))
+    ) {
+      let changed = false;
+      for (const [index, element] of name.elements.entries()) {
+        if (ts.isOmittedExpression(element)) continue;
+        const value = unwrapExpression(initializer).elements[index];
+        if (!value || ts.isOmittedExpression(value)) continue;
+        const elementTarget = ts.isBindingElement(element)
+          ? element.name
+          : ts.isSpreadElement(element) ? element.expression : element;
+        changed = recordClassAlias(
+          elementTarget,
+          ts.isSpreadElement(value) ? value.expression : value,
+        ) || changed;
+      }
+      return changed;
+    }
+    const targetPath = staticPropertyPath(name, constBindings)?.join('.');
+    return targetPath ? recordClassAliasPath(targetPath, initializer) : false;
   };
   const propagateCallableContainers = (target, source) => {
     let changed = false;
@@ -646,8 +706,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
     }
     if (ts.isNewExpression(receiver)) {
-      const constructed = ts.isIdentifier(receiver.expression)
-        ? receiver.expression.text
+      const constructorPath = staticPropertyPath(receiver.expression, constBindings)?.join('.');
+      const constructed = constructorPath && classNames.has(constructorPath)
+        ? constructorPath
         : ts.isClassExpression(unwrapExpression(receiver.expression))
           ? classBindingName(unwrapExpression(receiver.expression))
           : null;
@@ -748,7 +809,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const classInstanceSources = (node) => {
     const expression = unwrapExpression(node);
     if (ts.isNewExpression(expression)) {
-      if (ts.isIdentifier(expression.expression)) return new Set([expression.expression.text]);
+      const constructorPath = staticPropertyPath(expression.expression, constBindings)?.join('.');
+      if (constructorPath && classNames.has(constructorPath)) return new Set([constructorPath]);
       const constructor = unwrapExpression(expression.expression);
       if (ts.isClassExpression(constructor)) return new Set([classBindingName(constructor)]);
     }
@@ -912,6 +974,15 @@ function dynamicCodeExecutionFailures(sourceFile) {
   };
   const propagateCallableOutputs = (target, source) => {
     let changed = recordCallableOutputAliases(target, [source]);
+    for (const path of [...callablePaths]) {
+      if (!path.startsWith(`${source}.`)) continue;
+      const alias = `${target}${path.slice(source.length)}`;
+      if (!callablePaths.has(alias)) {
+        callablePaths.add(alias);
+        if (functionNodes.has(path)) functionNodes.set(alias, functionNodes.get(path));
+        changed = true;
+      }
+    }
     for (const [bindings, wildcards] of [
       [callableResultBindings, callableResultWildcards],
       [callableYieldBindings, callableYieldWildcards],
@@ -954,8 +1025,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
     return [...new Set(paths)];
   };
   const outputPathTracked = (path, bindings, wildcards) => {
-    if (bindings.has(path)) return true;
     if (callableSafeResultBindings.has(path)) return false;
+    if (bindings.has(path)) return true;
     const separator = path.lastIndexOf('.');
     return separator > 0 && wildcards.has(path.slice(0, separator));
   };
@@ -975,12 +1046,20 @@ function dynamicCodeExecutionFailures(sourceFile) {
     return { returns, yields };
   };
   const definitelyNonCallableOutput = (node) => {
-    const expression = unwrapExpression(node);
+    const expression = resolveInitializerNode(node);
     return ts.isNumericLiteral(expression)
       || ts.isStringLiteralLike(expression)
       || expression.kind === ts.SyntaxKind.TrueKeyword
       || expression.kind === ts.SyntaxKind.FalseKeyword
-      || expression.kind === ts.SyntaxKind.NullKeyword;
+      || expression.kind === ts.SyntaxKind.NullKeyword
+      || (ts.isIdentifier(expression) && expression.text === 'undefined')
+      || (ts.isObjectLiteralExpression(expression) && expression.properties.every((property) => (
+        ts.isPropertyAssignment(property) && definitelyNonCallableOutput(property.initializer)
+      )))
+      || (ts.isArrayLiteralExpression(expression) && expression.elements.every((element) => (
+        ts.isOmittedExpression(element)
+        || (!ts.isSpreadElement(element) && definitelyNonCallableOutput(element))
+      )));
   };
   const callableFunctionsForCallee = (calleeNode) => {
     const callee = unwrapExpression(calleeNode);
@@ -1021,6 +1100,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
         const path = staticPropertyPath(node.initializer, constBindings);
         if (path) aliases.set(node.name.text, path);
       }
+      if (
+        ts.isBinaryExpression(node)
+        && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isIdentifier(unwrapExpression(node.left))
+      ) {
+        const path = staticPropertyPath(node.right, constBindings);
+        if (path) aliases.set(unwrapExpression(node.left).text, path);
+      }
       ts.forEachChild(node, visit);
     };
     if (fn.body) visit(fn.body);
@@ -1057,16 +1144,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     let parameterIndex = -1;
     let selection = [];
+    let restParameter = false;
     for (const [index, parameter] of fn.parameters.entries()) {
       const bindingPath = parameterBindingPaths(parameter.name).get(path[0]);
       if (bindingPath) {
         parameterIndex = index;
         selection = [...bindingPath, ...path.slice(1)];
+        restParameter = Boolean(parameter.dotDotDotToken);
         break;
       }
     }
     if (parameterIndex < 0) return [];
-    const argument = argumentsList[parameterIndex - offset];
+    let argumentIndex = parameterIndex - offset;
+    if (restParameter && /^\d+$/.test(selection[0] ?? '')) {
+      argumentIndex += Number(selection.shift());
+    }
+    const argument = argumentsList[argumentIndex];
     if (!argument) return [];
     let values = [argument];
     for (const key of selection) {
@@ -1082,7 +1175,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
         : callee.argumentExpression && computedName(callee.argumentExpression);
       if (method === 'call') return { callee: callee.expression, argumentsList: call.arguments.slice(1) };
       if (method === 'apply') {
-        const list = call.arguments[1] && unwrapExpression(call.arguments[1]);
+        const list = call.arguments[1] && resolveInitializerNode(call.arguments[1]);
         if (list && ts.isArrayLiteralExpression(list)) {
           return {
             callee: callee.expression,
@@ -1098,17 +1191,19 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const passthroughArgumentValues = (call) => {
     const invocation = invocationArguments(call);
     const functions = callableFunctionsForCallee(invocation.callee);
-    return functions.flatMap((fn) => directFunctionOutputs(fn).returns.flatMap((output) => (
-      outputSelectedArguments(output, fn, invocation.argumentsList)
-    )));
+    return functions.flatMap((fn) => directFunctionOutputs(fn).returns.flatMap((output) => {
+      const direct = outputSelectedArguments(output, fn, invocation.argumentsList);
+      if (direct.length > 0) return direct;
+      const returned = unwrapExpression(output);
+      if (!ts.isCallExpression(returned)) return [];
+      return passthroughArgumentValues(returned).flatMap((value) => (
+        outputSelectedArguments(value, fn, invocation.argumentsList)
+      ));
+    }));
   };
   const callReturnsTrackedArgument = (call) => {
     return passthroughArgumentValues(call).some(isTrackedCallableExpression);
   };
-  const NON_PASSTHROUGH_CALLBACK_METHODS = new Set([
-    'every', 'filter', 'find', 'findIndex', 'flatMap', 'forEach', 'map', 'reduce',
-    'reduceRight', 'some', 'sort',
-  ]);
   const isTrackedCallableExpression = (node) => {
     const expression = unwrapExpression(node);
     const source = staticPropertyPath(expression, constBindings)?.join('.');
@@ -1178,21 +1273,10 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ))) return true;
       if (callReturnsTrackedArgument(expression)) return true;
       const calleePath = staticPropertyPath(expression.expression, constBindings)?.join('.');
-      const callee = unwrapExpression(expression.expression);
-      const method = ts.isPropertyAccessExpression(callee)
-        ? callee.name.text
-        : ts.isElementAccessExpression(callee) && callee.argumentExpression
-          ? computedName(callee.argumentExpression)
-          : null;
       return expression.arguments.some(isTrackedCallableExpression)
         && (
           calleePath === 'Promise.resolve'
           || calleePath === 'Reflect.apply'
-          || (
-            callableFunctionsForCallee(expression.expression).length === 0
-            && ts.isIdentifier(callee)
-            && !NON_PASSTHROUGH_CALLBACK_METHODS.has(method)
-          )
         );
     }
     if (ts.isNewExpression(expression)) {
@@ -1214,6 +1298,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
     const expression = unwrapExpression(node);
     const source = staticPropertyPath(expression, constBindings)?.join('.');
     let changed = recordCallableOutputAliases(target, callableSourcePaths(expression));
+    if (source) changed = propagateCallableOutputs(target, source) || changed;
     if (isTrackedCallableExpression(expression)) {
       return recordCallableTarget(target) || changed;
     }
@@ -1248,13 +1333,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
     if (
       ts.isNewExpression(expression)
       && staticPropertyPath(expression.expression, constBindings)?.join('.') === 'Proxy'
-      && expression.arguments?.[1]
+      && expression.arguments?.[0]
     ) {
-      const handler = resolveInitializerNode(expression.arguments[1]);
+      const targetPath = staticPropertyPath(expression.arguments[0], constBindings)?.join('.');
+      if (targetPath) changed = propagateCallableOutputs(target, targetPath) || changed;
+      changed = propagateCallableInitializer(target, resolveInitializerNode(expression.arguments[0])) || changed;
+      const handler = expression.arguments[1] && resolveInitializerNode(expression.arguments[1]);
       if (ts.isObjectLiteralExpression(handler)) {
         for (const property of handler.properties) {
-          if (!ts.isMethodDeclaration(property) || propertyNameText(property.name) !== 'get') continue;
-          const outputs = directFunctionOutputs(property).returns;
+          if (propertyNameText(property.name) !== 'get') continue;
+          const trap = ts.isMethodDeclaration(property)
+            ? property
+            : ts.isPropertyAssignment(property)
+              ? resolveInitializerNode(property.initializer)
+              : null;
+          if (!trap || !ts.isFunctionLike(trap)) continue;
+          const outputs = directFunctionOutputs(trap).returns;
           if (outputs.some((output) => callableSourcePaths(output).some((path) => (
             outputPathTracked(path, callableResultBindings, callableResultWildcards)
           )))) {
@@ -1333,7 +1427,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
         if (ts.isShorthandPropertyAssignment(property)) {
           changed = propagateCallableInitializer(`${target}.${property.name.text}`, property.name) || changed;
         } else if (ts.isPropertyAssignment(property)) {
-          changed = propagateCallableInitializer(`${target}.${propertyNameText(property.name)}`, property.initializer) || changed;
+          const propertyName = propertyNameText(property.name);
+          changed = propagateCallableInitializer(
+            propertyName === '__proto__' ? target : `${target}.${propertyName}`,
+            property.initializer,
+          ) || changed;
         } else if (ts.isSpreadAssignment(property)) {
           const spread = staticPropertyPath(property.expression, constBindings)?.join('.');
           if (spread) changed = propagateCallableOutputs(target, spread) || changed;
@@ -1734,6 +1832,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
           callableChanged = true;
         }
         if (target && source) {
+          if (target.endsWith('.__proto__')) {
+            const owner = target.slice(0, -'.__proto__'.length);
+            callableChanged = propagateCallableOutputs(owner, source) || callableChanged;
+            callableChanged = propagateCallableInitializer(
+              owner,
+              resolveInitializerNode(node.right),
+            ) || callableChanged;
+          }
           callableChanged = propagateCallableContainers(target, source) || callableChanged;
           callableChanged = propagateCallableOutputs(target, source) || callableChanged;
         }
@@ -2771,6 +2877,10 @@ function governedV2DependencyMutationFailures(sourceFile) {
   };
   const lexicalScopeKey = (node) => lexicalScopeChain(node)[0];
   const bindingScopes = new Map();
+  const bindingKinds = new Map();
+  const functionScopeKey = (node) => (
+    lexicalScopeChain(node).find((scope) => scope.startsWith('function:')) ?? 'source'
+  );
   const bindingIdentifiers = (name) => {
     const target = unwrapExpression(name);
     if (ts.isIdentifier(target)) return [target];
@@ -2783,11 +2893,20 @@ function governedV2DependencyMutationFailures(sourceFile) {
   };
   walk(sourceFile, (node) => {
     if (!ts.isVariableDeclaration(node) && !ts.isParameter(node)) return;
-    const scope = lexicalScopeKey(node.parent);
+    const isFunctionScopedVar = ts.isVariableDeclaration(node)
+      && ts.isVariableDeclarationList(node.parent)
+      && (node.parent.flags & ts.NodeFlags.BlockScoped) === 0;
+    const scope = ts.isParameter(node) || isFunctionScopedVar
+      ? functionScopeKey(node)
+      : lexicalScopeKey(node.parent);
+    const kind = ts.isParameter(node) ? 'parameter' : isFunctionScopedVar ? 'var' : 'lexical';
     for (const identifier of bindingIdentifiers(node.name)) {
       const scopes = bindingScopes.get(identifier.text) ?? new Set();
       scopes.add(scope);
       bindingScopes.set(identifier.text, scopes);
+      const kinds = bindingKinds.get(identifier.text) ?? new Map();
+      kinds.set(scope, kind);
+      bindingKinds.set(identifier.text, kinds);
     }
   });
   const normalizeScopeChain = (scope) => (
@@ -2809,7 +2928,10 @@ function governedV2DependencyMutationFailures(sourceFile) {
         const key = candidate.path.slice(0, length).join('.');
         const bindingScope = visibleBindingScope(candidate.path[0], scopeChain);
         const scoped = bindingScope && scopedAliases.get(key)?.get(bindingScope);
-        if (scoped || aliases.has(key)) {
+        const globalAllowed = aliases.has(key) && (
+          !bindingScope || bindingKinds.get(candidate.path[0])?.get(bindingScope) === 'parameter'
+        );
+        if (scoped || globalAllowed) {
           aliasKey = key;
           aliasLength = length;
           break;
@@ -2817,7 +2939,10 @@ function governedV2DependencyMutationFailures(sourceFile) {
       }
       const bindingScope = visibleBindingScope(candidate.path[0], scopeChain);
       const replacements = aliasKey
-        ? scopedAliases.get(aliasKey)?.get(bindingScope) ?? aliases.get(aliasKey)
+        ? scopedAliases.get(aliasKey)?.get(bindingScope)
+          ?? (bindingScope && bindingKinds.get(candidate.path[0])?.get(bindingScope) !== 'parameter'
+            ? null
+            : aliases.get(aliasKey))
         : null;
       if (!replacements || candidate.expanded.has(aliasKey)) {
         resolved.push(candidate.path);
