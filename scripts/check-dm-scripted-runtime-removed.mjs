@@ -369,6 +369,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const callableSafeResultBindings = new Set();
   const scopedCallableResolution = new Set();
   const scopedCallableBindings = new Set();
+  const scopedCallableParameters = new Set();
+  const scopedCallableCatches = new Set();
   let activeCallableDeclarations = new Map();
   const classInstances = new Map();
   const classParents = new Map();
@@ -439,6 +441,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
           entries,
           new Set(seen).add(value.text),
         );
+      }
+    }
+    if (ts.isCallExpression(value)) {
+      const callee = staticPropertyPath(value.expression, constBindings)?.join('.');
+      const fn = callee && functionNodes.get(callee);
+      let returned = null;
+      if (fn && ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
+        returned = fn.body;
+      } else if (fn?.body && ts.isBlock(fn.body)) {
+        returned = fn.body.statements.find((statement) => (
+          ts.isReturnStatement(statement) && statement.expression
+        ))?.expression ?? null;
+      }
+      const result = returned && unwrapExpression(returned);
+      if (result && (ts.isObjectLiteralExpression(result) || ts.isArrayLiteralExpression(result))) {
+        return bindingInitializers(target, result, entries, seen);
       }
     }
     if (ts.isObjectBindingPattern(target) && ts.isObjectLiteralExpression(value)) {
@@ -626,9 +644,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
     if (!initializer) {
       const parameter = visibleParameterDeclaration(identifier)?.parameter;
       if (parameter) {
-        return Boolean(parameter.initializer && isTrackedCallableExpression(parameter.initializer));
+        return scopedCallableParameters.has(parameter.pos)
+          || Boolean(parameter.initializer && isTrackedCallableExpression(parameter.initializer));
       }
-      if (visibleCatchDeclaration(identifier)) return false;
+      const catchDeclaration = visibleCatchDeclaration(identifier)?.declaration;
+      if (catchDeclaration) return scopedCallableCatches.has(catchDeclaration.pos);
       return callableBindings.has(identifier.text);
     }
     const declarationKey = `${declaration.scope.pos}:${initializer.pos}:${identifier.text}`;
@@ -736,10 +756,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
         for (const [index, parameter] of fn.parameters.entries()) {
           const argument = expression.arguments[index];
           if (!argument) continue;
+          const defaults = parameterBindingDefaults(parameter.name);
           for (const [binding, selection] of parameterBindingPaths(parameter.name)) {
             let values = [argument];
             for (const key of selection) {
               values = values.flatMap((value) => literalMemberValues(value, key));
+            }
+            if (values.length === 0 && defaults.has(binding)) {
+              values = [defaults.get(binding)];
             }
             if (values.length > 0) callSubstitutions.set(binding, values[0]);
           }
@@ -1384,6 +1408,20 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return paths;
   };
+  const parameterBindingDefaults = (name, defaults = new Map()) => {
+    if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+      for (const element of name.elements) {
+        if (ts.isOmittedExpression(element)) continue;
+        if (element.initializer) {
+          for (const binding of parameterBindingPaths(element.name).keys()) {
+            defaults.set(binding, element.initializer);
+          }
+        }
+        parameterBindingDefaults(element.name, defaults);
+      }
+    }
+    return defaults;
+  };
   const assignmentTargetIdentifiers = (node, identifiers = []) => {
     const target = unwrapExpression(node);
     if (ts.isIdentifier(target)) {
@@ -1514,20 +1552,38 @@ function dynamicCodeExecutionFailures(sourceFile) {
           : value;
       };
       const initializer = resolveInvocationInitializer(callee);
-      const boundCall = initializer && unwrapExpression(initializer);
-      if (boundCall && ts.isCallExpression(boundCall)) {
-        const boundCallee = unwrapExpression(boundCall.expression);
-        if (ts.isPropertyAccessExpression(boundCallee) || ts.isElementAccessExpression(boundCallee)) {
-          const method = ts.isPropertyAccessExpression(boundCallee)
-            ? boundCallee.name.text
-            : boundCallee.argumentExpression && computedName(boundCallee.argumentExpression);
-          if (method === 'bind') {
-            return {
-              callee: boundCallee.expression,
-              argumentsList: [...boundCall.arguments.slice(1), ...call.arguments],
-            };
-          }
+      const boundCalls = (node) => {
+        const value = node && unwrapExpression(node);
+        if (!value) return [];
+        if (ts.isConditionalExpression(value)) {
+          return [...boundCalls(value.whenTrue), ...boundCalls(value.whenFalse)];
         }
+        if (
+          ts.isBinaryExpression(value)
+          && (
+            value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+            || value.operatorToken.kind === ts.SyntaxKind.BarBarToken
+            || value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+          )
+        ) return [...boundCalls(value.left), ...boundCalls(value.right)];
+        return ts.isCallExpression(value) ? [value] : [];
+      };
+      const boundCall = boundCalls(initializer).find((candidate) => {
+        const boundCallee = unwrapExpression(candidate.expression);
+        if (!(ts.isPropertyAccessExpression(boundCallee) || ts.isElementAccessExpression(boundCallee))) {
+          return false;
+        }
+        const method = ts.isPropertyAccessExpression(boundCallee)
+          ? boundCallee.name.text
+          : boundCallee.argumentExpression && computedName(boundCallee.argumentExpression);
+        return method === 'bind';
+      });
+      if (boundCall) {
+        const boundCallee = unwrapExpression(boundCall.expression);
+        return {
+          callee: boundCallee.expression,
+          argumentsList: [...boundCall.arguments.slice(1), ...call.arguments],
+        };
       }
     }
     if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
@@ -2197,6 +2253,44 @@ function dynamicCodeExecutionFailures(sourceFile) {
     callableChanged = false;
     walk(sourceFile, (node) => {
       callableChanged = propagateCallableInstaller(node) || callableChanged;
+      if (ts.isCallExpression(node)) {
+        const invocation = invocationArguments(node);
+        for (const fn of callableFunctionsForCallee(invocation.callee)) {
+          for (const [index, parameter] of fn.parameters.entries()) {
+            const argument = invocation.argumentsList[index];
+            if (
+              ts.isIdentifier(parameter.name)
+              && argument
+              && isTrackedCallableExpression(argument)
+              && !scopedCallableParameters.has(parameter.pos)
+            ) {
+              scopedCallableParameters.add(parameter.pos);
+              callableChanged = true;
+            }
+          }
+        }
+      }
+      if (
+        ts.isCatchClause(node)
+        && node.variableDeclaration
+        && ts.isIdentifier(node.variableDeclaration.name)
+      ) {
+        let trackedThrow = false;
+        const visitThrows = (current) => {
+          if (current !== node.parent.tryBlock && ts.isFunctionLike(current)) return;
+          if (
+            ts.isThrowStatement(current)
+            && current.expression
+            && isTrackedCallableExpression(current.expression)
+          ) trackedThrow = true;
+          ts.forEachChild(current, visitThrows);
+        };
+        visitThrows(node.parent.tryBlock);
+        if (trackedThrow && !scopedCallableCatches.has(node.variableDeclaration.pos)) {
+          scopedCallableCatches.add(node.variableDeclaration.pos);
+          callableChanged = true;
+        }
+      }
       if (
         ts.isBinaryExpression(node)
         && callableAssignmentTokens.has(node.operatorToken.kind)
@@ -3277,6 +3371,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
     while (current && current !== sourceFile) {
       if (ts.isBlock(current)) scopes.push(`block:${current.pos}`);
       if (ts.isCatchClause(current)) scopes.push(`catch:${current.pos}`);
+      if (ts.isCaseBlock(current)) scopes.push(`switch:${current.pos}`);
       if (
         ts.isForStatement(current)
         || ts.isForInStatement(current)
