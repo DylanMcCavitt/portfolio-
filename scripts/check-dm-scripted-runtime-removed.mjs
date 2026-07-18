@@ -367,6 +367,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const callableYieldWildcards = new Set();
   const callableAccessorWildcards = new Set();
   const callableSafeResultBindings = new Set();
+  const scopedCallableResolution = new Set();
+  const scopedCallableBindings = new Set();
+  let activeCallableDeclaration = null;
   const classInstances = new Map();
   const classParents = new Map();
   const classAliases = new Map();
@@ -477,8 +480,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
       : value;
   };
   const isScopedCallableIdentifier = (identifier) => {
-    const initializer = visibleInitializerDeclaration(identifier)?.initializer;
+    const declaration = visibleInitializerDeclaration(identifier);
+    const initializer = declaration?.initializer;
     if (!initializer) return callableBindings.has(identifier.text);
+    const declarationKey = `${declaration.scope.pos}:${initializer.pos}:${identifier.text}`;
+    if (scopedCallableBindings.has(declarationKey)) return true;
     const value = unwrapExpression(initializer);
     if (
       ts.isFunctionExpression(value)
@@ -486,9 +492,17 @@ function dynamicCodeExecutionFailures(sourceFile) {
       || ts.isClassExpression(value)
     ) return true;
     const path = staticPropertyPath(value, constBindings)?.join('.');
-    return Boolean(path && path !== identifier.text && (
+    if (path && path !== identifier.text && (
       callableBindings.has(path) || callablePaths.has(path)
-    ));
+    )) return true;
+    const key = `${declaration.scope.pos}:${initializer.pos}`;
+    if (scopedCallableResolution.has(key)) return false;
+    scopedCallableResolution.add(key);
+    try {
+      return isTrackedCallableExpression(value);
+    } finally {
+      scopedCallableResolution.delete(key);
+    }
   };
   const classLineage = (name, seen = new Set()) => {
     if (!name || seen.has(name)) return [];
@@ -542,6 +556,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
           ) {
             const aliasPath = staticPropertyPath(current.initializer, constBindings);
             if (aliasPath) localAliases.set(current.name.text, aliasPath);
+          }
+          if (
+            ts.isBinaryExpression(current)
+            && current.operatorToken.kind === ts.SyntaxKind.EqualsToken
+            && ts.isIdentifier(unwrapExpression(current.left))
+          ) {
+            const aliasPath = staticPropertyPath(current.right, constBindings);
+            if (aliasPath) localAliases.set(unwrapExpression(current.left).text, aliasPath);
           }
           ts.forEachChild(current, visit);
         };
@@ -1025,6 +1047,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
     return changed;
   };
   const recordCallableTarget = (target) => {
+    if (activeCallableDeclaration?.name === target) {
+      scopedCallableBindings.add(activeCallableDeclaration.key);
+    }
     const collection = target.includes('.') ? callablePaths : callableBindings;
     if (collection.has(target)) return false;
     collection.add(target);
@@ -1282,9 +1307,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
         if (list && ts.isArrayLiteralExpression(list)) {
           return {
             callee: callee.expression,
-            argumentsList: list.elements.filter((item) => !ts.isOmittedExpression(item)).map((item) => (
-              ts.isSpreadElement(item) ? item.expression : item
-            )),
+            argumentsList: expandArguments(
+              list.elements.filter((item) => !ts.isOmittedExpression(item)),
+            ),
           };
         }
       }
@@ -1421,7 +1446,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
         const entries = resolveInitializerNode(expression.arguments[0]);
         if (ts.isArrayLiteralExpression(entries)) {
           for (const entryNode of entries.elements) {
-            const entry = unwrapExpression(ts.isSpreadElement(entryNode) ? entryNode.expression : entryNode);
+            const entry = unwrapExpression(resolveInitializerNode(
+              ts.isSpreadElement(entryNode) ? entryNode.expression : entryNode,
+            ));
             if (!ts.isArrayLiteralExpression(entry) || entry.elements.length < 2) continue;
             const key = staticStringValue(entry.elements[0], constBindings);
             const value = entry.elements[1];
@@ -2040,10 +2067,19 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
       if (!ts.isVariableDeclaration(node) || !node.initializer) return;
       const initializer = unwrapExpression(node.initializer);
+      activeCallableDeclaration = ts.isIdentifier(node.name)
+        ? {
+          name: node.name.text,
+          key: `${initializerScopeNode(node).pos}:${initializer.pos}:${node.name.text}`,
+        }
+        : null;
       callableChanged = recordClassAlias(node.name, initializer) || callableChanged;
       callableChanged = propagateClassInstanceBinding(node.name, initializer) || callableChanged;
       callableChanged = propagateCallableBinding(node.name, node.initializer) || callableChanged;
-      if (!ts.isIdentifier(node.name)) return;
+      if (!ts.isIdentifier(node.name)) {
+        activeCallableDeclaration = null;
+        return;
+      }
       const path = staticPropertyPath(node.initializer, constBindings)?.join('.');
       if (path) {
         callableChanged = propagateCallableContainers(node.name.text, path) || callableChanged;
@@ -2057,6 +2093,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
         callableBindings.add(node.name.text);
         callableChanged = true;
       }
+      activeCallableDeclaration = null;
     });
   }
   const couldProduceCallable = (node) => {
@@ -2066,7 +2103,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       || ts.isArrowFunction(expression)
       || ts.isClassExpression(expression)
       || ts.isCallExpression(expression)
-      || (ts.isIdentifier(expression) && callableBindings.has(expression.text))
+      || (ts.isIdentifier(expression) && isScopedCallableIdentifier(expression))
       || callablePaths.has(path?.join('.'))
       || (path && path.some((_, index) => callableContainers.has(path.slice(0, index + 1).join('.'))));
   };
