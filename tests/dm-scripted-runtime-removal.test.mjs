@@ -940,6 +940,28 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; const name = ['ex', 'pose'].join(''); const holder = { get [name]() { return fn; } }; const callable = holder.expose; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const holder: any = {}; Object.assign(holder, { expose: () => fn }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const holder: any = {}; Object.defineProperty(holder, 'expose', { value: () => fn }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = {}; holder.expose = expose; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const source = { expose: () => fn }; const holder: any = {}; Object.assign(holder, source); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const source = { expose: () => fn }; const copy = { ...source }; const holder: any = {}; Object.assign(holder, copy); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const source = { expose: () => fn }; const { ...copy } = source; const callable = copy.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const descriptor = { value: () => fn }; const holder: any = {}; Object.defineProperty(holder, 'expose', descriptor); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const descriptors = { expose: { value: () => fn } }; const holder: any = {}; Object.defineProperties(holder, descriptors); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const descriptor = { value: () => fn }; const holder: any = {}; Reflect.defineProperty(holder, 'expose', descriptor); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const box = { holder: new Holder() }; const callable = box.holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const { holder } = { holder: new Holder() }; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const [holder] = [new Holder()]; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const method = holder.expose; const callable = method(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } class Child extends Holder {} const callable = new Child().expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { static expose() { return fn; } } class Child extends Holder {} const callable = Child.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { get expose() { return fn; } } class Child extends Holder {} const callable = new Child().expose; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const callable = identity(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const callable = await Promise.resolve(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const callable = new Proxy(fn, {}); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const tag = (_parts: TemplateStringsArray, value: any) => value; const callable = tag\`\${fn}\`; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const callable = Reflect.apply(expose, null, []); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const method = Reflect.get(holder, 'expose'); const callable = method(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const method = Object.getOwnPropertyDescriptor(Holder.prototype, 'expose')?.value; const callable = method.call(holder); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = ['ex', 'pose'].join(''); const holder = { *[name]() { yield fn; } }; const callable = holder.expose().next().value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -952,6 +974,17 @@ test('rejects dynamic evaluation and function construction in the governed runti
       ));
     });
   }
+});
+
+test('allows safe computed callable-returning methods without dangerous downstream access', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const safeName = getPublicToolName(); const safeHolder = { [safeName]() { return () => 'safe'; } }; void safeHolder;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
 });
 
 test('rejects mutation or escape of the metrics recorder inside public tools', async (t) => {
@@ -1906,6 +1939,69 @@ test('rejects governed schema and artifact stores passed to helper parameters', 
   assert.ok(result.failures.includes(
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
   ));
+});
+
+test('rejects governed constructor tagged-template and aggregate-wrapper escapes', async (t) => {
+  const runtime = await liveRuntimeSource();
+  const artifactEscape = 'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter';
+  const schemaEscape = 'src/lib/dm/runtime.ts: governed finalizer schema objects and their transitive artifact schemas must not be mutated';
+  const intrinsicEscape = 'src/lib/dm/runtime.ts: governed Zod methods and intrinsic prototypes must not be mutated';
+  const mutations = [
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  class Poison { constructor(value: any) { value.projects = new Map(); } } new Poison(artifacts);\n  const siteBrief =',
+      ),
+      expected: artifactEscape,
+    },
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  const poison = (_parts: TemplateStringsArray, value: any) => { value.projects = new Map(); }; poison`${artifacts}`;\n  const siteBrief =',
+      ),
+      expected: artifactEscape,
+    },
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  const poison = (value: any) => { value.value.projects = new Map(); }; const box = { value: artifacts }; poison(box);\n  const siteBrief =',
+      ),
+      expected: artifactEscape,
+    },
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  const poison = (value: any) => { value[0].projects = new Map(); }; const box = [artifacts]; poison(box);\n  const siteBrief =',
+      ),
+      expected: artifactEscape,
+    },
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  const poison = (value: any) => { value.value.projects = new Map(); }; const original = { value: artifacts }; poison({ ...original });\n  const siteBrief =',
+      ),
+      expected: artifactEscape,
+    },
+    {
+      source: runtime.replace(
+        "  const agentTools = contract === 'v2'",
+        "  const poison = (_parts: TemplateStringsArray, value: any) => { value.parse = (input: unknown) => input; }; poison`${V2FinalAnswerInputSchema}`;\n  const agentTools = contract === 'v2'",
+      ),
+      expected: schemaEscape,
+    },
+    {
+      source: runtime.replace(
+        '  const siteBrief =',
+        '  const poison = (_parts: TemplateStringsArray, value: any) => { value.push = () => 0; }; poison`${Array.prototype}`;\n  const siteBrief =',
+      ),
+      expected: intrinsicEscape,
+    },
+  ];
+  for (const [index, mutation] of mutations.entries()) {
+    await t.test(String(index), () => {
+      assert.ok(finalizationBoundaryFailures(mutation.source).includes(mutation.expected));
+    });
+  }
 });
 
 test('rejects replacement of current-run project map methods through an assignment alias', async (t) => {
