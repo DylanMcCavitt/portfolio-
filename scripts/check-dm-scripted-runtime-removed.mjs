@@ -377,6 +377,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const functionNodes = new Map();
   const initializerNodes = new Map();
   const initializerDeclarations = new Map();
+  const parameterDeclarations = new Map();
   const anonymousOwnerPath = (node, kind = 'owner') => `@${kind}:${node.pos}`;
   const classBindingName = (node) => {
     if ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) && node.name) return node.name.text;
@@ -412,6 +413,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
       if (className && parent) classParents.set(className, parent);
     }
     if (ts.isFunctionDeclaration(node) && node.name) functionNodes.set(node.name.text, node);
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
+      const declarations = parameterDeclarations.get(node.name.text) ?? [];
+      declarations.push({ parameter: node, scope: node.parent });
+      parameterDeclarations.set(node.name.text, declarations);
+    }
     if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name) || !node.initializer) return;
     const initializer = unwrapExpression(node.initializer);
     initializerNodes.set(node.name.text, initializer);
@@ -471,6 +477,18 @@ function dynamicCodeExecutionFailures(sourceFile) {
         (left.scope.end - left.scope.pos) - (right.scope.end - right.scope.pos)
       ))[0]
   );
+  const visibleParameterDeclaration = (identifier) => (
+    (parameterDeclarations.get(identifier.text) ?? [])
+      .filter(({ scope }) => {
+        for (let current = identifier; current; current = current.parent) {
+          if (current === scope) return true;
+        }
+        return false;
+      })
+      .sort((left, right) => (
+        (left.scope.end - left.scope.pos) - (right.scope.end - right.scope.pos)
+      ))[0]
+  );
   const resolveSafeInitializerNode = (node, seen = new Set()) => {
     const value = unwrapExpression(node);
     if (!ts.isIdentifier(value) || seen.has(value.text)) return value;
@@ -482,7 +500,13 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const isScopedCallableIdentifier = (identifier) => {
     const declaration = visibleInitializerDeclaration(identifier);
     const initializer = declaration?.initializer;
-    if (!initializer) return callableBindings.has(identifier.text);
+    if (!initializer) {
+      const parameter = visibleParameterDeclaration(identifier)?.parameter;
+      if (parameter) {
+        return Boolean(parameter.initializer && isTrackedCallableExpression(parameter.initializer));
+      }
+      return callableBindings.has(identifier.text);
+    }
     const declarationKey = `${declaration.scope.pos}:${initializer.pos}:${identifier.text}`;
     if (scopedCallableBindings.has(declarationKey)) return true;
     const value = unwrapExpression(initializer);
@@ -515,9 +539,12 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ...[...aliases].flatMap((alias) => classLineage(alias, next)),
     ];
   };
-  const classAliasSources = (node) => {
+  const classAliasSources = (node, substitutions = new Map(), seenCalls = new Set()) => {
     const expression = unwrapExpression(node);
     const path = staticPropertyPath(expression, constBindings)?.join('.');
+    if (path && substitutions.has(path)) {
+      return classAliasSources(substitutions.get(path), substitutions, seenCalls);
+    }
     if (path && classNames.has(path)) return new Set([path]);
     if (ts.isClassExpression(expression)) {
       const name = classBindingName(expression);
@@ -541,6 +568,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ]);
     }
     if (ts.isCallExpression(expression)) {
+      if (seenCalls.has(expression.pos)) return new Set();
+      const nextSeenCalls = new Set(seenCalls).add(expression.pos);
       const calleePath = staticPropertyPath(expression.expression, constBindings)?.join('.');
       const fn = calleePath && functionNodes.get(calleePath);
       if (fn) {
@@ -569,6 +598,12 @@ function dynamicCodeExecutionFailures(sourceFile) {
         };
         if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) returns.push(fn.body);
         else if (fn.body) visit(fn.body);
+        const callSubstitutions = new Map(substitutions);
+        for (const [index, parameter] of fn.parameters.entries()) {
+          if (ts.isIdentifier(parameter.name) && expression.arguments[index]) {
+            callSubstitutions.set(parameter.name.text, expression.arguments[index]);
+          }
+        }
         for (const returned of returns) {
           let returnedPath = staticPropertyPath(returned, constBindings);
           const expanded = new Set();
@@ -581,7 +616,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
           ));
           const argument = parameterIndex >= 0 ? expression.arguments[parameterIndex] : null;
           if (argument && returnedPath && returnedPath.length === 1) {
-            return classAliasSources(argument);
+            return classAliasSources(argument, substitutions, nextSeenCalls);
+          }
+          if (ts.isCallExpression(unwrapExpression(returned))) {
+            const delegated = classAliasSources(returned, callSubstitutions, nextSeenCalls);
+            if (delegated.size > 0) return delegated;
           }
         }
       }
@@ -1297,6 +1336,24 @@ function dynamicCodeExecutionFailures(sourceFile) {
       );
     });
     const callee = unwrapExpression(call.expression);
+    if (ts.isIdentifier(callee)) {
+      const initializer = visibleInitializerDeclaration(callee)?.initializer;
+      const boundCall = initializer && unwrapExpression(initializer);
+      if (boundCall && ts.isCallExpression(boundCall)) {
+        const boundCallee = unwrapExpression(boundCall.expression);
+        if (ts.isPropertyAccessExpression(boundCallee) || ts.isElementAccessExpression(boundCallee)) {
+          const method = ts.isPropertyAccessExpression(boundCallee)
+            ? boundCallee.name.text
+            : boundCallee.argumentExpression && computedName(boundCallee.argumentExpression);
+          if (method === 'bind') {
+            return {
+              callee: boundCallee.expression,
+              argumentsList: [...boundCall.arguments.slice(1), ...call.arguments],
+            };
+          }
+        }
+      }
+    }
     if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
       const method = ts.isPropertyAccessExpression(callee)
         ? callee.name.text
@@ -1973,7 +2030,17 @@ function dynamicCodeExecutionFailures(sourceFile) {
         callableChanged = recordClassAlias(assignedTarget, assignedValue) || callableChanged;
         callableChanged = propagateClassInstanceBinding(assignedTarget, assignedValue)
           || callableChanged;
+        const assignedDeclaration = ts.isIdentifier(assignedTarget)
+          ? visibleInitializerDeclaration(assignedTarget)
+          : null;
+        activeCallableDeclaration = assignedDeclaration
+          ? {
+            name: assignedTarget.text,
+            key: `${assignedDeclaration.scope.pos}:${assignedDeclaration.initializer.pos}:${assignedTarget.text}`,
+          }
+          : null;
         callableChanged = propagateCallableBinding(node.left, node.right) || callableChanged;
+        activeCallableDeclaration = null;
         const target = staticPropertyPath(node.left, constBindings)?.join('.');
         const source = staticPropertyPath(node.right, constBindings)?.join('.');
         if (

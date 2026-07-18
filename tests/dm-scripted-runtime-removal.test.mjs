@@ -1013,6 +1013,9 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; const identity = (value: any) => value; const args = [fn]; const nested = [...args]; const callable = identity.apply(null, nested); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const name = getPublicToolName(); const entry = [name, fn]; const entries = [entry]; const holder: any = Object.fromEntries(entries); const callable = holder[name]; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } const identity = (value: any) => { let alias: any; alias = value; return alias; }; const C = identity(Holder); const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; let callable: any = { safe: true }; callable = fn; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const bound = identity.bind(null, fn); const callable = bound(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const identity = (value: any) => value; const delegate = (value: any) => identity(value); const C = delegate(Holder); const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1098,6 +1101,17 @@ test('keeps unrelated callable names from tainting scoped safe dynamic reads', a
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        function unrelated() { const value = () => 'callable'; void value; } { const value: any = { safe: true }; const safeKey = getPublicToolName(); void value[safeKey]; } void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('keeps unrelated callable names from tainting safe parameter reads', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        function unrelated() { const value = () => 'callable'; void value; } function inspect(value: any, safeKey: string) { void value[safeKey]; } inspect({ safe: true }, getPublicToolName()); void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
