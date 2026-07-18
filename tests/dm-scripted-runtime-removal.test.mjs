@@ -980,6 +980,17 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; class Holder { expose() { return fn; } } const Child = class extends Holder {}; const callable = new Child().expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const name = getPublicToolName(); const method = Reflect.get(holder, name); const callable = method(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const name = getPublicToolName(); const method = Object.getOwnPropertyDescriptor(Holder.prototype, name)?.value; const callable = method.call(holder); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const unwrap = ({ value }: any) => value; const callable = unwrap({ value: fn }); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => { const alias = value; return alias; }; const callable = identity(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const callable = identity.apply(null, [fn]); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const identity = (value: any) => value; const box = identity({ value: fn }); const callable = box.value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const proto = { expose }; const holder: any = Object.create(proto); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const proto = { expose }; const holder: any = {}; Reflect.setPrototypeOf(holder, proto); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const handler = { get() { return expose; } }; const holder: any = new Proxy({}, handler); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const entries = [['expose', expose]]; const holder: any = Object.fromEntries(entries); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } let C: any; C = Holder; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } class Other {} const C = getPublicToolName() ? Holder : Other; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { static expose() { return fn; } } class Other {} const C = getPublicToolName() ? Holder : Other; const callable = C.expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1010,6 +1021,28 @@ test('allows safe callback consumers that do not return their callable argument'
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        const callback = () => 'safe'; const count = (_value: unknown) => 1; const wrap = (_value: unknown) => ({ safe: true }); const total = count(callback); const ordinary = wrap(callback); const safeKey = getPublicToolName(); void total; void ordinary[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('allows unknown external property consumers without callable-return evidence', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const callback = () => 'safe'; const registry: any = Object.create(null); const ordinary = registry.register(callback); const safeKey = getPublicToolName(); void ordinary[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('lets explicit safe callable members override computed owner wildcards', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const fn = () => 'callable'; const dynamicName = getPublicToolName(); const holder = { [dynamicName]() { return fn; }, safe() { return 1; } }; const value: any = holder.safe(); const safeKey = getPublicToolName(); void value[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
@@ -2042,6 +2075,28 @@ test('keeps governed aggregate aliases scoped to their lexical binding', async (
   const mutated = seeded.replace(
     '  const siteBrief =',
     "  function consumeSafeAggregate() { const box = { value: 'safe' }; const inspect = (_value: unknown) => undefined; inspect(box); } void consumeSafeAggregate;\n  const siteBrief =",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
+  ));
+});
+
+test('preserves governed aggregate aliases inside nested closures', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {',
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {\n  const box = { value: artifacts }; const poison = () => { box.value.projects = new Map(); }; poison();',
+  );
+  assert.ok(finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
+  ));
+});
+
+test('distinguishes governed aggregate aliases across block-scoped bindings', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {',
+    "function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {\n  { const box = artifacts; void box; } { const box = { value: 'safe' }; const inspect = (_value: unknown) => undefined; inspect(box); }",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
