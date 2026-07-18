@@ -370,6 +370,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const scopedCallableResolution = new Set();
   const scopedCallableBindings = new Set();
   const scopedCallableParameters = new Set();
+  const scopedCallableParameterMembers = new Set();
   const scopedCallableCatches = new Set();
   let activeCallableDeclarations = new Map();
   const classInstances = new Map();
@@ -377,6 +378,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const classAliases = new Map();
   const classNames = new Set();
   const functionNodes = new Map();
+  const functionDeclarations = new Map();
   const initializerNodes = new Map();
   const initializerDeclarations = new Map();
   const parameterDeclarations = new Map();
@@ -416,6 +418,32 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return sourceFile;
   };
+  const objectRestPrefix = '@object-rest:';
+  const isObjectRestSelection = (key) => key.startsWith(objectRestPrefix);
+  const scopeContainsNode = (scope, node) => {
+    for (let current = node; current; current = current.parent) {
+      if (current === scope) return true;
+    }
+    return false;
+  };
+  const recordFunctionDeclaration = (name, node, scope) => {
+    const declarations = functionDeclarations.get(name) ?? [];
+    declarations.push({ node, scope });
+    functionDeclarations.set(name, declarations);
+  };
+  const visibleFunctionNode = (path, reference) => {
+    if (!path) return null;
+    if (!path.includes('.')) {
+      const declaration = (functionDeclarations.get(path) ?? [])
+        .filter(({ scope }) => scopeContainsNode(scope, reference))
+        .sort((left, right) => (
+          (left.scope.end - left.scope.pos) - (right.scope.end - right.scope.pos)
+          || right.node.pos - left.node.pos
+        ))[0];
+      if (declaration) return declaration.node;
+    }
+    return functionNodes.get(path) ?? null;
+  };
   const bindingInitializers = (name, initializer, entries = [], seen = new Set()) => {
     const target = unwrapExpression(name);
     const value = unwrapExpression(initializer);
@@ -445,7 +473,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     if (ts.isCallExpression(value)) {
       const callee = staticPropertyPath(value.expression, constBindings)?.join('.');
-      const fn = callee && functionNodes.get(callee);
+      const fn = visibleFunctionNode(callee, value.expression);
+      const callKey = fn && `call:${fn.pos}`;
+      if (callKey && seen.has(callKey)) return entries;
       let returned = null;
       if (fn && ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
         returned = fn.body;
@@ -459,11 +489,17 @@ function dynamicCodeExecutionFailures(sourceFile) {
         result
         && (
           ts.isIdentifier(result)
+          || ts.isCallExpression(result)
           || ts.isObjectLiteralExpression(result)
           || ts.isArrayLiteralExpression(result)
         )
       ) {
-        return bindingInitializers(target, result, entries, seen);
+        return bindingInitializers(
+          target,
+          result,
+          entries,
+          callKey ? new Set(seen).add(callKey) : seen,
+        );
       }
     }
     if (ts.isObjectBindingPattern(target) && ts.isObjectLiteralExpression(value)) {
@@ -505,7 +541,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
       return paths;
     }
     if (ts.isObjectBindingPattern(name)) {
+      const excluded = name.elements.flatMap((element) => {
+        if (element.dotDotDotToken) return [];
+        const key = element.propertyName
+          ? propertyNameText(element.propertyName)
+          : ts.isIdentifier(element.name) ? element.name.text : null;
+        return key === null ? [] : [key];
+      });
       for (const element of name.elements) {
+        if (element.dotDotDotToken) {
+          bindingDeclarationPaths(
+            element.name,
+            [...prefix, `${objectRestPrefix}${JSON.stringify(excluded)}`],
+            paths,
+          );
+          continue;
+        }
         const key = element.propertyName
           ? propertyNameText(element.propertyName)
           : ts.isIdentifier(element.name) ? element.name.text : null;
@@ -536,7 +587,10 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const parent = heritage && staticPropertyPath(heritage.expression, constBindings)?.join('.');
       if (className && parent) classParents.set(className, parent);
     }
-    if (ts.isFunctionDeclaration(node) && node.name) functionNodes.set(node.name.text, node);
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      functionNodes.set(node.name.text, node);
+      recordFunctionDeclaration(node.name.text, node, lexicalScopeNode(node));
+    }
     if (ts.isParameter(node)) {
       for (const [binding, path] of bindingDeclarationPaths(node.name)) {
         const declarations = parameterDeclarations.get(binding) ?? [];
@@ -582,6 +636,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       callableBindings.add(node.name.text);
       if (ts.isFunctionExpression(initializer) || ts.isArrowFunction(initializer)) {
         functionNodes.set(node.name.text, initializer);
+        recordFunctionDeclaration(node.name.text, initializer, scope);
       }
     }
     if (ts.isIdentifier(initializer) && classNames.has(initializer.text)) {
@@ -757,7 +812,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       if (seenCalls.has(expression.pos)) return new Set();
       const nextSeenCalls = new Set(seenCalls).add(expression.pos);
       const calleePath = staticPropertyPath(expression.expression, constBindings)?.join('.');
-      const fn = calleePath && functionNodes.get(calleePath);
+      const fn = visibleFunctionNode(calleePath, expression.expression);
       if (fn) {
         const returns = [];
         const localAliases = new Map();
@@ -792,6 +847,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
           for (const [binding, selection] of parameterBindingPaths(parameter.name)) {
             let values = [argument];
             for (const key of selection) {
+              if (isObjectRestSelection(key)) continue;
               values = values.flatMap((value) => literalMemberValues(value, key));
             }
             if (values.length === 0 && defaults.has(binding)) {
@@ -1416,9 +1472,32 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const callableFunctionsForCallee = (calleeNode) => {
     const callee = unwrapExpression(calleeNode);
     if (ts.isFunctionExpression(callee) || ts.isArrowFunction(callee)) return [callee];
-    return callableSourcePaths(callee)
-      .map((path) => functionNodes.get(path))
-      .filter(Boolean);
+    const resolved = [];
+    const seen = new Set();
+    const visit = (value) => {
+      const expression = unwrapExpression(value);
+      if (ts.isIdentifier(expression)) {
+        const declaration = visibleFunctionNode(expression.text, expression);
+        if (declaration && !seen.has(declaration)) {
+          seen.add(declaration);
+          resolved.push(declaration);
+        }
+        const initializer = visibleInitializerDeclaration(expression)?.initializer;
+        if (initializer && !seen.has(initializer)) {
+          seen.add(initializer);
+          visit(initializer);
+        }
+      }
+      for (const path of callableSourcePaths(expression)) {
+        const declaration = visibleFunctionNode(path, expression);
+        if (declaration && !seen.has(declaration)) {
+          seen.add(declaration);
+          resolved.push(declaration);
+        }
+      }
+    };
+    visit(callee);
+    return resolved;
   };
   const parameterBindingPaths = (name, prefix = [], paths = new Map()) => {
     if (ts.isIdentifier(name)) {
@@ -1426,7 +1505,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
       return paths;
     }
     if (ts.isObjectBindingPattern(name)) {
+      const excluded = name.elements.flatMap((element) => {
+        if (element.dotDotDotToken) return [];
+        const key = element.propertyName
+          ? propertyNameText(element.propertyName)
+          : ts.isIdentifier(element.name) ? element.name.text : null;
+        return key === null ? [] : [key];
+      });
       for (const element of name.elements) {
+        if (element.dotDotDotToken) {
+          parameterBindingPaths(
+            element.name,
+            [...prefix, `${objectRestPrefix}${JSON.stringify(excluded)}`],
+            paths,
+          );
+          continue;
+        }
         const key = element.propertyName
           ? propertyNameText(element.propertyName)
           : ts.isIdentifier(element.name) ? element.name.text : null;
@@ -1439,6 +1533,24 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
     }
     return paths;
+  };
+  const objectRestEntries = (node, selection, prefix = []) => {
+    const expression = unwrapExpression(resolveInitializerNode(node));
+    const excluded = new Set(JSON.parse(selection.slice(objectRestPrefix.length)));
+    if (!ts.isObjectLiteralExpression(expression)) return [{ path: ['*'], value: expression }];
+    return expression.properties.flatMap((property) => {
+      if (ts.isSpreadAssignment(property)) {
+        return objectRestEntries(property.expression, `${objectRestPrefix}[]`, prefix);
+      }
+      if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return [];
+      const key = propertyNameText(property.name);
+      if (excluded.has(key)) return [];
+      const value = ts.isShorthandPropertyAssignment(property) ? property.name : property.initializer;
+      const resolved = unwrapExpression(resolveInitializerNode(value));
+      return ts.isObjectLiteralExpression(resolved)
+        ? objectRestEntries(resolved, `${objectRestPrefix}[]`, [...prefix, key])
+        : [{ path: [...prefix, key], value }];
+    });
   };
   const parameterBindingDefaults = (name, defaults = new Map()) => {
     if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
@@ -1540,7 +1652,10 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const bindingPath = parameterBindingPaths(parameter.name).get(path[0]);
       if (bindingPath) {
         parameterIndex = index;
-        selection = [...bindingPath, ...path.slice(1)];
+        selection = [
+          ...bindingPath.filter((key) => !isObjectRestSelection(key)),
+          ...path.slice(1),
+        ];
         restParameter = Boolean(parameter.dotDotDotToken);
         break;
       }
@@ -1659,6 +1774,22 @@ function dynamicCodeExecutionFailures(sourceFile) {
   const callReturnsTrackedArgument = (call) => {
     return passthroughArgumentValues(call).some(isTrackedCallableExpression);
   };
+  const isScopedCallableParameterMember = (node) => {
+    const expression = unwrapExpression(node);
+    const path = staticPropertyPath(expression, constBindings);
+    if (!path || path.length < 2) return false;
+    let root = expression;
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) {
+      root = unwrapExpression(root.expression);
+    }
+    if (!ts.isIdentifier(root)) return false;
+    const declaration = visibleParameterDeclaration(root);
+    if (!declaration) return false;
+    const key = parameterCallableKey(declaration.parameter, root.text);
+    const member = path.slice(1).join('.');
+    return scopedCallableParameterMembers.has(`${key}:${member}`)
+      || scopedCallableParameterMembers.has(`${key}:*`);
+  };
   const isTrackedCallableExpression = (node) => {
     const expression = unwrapExpression(node);
     const source = staticPropertyPath(expression, constBindings)?.join('.');
@@ -1666,6 +1797,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ts.isFunctionExpression(expression)
       || ts.isArrowFunction(expression)
       || ts.isClassExpression(expression)
+      || isScopedCallableParameterMember(expression)
       || (source && (
         (ts.isIdentifier(expression)
           ? isScopedCallableIdentifier(expression)
@@ -2296,10 +2428,27 @@ function dynamicCodeExecutionFailures(sourceFile) {
             if (!argument) continue;
             for (const [binding, selection] of parameterBindingPaths(parameter.name)) {
               let values = [argument];
+              let restEntries = [];
               for (const key of selection) {
-                values = values.flatMap((value) => literalMemberValues(value, key));
+                if (isObjectRestSelection(key)) {
+                  restEntries = values.flatMap((value) => objectRestEntries(value, key));
+                  values = restEntries.map(({ value }) => value);
+                } else {
+                  values = values.flatMap((value) => literalMemberValues(value, key));
+                }
               }
               const parameterKey = parameterCallableKey(parameter, binding);
+              if (restEntries.length > 0) {
+                for (const entry of restEntries) {
+                  if (!isTrackedCallableExpression(entry.value)) continue;
+                  const memberKey = `${parameterKey}:${entry.path.join('.')}`;
+                  if (!scopedCallableParameterMembers.has(memberKey)) {
+                    scopedCallableParameterMembers.add(memberKey);
+                    callableChanged = true;
+                  }
+                }
+                continue;
+              }
               if (
                 values.some(isTrackedCallableExpression)
                 && !scopedCallableParameters.has(parameterKey)
@@ -3425,6 +3574,7 @@ function governedV2DependencyMutationFailures(sourceFile) {
     let current = node;
     while (current && current !== sourceFile) {
       if (ts.isBlock(current)) scopes.push(`block:${current.pos}`);
+      if (ts.isClassStaticBlockDeclaration(current)) scopes.push(`static:${current.pos}`);
       if (ts.isCatchClause(current)) scopes.push(`catch:${current.pos}`);
       if (ts.isCaseBlock(current)) scopes.push(`switch:${current.pos}`);
       if (
