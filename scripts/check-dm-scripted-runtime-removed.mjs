@@ -526,6 +526,15 @@ function dynamicCodeExecutionFailures(sourceFile) {
   };
   const callableSourcePaths = (node) => {
     const expression = unwrapExpression(node);
+    if (ts.isCallExpression(expression)) {
+      const callee = unwrapExpression(expression.expression);
+      if (
+        (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))
+        && (ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : callee.argumentExpression && computedName(callee.argumentExpression)) === 'bind'
+      ) return callableSourcePaths(callee.expression);
+    }
     if (ts.isConditionalExpression(expression)) {
       return [
         ...callableSourcePaths(expression.whenTrue),
@@ -544,6 +553,79 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     const path = staticPropertyPath(expression, constBindings)?.join('.');
     return path ? [path] : [];
+  };
+  const classInstanceSources = (node) => {
+    const expression = unwrapExpression(node);
+    if (ts.isNewExpression(expression) && ts.isIdentifier(expression.expression)) {
+      return new Set([expression.expression.text]);
+    }
+    if (ts.isConditionalExpression(expression)) {
+      return new Set([
+        ...classInstanceSources(expression.whenTrue),
+        ...classInstanceSources(expression.whenFalse),
+      ]);
+    }
+    if (ts.isBinaryExpression(expression)) {
+      if (expression.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+        return classInstanceSources(expression.right);
+      }
+      if (
+        expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+        || expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+        || expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      ) return new Set([
+        ...classInstanceSources(expression.left),
+        ...classInstanceSources(expression.right),
+      ]);
+    }
+    const path = staticPropertyPath(expression, constBindings)?.join('.');
+    const classes = new Set(path ? classInstances.get(path) ?? [] : []);
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+      const key = ts.isPropertyAccessExpression(expression)
+        ? expression.name.text
+        : expression.argumentExpression && computedName(expression.argumentExpression);
+      if (key !== null && key !== undefined) {
+        for (const value of literalMemberValues(expression.expression, key)) {
+          for (const className of classInstanceSources(value)) classes.add(className);
+        }
+      }
+    }
+    return classes;
+  };
+  const recordClassInstanceTarget = (target, sources) => {
+    if (sources.size === 0) return false;
+    const current = classInstances.get(target) ?? new Set();
+    const next = new Set([...current, ...sources]);
+    if (next.size === current.size) return false;
+    classInstances.set(target, next);
+    return true;
+  };
+  const propagateClassInstanceBinding = (name, initializer) => {
+    const expression = unwrapExpression(initializer);
+    const targetPath = typeof name === 'string'
+      ? name
+      : staticPropertyPath(unwrapExpression(name), constBindings)?.join('.');
+    let changed = targetPath
+      ? recordClassInstanceTarget(targetPath, classInstanceSources(expression))
+      : false;
+    if (targetPath && ts.isArrayLiteralExpression(expression)) {
+      for (const [index, element] of expression.elements.entries()) {
+        if (ts.isOmittedExpression(element)) continue;
+        const value = ts.isSpreadElement(element) ? element.expression : element;
+        changed = propagateClassInstanceBinding(`${targetPath}.${index}`, value) || changed;
+      }
+    }
+    if (targetPath && ts.isObjectLiteralExpression(expression)) {
+      for (const property of expression.properties) {
+        if (ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name)) {
+          changed = propagateClassInstanceBinding(
+            `${targetPath}.${propertyNameText(property.name)}`,
+            property.initializer,
+          ) || changed;
+        }
+      }
+    }
+    return changed;
   };
   const recordCallableTarget = (target) => {
     const collection = target.includes('.') ? callablePaths : callableBindings;
@@ -577,10 +659,15 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const receiver = unwrapExpression(expression.expression);
       if (key !== null && key !== undefined) {
         if (ts.isIdentifier(receiver) && classInstances.has(receiver.text)) {
-          paths.push(`${classInstances.get(receiver.text)}.prototype.${key}`);
+          for (const className of classInstances.get(receiver.text)) {
+            paths.push(`${className}.prototype.${key}`);
+          }
         }
         if (ts.isNewExpression(receiver) && ts.isIdentifier(receiver.expression)) {
           paths.push(`${receiver.expression.text}.prototype.${key}`);
+        }
+        if (key === 'call' || key === 'apply') {
+          paths.push(...callableSourcePaths(receiver));
         }
       }
     }
@@ -819,7 +906,44 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const parent = objectLiteralBindingPath(object.parent.parent);
       return parent ? `${parent}.${propertyNameText(object.parent.name)}` : null;
     }
+    if (ts.isCallExpression(object.parent)) {
+      const call = object.parent;
+      const callee = unwrapExpression(call.expression);
+      if (
+        (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))
+        && (ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : callee.argumentExpression && computedName(callee.argumentExpression)) === 'assign'
+        && staticPropertyPath(callee.expression, constBindings)?.join('.') === 'Object'
+        && call.arguments.indexOf(object) > 0
+      ) return staticPropertyPath(call.arguments[0], constBindings)?.join('.') ?? null;
+    }
     return null;
+  };
+  const callablePropertyName = (name) => {
+    if (!ts.isComputedPropertyName(name)) return propertyNameText(name);
+    return staticStringValue(name.expression, constBindings);
+  };
+  const definePropertyInstalledPath = (node) => {
+    if (
+      !(ts.isFunctionExpression(node) || ts.isArrowFunction(node))
+      || !ts.isPropertyAssignment(node.parent)
+      || !ts.isObjectLiteralExpression(node.parent.parent)
+      || !ts.isCallExpression(node.parent.parent.parent)
+    ) return null;
+    const descriptor = node.parent.parent;
+    const call = descriptor.parent;
+    if (call.arguments[2] !== descriptor) return null;
+    const callee = unwrapExpression(call.expression);
+    if (!(ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))) return null;
+    const method = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : callee.argumentExpression && computedName(callee.argumentExpression);
+    if (method !== 'defineProperty') return null;
+    const owner = staticPropertyPath(callee.expression, constBindings)?.join('.');
+    const target = call.arguments[0] && staticPropertyPath(call.arguments[0], constBindings)?.join('.');
+    const key = call.arguments[1] && staticStringValue(call.arguments[1], constBindings);
+    return owner === 'Object' && target && key ? `${target}.${key}` : null;
   };
   const classBindingName = (node) => {
     if ((ts.isClassDeclaration(node) || ts.isClassExpression(node)) && node.name) return node.name.text;
@@ -842,15 +966,27 @@ function dynamicCodeExecutionFailures(sourceFile) {
       && ts.isPropertyAssignment(node.parent)
       && ts.isObjectLiteralExpression(node.parent.parent)
     ) {
+      const installed = definePropertyInstalledPath(node);
+      if (installed) return installed;
       const object = objectLiteralBindingPath(node.parent.parent);
-      return object ? `${object}.${propertyNameText(node.parent.name)}` : null;
+      const name = callablePropertyName(node.parent.name);
+      return object && name ? `${object}.${name}` : null;
+    }
+    if (
+      (ts.isFunctionExpression(node) || ts.isArrowFunction(node))
+      && ts.isBinaryExpression(node.parent)
+      && node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && node.parent.right === node
+    ) {
+      return staticPropertyPath(node.parent.left, constBindings)?.join('.') ?? null;
     }
     if (
       (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node))
       && ts.isObjectLiteralExpression(node.parent)
     ) {
       const object = objectLiteralBindingPath(node.parent);
-      return object ? `${object}.${propertyNameText(node.name)}` : null;
+      const name = callablePropertyName(node.name);
+      return object && name ? `${object}.${name}` : null;
     }
     if (
       (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node))
@@ -861,10 +997,17 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const prefix = node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
         ? className
         : `${className}.prototype`;
-      return `${prefix}.${propertyNameText(node.name)}`;
+      const name = callablePropertyName(node.name);
+      return name ? `${prefix}.${name}` : null;
     }
     return null;
   };
+  const isDefinePropertyGetter = (node) => (
+    (ts.isFunctionExpression(node) || ts.isArrowFunction(node))
+    && ts.isPropertyAssignment(node.parent)
+    && callablePropertyName(node.parent.name) === 'get'
+    && definePropertyInstalledPath(node) !== null
+  );
   const directFunctionOutputs = (node) => {
     if (ts.isArrowFunction(node) && !ts.isBlock(node.body)) {
       return { returns: [node.body], yields: [] };
@@ -890,15 +1033,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ) {
         const assignedTarget = unwrapExpression(node.left);
         const assignedValue = unwrapExpression(node.right);
-        if (
-          ts.isIdentifier(assignedTarget)
-          && ts.isNewExpression(assignedValue)
-          && ts.isIdentifier(assignedValue.expression)
-          && classInstances.get(assignedTarget.text) !== assignedValue.expression.text
-        ) {
-          classInstances.set(assignedTarget.text, assignedValue.expression.text);
-          callableChanged = true;
-        }
+        callableChanged = propagateClassInstanceBinding(assignedTarget, assignedValue)
+          || callableChanged;
         callableChanged = propagateCallableBinding(node.left, node.right) || callableChanged;
         const target = staticPropertyPath(node.left, constBindings)?.join('.');
         const source = staticPropertyPath(node.right, constBindings)?.join('.');
@@ -934,12 +1070,20 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
       if (ts.isFunctionLike(node)) {
         const name = functionBindingName(node);
+        const outputs = directFunctionOutputs(node);
+        if (
+          !name
+          && (ts.isMethodDeclaration(node)
+            || ts.isGetAccessorDeclaration(node)
+            || ts.isFunctionExpression(node)
+            || ts.isArrowFunction(node))
+          && outputs.returns.some(isTrackedCallableExpression)
+        ) unsafe = true;
         if (name) {
-          const outputs = directFunctionOutputs(node);
           if (
             outputs.returns.some(isTrackedCallableExpression)
           ) {
-            const outputsSet = ts.isGetAccessorDeclaration(node)
+            const outputsSet = ts.isGetAccessorDeclaration(node) || isDefinePropertyGetter(node)
               ? callableAccessorBindings
               : callableResultBindings;
             if (!outputsSet.has(name)) {
@@ -958,15 +1102,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
       if (!ts.isVariableDeclaration(node) || !node.initializer) return;
       const initializer = unwrapExpression(node.initializer);
-      if (
-        ts.isIdentifier(node.name)
-        && ts.isNewExpression(initializer)
-        && ts.isIdentifier(initializer.expression)
-        && classInstances.get(node.name.text) !== initializer.expression.text
-      ) {
-        classInstances.set(node.name.text, initializer.expression.text);
-        callableChanged = true;
-      }
+      callableChanged = propagateClassInstanceBinding(node.name, initializer) || callableChanged;
       callableChanged = propagateCallableBinding(node.name, node.initializer) || callableChanged;
       if (!ts.isIdentifier(node.name)) return;
       const path = staticPropertyPath(node.initializer, constBindings)?.join('.');
@@ -2425,40 +2561,55 @@ function governedV2DependencyMutationFailures(sourceFile) {
       compactNode(node, sourceFile)
       === 'createRuntimePublicTools(publicRun,artifacts,metrics,publicToolGate)'
     ) return;
-    const trustedGovernedRootConsumers = new Set([
-      'resolveV2FinalAnswer',
-      'validateFinalAnswer',
-      'rememberBriefProjectReferences',
-      'reserveToolOutcome',
-      'rememberToolOutcome',
-      'rememberLimitations',
-      'artifactAvailable',
-      'resolveArtifact',
-      'limitationOutcomeErrors',
-      'stableProjectReadErrors',
-      'requestedArtifactErrors',
-      'effectiveLimitations',
-      'requiredOutcomeLimitations',
-      'allowedFollowUps',
-      'emptyOutcomeHasRetainedArtifacts',
-      'briefProjectIdsRequiredByLatestTurn',
-      'briefProjectIdsMentioned',
-      'evidenceQuoteErrors',
-      'compositionCoverageErrors',
-      'groundedProjectFollowUps',
+    const trustedRootConsumerArguments = new Map([
+      ['resolveV2FinalAnswer', new Set([1, 2])],
+      ['validateFinalAnswer', new Set([1, 2])],
+      ['rememberBriefProjectReferences', new Set([0])],
+      ['reserveToolOutcome', new Set([0])],
+      ['rememberToolOutcome', new Set([0])],
+      ['rememberLimitations', new Set([0])],
+      ['artifactAvailable', new Set([1])],
+      ['resolveArtifact', new Set([1])],
+      ['limitationOutcomeErrors', new Set([1, 2])],
+      ['stableProjectReadErrors', new Set([1, 2])],
+      ['requestedArtifactErrors', new Set([1])],
+      ['effectiveLimitations', new Set([0])],
+      ['requiredOutcomeLimitations', new Set([0])],
+      ['allowedFollowUps', new Set([1, 2])],
+      ['emptyOutcomeHasRetainedArtifacts', new Set([0])],
+      ['briefProjectIdsRequiredByLatestTurn', new Set([1])],
+      ['briefProjectIdsMentioned', new Set([1])],
+      ['evidenceQuoteErrors', new Set([1])],
+      ['compositionCoverageErrors', new Set([1])],
+      ['groundedProjectFollowUps', new Set([1])],
     ]);
-    const trustedRootConsumer = (
-      ts.isIdentifier(node.expression)
-      && trustedGovernedRootConsumers.has(node.expression.text)
-    );
-    for (const argument of node.arguments) {
+    const calleeName = ts.isIdentifier(node.expression) ? node.expression.text : null;
+    const permittedArguments = calleeName && trustedRootConsumerArguments.get(calleeName);
+    let authenticatedConsumer = false;
+    if (calleeName && permittedArguments) {
+      const declarations = [];
+      let bindingWritten = false;
+      walk(sourceFile, (candidate) => {
+        if (declaresValueName(candidate, calleeName)) declarations.push(candidate);
+        if (writesValueName(candidate, calleeName)) bindingWritten = true;
+      });
+      authenticatedConsumer = declarations.length === 1
+        && ts.isFunctionDeclaration(declarations[0])
+        && declarations[0].parent === sourceFile
+        && !bindingWritten;
+    }
+    for (const [argumentIndex, argument] of node.arguments.entries()) {
       for (const path of governedPaths(argument)) {
         for (const [label, governedPath] of GOVERNED_V2_DEPENDENCY_PATHS) {
           if (
             path.length <= governedPath.length
             && path.every((part, index) => governedPath[index] === part)
           ) {
-            if (trustedRootConsumer && path.length < governedPath.length) continue;
+            if (
+              authenticatedConsumer
+              && permittedArguments.has(argumentIndex)
+              && path.length < governedPath.length
+            ) continue;
             mutated.add(`${label} must not escape through an unapproved helper parameter`);
           }
         }

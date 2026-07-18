@@ -929,6 +929,17 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; const expose = () => fn; const alias = expose; const callable = alias(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const expose = () => fn; const alias = true ? expose : (() => null); const callable = alias(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const holder = { expose: () => fn }; const { expose: alias } = holder; const callable = alias(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const holder: any = {}; holder.expose = () => fn; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const original = new Holder(); const alias = original; const callable = alias.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const alias = true ? new Holder() : new Holder(); const callable = alias.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const bound = expose.bind(null); const callable = bound(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const callable = expose.call(null); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const callable = expose.apply(null, []); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = ['ex', 'pose'].join(''); const holder = { [name]() { return fn; } }; const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = ['ex', 'pose'].join(''); class Holder { [name]() { return fn; } } const callable = new Holder().expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = ['ex', 'pose'].join(''); const holder = { get [name]() { return fn; } }; const callable = holder.expose; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const holder: any = {}; Object.assign(holder, { expose: () => fn }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const holder: any = {}; Object.defineProperty(holder, 'expose', { value: () => fn }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1809,6 +1820,10 @@ test('rejects governed dependency and schema escapes through property stores and
       '  const siteBrief =',
       "  const key = ['search', 'Projects'].join(''); Object.assign(publicRun, { [key]: async () => ({}) });\n  const siteBrief =",
     ),
+    runtime.replace(
+      '  const siteBrief =',
+      "  const rememberLimitations = (value: any) => { value.projects = new Map(); }; rememberLimitations(artifacts);\n  const siteBrief =",
+    ),
   ];
   const expected = [
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
@@ -1867,6 +1882,7 @@ test('rejects governed dependency and schema escapes through property stores and
     'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not be replaced or redefined',
     'src/lib/dm/runtime.ts: governed v2 dependency publicRun.searchProjects must not be replaced or redefined',
     'src/lib/dm/runtime.ts: governed v2 dependency publicRun.searchProjects must not be replaced or redefined',
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
   ];
   for (const [index, mutated] of mutations.entries()) {
     await t.test(String(index), () => {
