@@ -962,6 +962,24 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const method = Reflect.get(holder, 'expose'); const callable = method(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const method = Object.getOwnPropertyDescriptor(Holder.prototype, 'expose')?.value; const callable = method.call(holder); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
     `const fn = () => {}; const name = ['ex', 'pose'].join(''); const holder = { *[name]() { yield fn; } }; const callable = holder.expose().next().value; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const helpers = { identity(value: any) { return value; } }; const callable = helpers.identity(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const callable = ((value: any) => value)(fn); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const unwrap = (holder: any) => holder.value; const callable = unwrap({ value: fn }); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = getPublicToolName(); const callable = ({ [name]() { return fn; } }).expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = getPublicToolName(); const callable = new (class { [name]() { return fn; } })().expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const name = getPublicToolName(); const holder = { get [name]() { return fn; } }; const callable = holder[name]; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = {}; Object.assign(holder, { expose }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = {}; Reflect.defineProperty(holder, 'expose', { value: expose }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const name = getPublicToolName(); const descriptor = { value: expose }; const descriptors = { [name]: descriptor }; const holder: any = {}; Object.defineProperties(holder, descriptors); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = {}; Object.setPrototypeOf(holder, { expose }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = Object.create({ expose }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = new Proxy({}, { get() { return expose; } }); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; const expose = () => fn; const holder: any = Object.fromEntries([['expose', expose]]); const callable = holder.expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const C = Holder; const callable = new C().expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { static expose() { return fn; } } const C = Holder; const callable = C.expose(); const key = ['con', 'structor'].join(''); let Constructor: any; [Constructor] = [callable[key]]; Constructor(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const Child = class extends Holder {}; const callable = new Child().expose(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const name = getPublicToolName(); const method = Reflect.get(holder, name); const callable = method(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
+    `const fn = () => {}; class Holder { expose() { return fn; } } const holder = new Holder(); const name = getPublicToolName(); const method = Object.getOwnPropertyDescriptor(Holder.prototype, name)?.value; const callable = method.call(holder); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -981,6 +999,17 @@ test('allows safe computed callable-returning methods without dangerous downstre
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        const safeName = getPublicToolName(); const safeHolder = { [safeName]() { return () => 'safe'; } }; void safeHolder;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('allows safe callback consumers that do not return their callable argument', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const callback = () => 'safe'; const count = (_value: unknown) => 1; const wrap = (_value: unknown) => ({ safe: true }); const total = count(callback); const ordinary = wrap(callback); const safeKey = getPublicToolName(); void total; void ordinary[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
@@ -2002,6 +2031,21 @@ test('rejects governed constructor tagged-template and aggregate-wrapper escapes
       assert.ok(finalizationBoundaryFailures(mutation.source).includes(mutation.expected));
     });
   }
+});
+
+test('keeps governed aggregate aliases scoped to their lexical binding', async () => {
+  const runtime = await liveRuntimeSource();
+  const seeded = runtime.replace(
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {',
+    'function artifactAvailable(reference: ArtifactReference, artifacts: RunArtifacts): boolean {\n  const box = artifacts; void box;',
+  );
+  const mutated = seeded.replace(
+    '  const siteBrief =',
+    "  function consumeSafeAggregate() { const box = { value: 'safe' }; const inspect = (_value: unknown) => undefined; inspect(box); } void consumeSafeAggregate;\n  const siteBrief =",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed v2 dependency artifacts.projects must not escape through an unapproved helper parameter',
+  ));
 });
 
 test('rejects replacement of current-run project map methods through an assignment alias', async (t) => {
