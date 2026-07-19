@@ -1086,6 +1086,10 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; const key = ['con', 'structor'].join(''); function dangerous(callable: any) { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); } let target: any = (_value: unknown) => undefined; target = dangerous; target(fn);`,
     `const fn = () => {}; const key = ['con', 'structor'].join(''); class Dangerous { constructor(callable: any) { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); } } let Target: any = class Safe {}; Target = Dangerous; new Target(fn);`,
     `const fn = () => {}; const key = ['con', 'structor'].join(''); const dangerous = (callable: any) => { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); }; let source: any[] = []; source = [dangerous]; let targets: any[]; [...targets] = source; targets[0](fn);`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); const dangerous = (callable: any) => { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); }; const safe = (_value: unknown) => undefined; let target: any = safe; function invoke() { target(fn); } target = dangerous; invoke();`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); const dangerous = (callable: any) => { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); }; const safe = (..._args: any[]) => undefined; let apply: any = safe; let target: any = safe; let args: any[] = []; function invoke() { apply(target, null, args); } apply = Reflect.apply; target = dangerous; args = [fn]; invoke();`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); const dangerous = (callable: any) => { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); }; let source: any[] = []; function invoke() { let targets: any[]; [...targets] = source; targets[0](fn); } source = [dangerous]; invoke();`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); const bad = { exploit(callable: any) { const C = callable[key]; C(${JSON.stringify(hiddenWrite)})(); } }; let outer: any = {}; function invoke() { let local: any = {}; [outer, local] = [{}, bad]; local.exploit(fn); } invoke();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1347,6 +1351,39 @@ test('uses the overwritten safe array source for a rest assignment', async () =>
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        const dangerous = () => 'callable'; let source: any[] = [dangerous]; source = []; let targets: any[]; [...targets] = source; const selected: any = targets[0]; const safeKey = getPublicToolName(); void selected[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('uses call-time reaching state for captured helper bindings', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const fn = () => 'callable'; const key = ['con', 'structor'].join(''); const dangerous = (callable: any) => { void callable[key]; }; const safe = (..._args: any[]) => undefined; let target: any = dangerous; function invokeTarget() { target(fn); } target = safe; invokeTarget(); let apply: any = Reflect.apply; let reflectTarget: any = dangerous; let args: any[] = [fn]; function invokeReflect() { apply(reflectTarget, null, args); } apply = safe; reflectTarget = safe; args = []; invokeReflect(); let source: any[] = [dangerous]; function invokeRest() { let targets: any[]; [...targets] = source; const selected: any = targets[0]; void selected?.[key]; } source = []; invokeRest();\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('ignores uninitialized outer callable writes inside uninvoked helpers', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const fn = () => 'callable'; let value: any; function neverCalled() { value = fn; } void neverCalled; const safeKey = getPublicToolName(); void value?.[safeKey];\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('ignores class instances assigned only inside uninvoked helpers', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        const fn = () => 'callable'; const key = ['con', 'structor'].join(''); class Dangerous { exploit(callable: any) { void callable[key]; } } let holder: any = { exploit(_value: unknown) {} }; function neverCalled() { holder = new Dangerous(); } void neverCalled; holder.exploit(fn);\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',

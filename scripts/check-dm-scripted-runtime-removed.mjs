@@ -837,15 +837,25 @@ function dynamicCodeExecutionFailures(sourceFile) {
       }
     }
   }
+  const invocationReferences = new Map();
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return;
+    const path = staticPropertyPath(node.expression, constBindings)?.join('.');
+    const fn = visibleFunctionNode(path, node);
+    if (!fn) return;
+    const references = invocationReferences.get(fn) ?? [];
+    references.push(node);
+    invocationReferences.set(fn, references);
+  });
   const resolveInitializerNode = (node, seen = new Set()) => {
     const value = unwrapExpression(node);
     if (!ts.isIdentifier(value) || seen.has(value.text) || !initializerNodes.has(value.text)) return value;
     return resolveInitializerNode(initializerNodes.get(value.text), new Set(seen).add(value.text));
   };
-  const visibleInitializerDeclarations = (identifier) => {
+  const visibleInitializerDeclarations = (identifier, reference = identifier) => {
     const declarations = (initializerDeclarations.get(identifier.text) ?? [])
       .filter(({ scope, position }) => {
-        if (position >= identifier.pos) return false;
+        if (position >= reference.pos) return false;
         for (let current = identifier; current; current = current.parent) {
           if (current === scope) return true;
         }
@@ -922,16 +932,23 @@ function dynamicCodeExecutionFailures(sourceFile) {
     visibleBindingIdentityCache.set(identifier, identity);
     return identity;
   };
+  const reachingReferencesForIdentifier = (identifier) => {
+    const binding = visibleBindingIdentity(identifier);
+    const identifierContext = executionContextNode(identifier);
+    if (identifierContext === executionContextNode(binding.scope)) return [identifier];
+    return invocationReferences.get(identifierContext) ?? [identifier];
+  };
   const visibleAssignedValuesCache = new WeakMap();
-  const visibleAssignedValues = (identifier) => {
-    const cached = visibleAssignedValuesCache.get(identifier);
+  const visibleAssignedValues = (identifier, reference = identifier) => {
+    const identifierCache = visibleAssignedValuesCache.get(identifier) ?? new WeakMap();
+    const cached = identifierCache.get(reference);
     if (cached) return cached;
     const binding = visibleBindingIdentity(identifier);
     const declarations = (assignmentDeclarations.get(identifier.text) ?? [])
       .filter(({ identifier: target, position }) => {
-        if (position >= identifier.pos) return false;
+        if (position >= reference.pos) return false;
         return visibleBindingIdentity(target).key === binding.key
-          && scopeContainsNode(executionContextNode(target), identifier);
+          && scopeContainsNode(executionContextNode(target), reference);
       })
       .map((declaration) => ({
         ...declaration,
@@ -940,33 +957,36 @@ function dynamicCodeExecutionFailures(sourceFile) {
       .sort((left, right) => (
         right.position - left.position
       ));
-    visibleAssignedValuesCache.set(identifier, declarations);
+    identifierCache.set(reference, declarations);
+    visibleAssignedValuesCache.set(identifier, identifierCache);
     return declarations;
   };
   const reachingIdentifierValuesCache = new WeakMap();
   const reachingIdentifierValues = (identifier) => {
     const cached = reachingIdentifierValuesCache.get(identifier);
     if (cached) return cached;
-    const declarations = visibleInitializerDeclarations(identifier);
-    const declarationPosition = declarations.length > 0
-      ? Math.max(...declarations.map(({ position }) => position))
-      : Number.NEGATIVE_INFINITY;
-    const assignments = visibleAssignedValues(identifier);
-    const assignmentKill = assignments.find((assignment) => (
-      assignment.operator === ts.SyntaxKind.EqualsToken
-      && assignment.unconditional
-      && assignment.position > declarationPosition
-    ));
-    const values = assignmentKill
-      ? assignments
-          .filter(({ position }) => position >= assignmentKill.position)
-          .map(({ value }) => value)
-      : [
-          ...declarations.map((declaration) => declaration.initializer),
-          ...assignments
-            .filter(({ position }) => position >= declarationPosition)
-            .map(({ value }) => value),
-        ];
+    const values = reachingReferencesForIdentifier(identifier).flatMap((reference) => {
+      const declarations = visibleInitializerDeclarations(identifier, reference);
+      const declarationPosition = declarations.length > 0
+        ? Math.max(...declarations.map(({ position }) => position))
+        : Number.NEGATIVE_INFINITY;
+      const assignments = visibleAssignedValues(identifier, reference);
+      const assignmentKill = assignments.find((assignment) => (
+        assignment.operator === ts.SyntaxKind.EqualsToken
+        && assignment.unconditional
+        && assignment.position > declarationPosition
+      ));
+      return assignmentKill
+        ? assignments
+            .filter(({ position }) => position >= assignmentKill.position)
+            .map(({ value }) => value)
+        : [
+            ...declarations.map((declaration) => declaration.initializer),
+            ...assignments
+              .filter(({ position }) => position >= declarationPosition)
+              .map(({ value }) => value),
+          ];
+    }).filter((value, index, all) => all.indexOf(value) === index);
     reachingIdentifierValuesCache.set(identifier, values);
     return values;
   };
@@ -3163,26 +3183,36 @@ function dynamicCodeExecutionFailures(sourceFile) {
       ) {
         const assignedTarget = unwrapExpression(node.left);
         const assignedValue = unwrapExpression(node.right);
-        callableChanged = recordClassAlias(assignedTarget, assignedValue) || callableChanged;
-        callableChanged = propagateClassInstanceBinding(assignedTarget, assignedValue)
-          || callableChanged;
         activeCallableDeclarations = new Map();
-        let crossesExecutionContext = false;
-        for (const identifier of assignmentTargetIdentifiers(node.left)) {
+        const targetIdentifiers = assignmentTargetIdentifiers(node.left);
+        const localTargets = new Set();
+        for (const identifier of targetIdentifiers) {
+          const binding = visibleBindingIdentity(identifier);
+          if (executionContextNode(identifier) !== executionContextNode(binding.scope)) continue;
+          localTargets.add(identifier);
           const declaration = visibleInitializerDeclaration(identifier);
           if (!declaration) continue;
-          if (
-            executionContextNode(identifier)
-            !== executionContextNode(declaration.initializer)
-          ) {
-            crossesExecutionContext = true;
-            continue;
-          }
           activeCallableDeclarations.set(identifier.text, new Set([
             `${declaration.scope.pos}:${declaration.initializer.pos}:${identifier.text}`,
           ]));
         }
-        if (!crossesExecutionContext) {
+        const crossesExecutionContext = localTargets.size !== targetIdentifiers.length;
+        if (crossesExecutionContext) {
+          for (const binding of assignmentBindingInitializers(node.left, node.right)) {
+            if (!localTargets.has(binding.identifier)) continue;
+            callableChanged = recordClassAlias(binding.identifier, binding.initializer)
+              || callableChanged;
+            callableChanged = propagateClassInstanceBinding(
+              binding.identifier,
+              binding.initializer,
+            ) || callableChanged;
+            callableChanged = propagateCallableBinding(binding.identifier, binding.initializer)
+              || callableChanged;
+          }
+        } else {
+          callableChanged = recordClassAlias(assignedTarget, assignedValue) || callableChanged;
+          callableChanged = propagateClassInstanceBinding(assignedTarget, assignedValue)
+            || callableChanged;
           callableChanged = propagateCallableBinding(node.left, node.right) || callableChanged;
         }
         activeCallableDeclarations = new Map();
