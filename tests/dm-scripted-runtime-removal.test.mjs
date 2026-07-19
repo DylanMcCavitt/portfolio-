@@ -1037,6 +1037,8 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; function exploit({ ...box }: any) { const callable = box.callable; const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } exploit({ callable: fn });`,
     `const fn = () => {}; function dangerous() { function consume(callable: any) { const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } consume(fn); } function unrelated() { function consume(_value: unknown) {} void consume; } dangerous(); void unrelated;`,
     `const fn = () => {}; const raise = () => { throw fn; }; const alias = raise; const key = ['con', 'structor'].join(''); try { alias(); } catch (callable) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); }`,
+    `const fn = () => {}; const raise = () => { throw fn; }; const delegate = () => raise(); const key = ['con', 'structor'].join(''); try { delegate(); } catch (callable) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); }`,
+    `const fn = () => {}; const identity = (value: any) => value; const makeBound = () => identity.bind(null, fn); const bound = makeBound(); const callable = bound(); const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})();`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1177,6 +1179,17 @@ test('keeps unrelated callable names from tainting delegated safe factory result
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        function unrelated() { const value = () => 'callable'; const item = () => 'callable'; void value; void item; } const safe = { value: { safe: true } }; const safeItems = [{ safe: true }]; const baseFactory = () => safe; const baseItems = () => safeItems; const makeSafe = () => baseFactory(); const makeItems = () => baseItems(); const { value } = makeSafe(); const [item] = makeItems(); const safeKey = getPublicToolName(); void (value as any)[safeKey]; void (item as any)[safeKey]; void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('keeps unrelated callable names from tainting conditional and nested safe factory results', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        function unrelated() { const value = () => 'callable'; const item = () => 'callable'; void value; void item; } const safe = { value: { safe: true } }; const safeItems = [{ safe: true }]; const flag = getPublicToolName() === 'safe'; const makeSafe = () => flag ? safe : safe; const makeItems = () => { if (flag) { const alias = safeItems; return alias; } { const alias = safeItems; return alias; } }; const { value } = makeSafe(); const [item] = makeItems(); const safeKey = getPublicToolName(); void (value as any)[safeKey]; void (item as any)[safeKey]; void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',

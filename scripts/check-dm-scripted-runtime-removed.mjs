@@ -444,6 +444,36 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return functionNodes.get(path) ?? null;
   };
+  const functionReturnInitializers = (fn) => {
+    if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return [fn.body];
+    const returned = [];
+    const visit = (current) => {
+      if (current !== fn && ts.isFunctionLike(current)) return;
+      if (ts.isReturnStatement(current) && current.expression) returned.push(current.expression);
+      ts.forEachChild(current, visit);
+    };
+    if (fn?.body) visit(fn.body);
+    return returned;
+  };
+  const returnInitializerBranches = (node) => {
+    const expression = unwrapExpression(node);
+    if (ts.isConditionalExpression(expression)) return [
+      ...returnInitializerBranches(expression.whenTrue),
+      ...returnInitializerBranches(expression.whenFalse),
+    ];
+    if (
+      ts.isBinaryExpression(expression)
+      && (
+        expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+        || expression.operatorToken.kind === ts.SyntaxKind.BarBarToken
+        || expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      )
+    ) return [
+      ...returnInitializerBranches(expression.left),
+      ...returnInitializerBranches(expression.right),
+    ];
+    return [expression];
+  };
   const bindingInitializers = (name, initializer, entries = [], seen = new Set()) => {
     const target = unwrapExpression(name);
     const value = unwrapExpression(initializer);
@@ -476,30 +506,24 @@ function dynamicCodeExecutionFailures(sourceFile) {
       const fn = visibleFunctionNode(callee, value.expression);
       const callKey = fn && `call:${fn.pos}`;
       if (callKey && seen.has(callKey)) return entries;
-      let returned = null;
-      if (fn && ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) {
-        returned = fn.body;
-      } else if (fn?.body && ts.isBlock(fn.body)) {
-        returned = fn.body.statements.find((statement) => (
-          ts.isReturnStatement(statement) && statement.expression
-        ))?.expression ?? null;
-      }
-      const result = returned && unwrapExpression(returned);
-      if (
-        result
-        && (
+      const results = fn
+        ? functionReturnInitializers(fn).flatMap(returnInitializerBranches)
+        : [];
+      const supported = results.filter((result) => (
           ts.isIdentifier(result)
           || ts.isCallExpression(result)
           || ts.isObjectLiteralExpression(result)
           || ts.isArrayLiteralExpression(result)
-        )
-      ) {
-        return bindingInitializers(
+      ));
+      if (supported.length === results.length && supported.length > 0) {
+        const nextSeen = callKey ? new Set(seen).add(callKey) : seen;
+        for (const result of supported) bindingInitializers(
           target,
           result,
           entries,
-          callKey ? new Set(seen).add(callKey) : seen,
+          nextSeen,
         );
+        return entries;
       }
     }
     if (ts.isObjectBindingPattern(target) && ts.isObjectLiteralExpression(value)) {
@@ -1699,11 +1723,14 @@ function dynamicCodeExecutionFailures(sourceFile) {
           : value;
       };
       const initializer = resolveInvocationInitializer(callee);
-      const boundCalls = (node) => {
+      const boundCalls = (node, seenFunctions = new Set()) => {
         const value = node && unwrapExpression(node);
         if (!value) return [];
         if (ts.isConditionalExpression(value)) {
-          return [...boundCalls(value.whenTrue), ...boundCalls(value.whenFalse)];
+          return [
+            ...boundCalls(value.whenTrue, seenFunctions),
+            ...boundCalls(value.whenFalse, seenFunctions),
+          ];
         }
         if (
           ts.isBinaryExpression(value)
@@ -1712,8 +1739,20 @@ function dynamicCodeExecutionFailures(sourceFile) {
             || value.operatorToken.kind === ts.SyntaxKind.BarBarToken
             || value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
           )
-        ) return [...boundCalls(value.left), ...boundCalls(value.right)];
-        return ts.isCallExpression(value) ? [value] : [];
+        ) return [
+          ...boundCalls(value.left, seenFunctions),
+          ...boundCalls(value.right, seenFunctions),
+        ];
+        if (!ts.isCallExpression(value)) return [];
+        const calls = [value];
+        for (const fn of callableFunctionsForCallee(value.expression)) {
+          if (seenFunctions.has(fn.pos)) continue;
+          const nextSeen = new Set(seenFunctions).add(fn.pos);
+          for (const returned of functionReturnInitializers(fn)) {
+            calls.push(...boundCalls(returned, nextSeen));
+          }
+        }
+        return calls;
       };
       const bindCandidates = boundCalls(initializer).filter((candidate) => {
         const boundCallee = unwrapExpression(candidate.expression);
@@ -2466,6 +2505,25 @@ function dynamicCodeExecutionFailures(sourceFile) {
         && ts.isIdentifier(node.variableDeclaration.name)
       ) {
         let trackedThrow = false;
+        const visitFunctionThrows = (fn, seenFunctions = new Set()) => {
+          if (seenFunctions.has(fn.pos)) return;
+          const nextSeen = new Set(seenFunctions).add(fn.pos);
+          const visit = (current) => {
+            if (current !== fn && ts.isFunctionLike(current)) return;
+            if (
+              ts.isThrowStatement(current)
+              && current.expression
+              && isTrackedCallableExpression(current.expression)
+            ) trackedThrow = true;
+            if (ts.isCallExpression(current)) {
+              for (const called of callableFunctionsForCallee(current.expression)) {
+                visitFunctionThrows(called, nextSeen);
+              }
+            }
+            ts.forEachChild(current, visit);
+          };
+          if (fn.body) visit(fn.body);
+        };
         const visitThrows = (current) => {
           if (current !== node.parent.tryBlock && ts.isFunctionLike(current)) return;
           if (
@@ -2475,16 +2533,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
           ) trackedThrow = true;
           if (ts.isCallExpression(current)) {
             for (const fn of callableFunctionsForCallee(current.expression)) {
-              const visitFunctionThrows = (functionNode) => {
-                if (functionNode !== fn && ts.isFunctionLike(functionNode)) return;
-                if (
-                  ts.isThrowStatement(functionNode)
-                  && functionNode.expression
-                  && isTrackedCallableExpression(functionNode.expression)
-                ) trackedThrow = true;
-                ts.forEachChild(functionNode, visitFunctionThrows);
-              };
-              if (fn.body) visitFunctionThrows(fn.body);
+              visitFunctionThrows(fn);
             }
           }
           ts.forEachChild(current, visitThrows);
