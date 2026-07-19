@@ -442,7 +442,9 @@ function dynamicCodeExecutionFailures(sourceFile) {
   };
   const recordFunctionDeclaration = (name, node, scope) => {
     const declarations = functionDeclarations.get(name) ?? [];
-    declarations.push({ node, scope });
+    if (!declarations.some((declaration) => declaration.node === node)) {
+      declarations.push({ node, scope });
+    }
     functionDeclarations.set(name, declarations);
   };
   const visibleFunctionNode = (path, reference) => {
@@ -659,7 +661,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
     const scope = initializerScopeNode(node);
     for (const binding of bindingInitializers(node.name, initializer)) {
       const declarations = initializerDeclarations.get(binding.name) ?? [];
-      declarations.push({ initializer: binding.initializer, scope });
+      declarations.push({ initializer: binding.initializer, scope, position: node.pos });
       initializerDeclarations.set(binding.name, declarations);
     }
     if (!ts.isIdentifier(node.name)) return;
@@ -711,7 +713,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
   };
   const visibleInitializerDeclarations = (identifier) => {
     const declarations = (initializerDeclarations.get(identifier.text) ?? [])
-      .filter(({ scope }) => {
+      .filter(({ scope, position }) => {
+        if (position >= identifier.pos) return false;
         for (let current = identifier; current; current = current.parent) {
           if (current === scope) return true;
         }
@@ -1525,15 +1528,21 @@ function dynamicCodeExecutionFailures(sourceFile) {
     const seen = new Set();
     const visit = (value) => {
       const expression = unwrapExpression(value);
+      if (ts.isFunctionLike(expression)) {
+        if (!seen.has(expression)) {
+          seen.add(expression);
+          resolved.push(expression);
+        }
+        return;
+      }
       if (ts.isIdentifier(expression)) {
         const declaration = visibleFunctionNode(expression.text, expression);
         if (declaration && !seen.has(declaration)) {
           seen.add(declaration);
           resolved.push(declaration);
         }
-        const initializer = visibleInitializerDeclaration(expression)?.initializer;
-        if (initializer && !seen.has(initializer)) {
-          seen.add(initializer);
+        for (const { initializer } of visibleInitializerDeclarations(expression)) {
+          if (seen.has(initializer)) continue;
           visit(initializer);
         }
       }
@@ -1738,16 +1747,20 @@ function dynamicCodeExecutionFailures(sourceFile) {
     });
     const callee = unwrapExpression(call.expression);
     if (ts.isIdentifier(callee)) {
-      const resolveInvocationInitializer = (identifier, seen = new Set()) => {
-        if (seen.has(identifier.text)) return identifier;
-        const initializer = visibleInitializerDeclaration(identifier)?.initializer
-          ?? visibleAssignedValue(identifier)?.value;
-        const value = initializer && unwrapExpression(initializer);
-        return value && ts.isIdentifier(value)
-          ? resolveInvocationInitializer(value, new Set(seen).add(identifier.text))
-          : value;
+      const resolveInvocationInitializers = (identifier, seen = new Set()) => {
+        if (seen.has(identifier.text)) return [identifier];
+        const initializers = visibleInitializerDeclarations(identifier)
+          .map((declaration) => declaration.initializer);
+        const assigned = visibleAssignedValue(identifier)?.value;
+        const values = initializers.length > 0 ? initializers : assigned ? [assigned] : [];
+        return values.flatMap((initializer) => {
+          const value = unwrapExpression(initializer);
+          return ts.isIdentifier(value)
+            ? resolveInvocationInitializers(value, new Set(seen).add(identifier.text))
+            : [value];
+        });
       };
-      const initializer = resolveInvocationInitializer(callee);
+      const initializers = resolveInvocationInitializers(callee);
       const boundCalls = (node, seenFunctions = new Set()) => {
         const value = node && unwrapExpression(node);
         if (!value) return [];
@@ -1779,7 +1792,8 @@ function dynamicCodeExecutionFailures(sourceFile) {
         }
         return calls;
       };
-      const bindCandidates = boundCalls(initializer).filter((candidate) => {
+      const bindCandidates = initializers.flatMap((initializer) => boundCalls(initializer))
+        .filter((candidate) => {
         const boundCallee = unwrapExpression(candidate.expression);
         if (!(ts.isPropertyAccessExpression(boundCallee) || ts.isElementAccessExpression(boundCallee))) {
           return false;
@@ -1788,7 +1802,7 @@ function dynamicCodeExecutionFailures(sourceFile) {
           ? boundCallee.name.text
           : boundCallee.argumentExpression && computedName(boundCallee.argumentExpression);
         return method === 'bind';
-      });
+        });
       const boundCall = bindCandidates.find((candidate) => (
         candidate.arguments.slice(1).some(isTrackedCallableExpression)
       )) ?? bindCandidates[0];
@@ -2205,6 +2219,11 @@ function dynamicCodeExecutionFailures(sourceFile) {
       && ts.isIdentifier(object.parent.name)
     ) return object.parent.name.text;
     if (
+      ts.isBinaryExpression(object.parent)
+      && object.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && object.parent.right === object
+    ) return staticPropertyPath(object.parent.left, constBindings)?.join('.') ?? null;
+    if (
       ts.isPropertyAssignment(object.parent)
       && object.parent.initializer === object
       && ts.isObjectLiteralExpression(object.parent.parent)
@@ -2299,6 +2318,13 @@ function dynamicCodeExecutionFailures(sourceFile) {
     }
     return null;
   };
+  walk(sourceFile, (node) => {
+    if (!ts.isFunctionLike(node)) return;
+    const name = functionBindingName(node);
+    if (!name) return;
+    functionNodes.set(name, node);
+    recordFunctionDeclaration(name, node, lexicalScopeNode(node));
+  });
   const unknownCallableMemberOwner = (node) => {
     if (
       (ts.isFunctionExpression(node) || ts.isArrowFunction(node))

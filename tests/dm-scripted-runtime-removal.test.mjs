@@ -1043,6 +1043,10 @@ test('rejects dynamic evaluation and function construction in the governed runti
     `const fn = () => {}; { const holder = { raise() { throw fn; } }; const key = ['con', 'structor'].join(''); try { holder.raise(); } catch (callable) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } } { const holder = { raise() {} }; void holder; }`,
     `const fn = () => {}; class Scope { static { function consume(callable: any) { const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } consume(fn); } } function consume(_value: unknown) {} void Scope; void consume;`,
     `const fn = () => {}; switch (getPublicToolName()) { case 'safe': const consume = (callable: any) => { const key = ['con', 'structor'].join(''); let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); }; consume(fn); break; } const consume = (_value: unknown) => undefined; void consume;`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); const safe = { consume: (_value: unknown) => undefined }; const bad = { consume: (callable: any) => { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } }; const make = () => getPublicToolName() === 'safe' ? safe : bad; const { consume } = make(); consume(fn);`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); let holder: any; holder = { exploit(callable: any) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } }; holder.exploit(fn);`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); class Holder { exploit(callable: any) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } } new Holder().exploit(fn);`,
+    `const fn = () => {}; const key = ['con', 'structor'].join(''); class Holder { static exploit(callable: any) { let C: any; [C] = [callable[key]]; C(${JSON.stringify(hiddenWrite)})(); } } Holder.exploit(fn);`,
   ];
   for (const [index, mutation] of mutations.entries()) {
     await t.test(String(index), () => {
@@ -1216,6 +1220,17 @@ test('keeps unrelated callable names from tainting safe catch bindings', async (
   const mutated = runtime.replace(
     '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
     "        function unrelated() { const value = () => 'callable'; void value; } try { throw { safe: true }; } catch (value) { const safeKey = getPublicToolName(); void value[safeKey]; } void unrelated;\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
+  );
+  assert.ok(!finalizationBoundaryFailures(mutated).includes(
+    'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
+  ));
+});
+
+test('does not use future var redeclarations as callable evidence for earlier reads', async () => {
+  const runtime = await liveRuntimeSource();
+  const mutated = runtime.replace(
+    '        finalizationResult ??= limitedResult(finalizationAttempts > 0);',
+    "        var value: any = { safe: true }; const safeKey = getPublicToolName(); void value[safeKey]; var value = () => 'later';\n        finalizationResult ??= limitedResult(finalizationAttempts > 0);",
   );
   assert.ok(!finalizationBoundaryFailures(mutated).includes(
     'src/lib/dm/runtime.ts: governed runtime source must not use dynamic code evaluation or function construction',
