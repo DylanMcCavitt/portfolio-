@@ -795,6 +795,44 @@ test('search-only project artifacts are rejected until a matching same-run direc
   assert.equal(projectLoads, 1, 'the brief and public tools must share one run-local project promise');
 });
 
+test('successful discovery cannot silently omit an explicitly requested project card', async () => {
+  const source = await createEvalProjectSource();
+  const request = chatRequest('Show only one project card for trading automation.');
+  const model = toolSequenceModel([
+    { toolName: 'searchProjects', input: { query: 'trading automation', limit: 1 } },
+    {
+      toolName: 'finalizeAnswer',
+      input: {
+        segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
+        artifacts: [],
+        limitations: [],
+      },
+    },
+    { toolName: 'getProject', input: { id: 'agentic-trader' } },
+    {
+      toolName: 'finalizeAnswer',
+      input: {
+        segments: [{ kind: 'factual', text: 'agentic-trader shows public trading automation work.', evidenceIds: ['agentic-trader:identity'] }],
+        artifactIntent: 'one_project',
+        artifacts: [{ kind: 'project', id: 'agentic-trader' }],
+        limitations: [],
+      },
+    },
+  ]);
+
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    db: source.db,
+    projectLoader: source.projectLoader,
+    model,
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  assert.equal(observation.result?.repairAttempted, true);
+  assert.deepEqual(observation.tools, ['searchProjects', 'getProject']);
+  assert.deepEqual(observation.projectIds, ['agentic-trader']);
+});
+
 test('live eval project-unavailable wiring preserves startup and exercises searchProjects', async () => {
   const source = await createEvalProjectSource();
   const testCase = evalCase('derived-project-tool-unavailable');
