@@ -342,6 +342,23 @@ test('the reviewed static profile source exposes exactly the nine approved entri
   assert.equal(unknown.status, 'empty');
   assert.deepEqual(unknown.profiles, []);
   assert.deepEqual(unknown.evidence, []);
+
+  const genuineHobbies = await run.searchProfile({ query: "What are some of Dylan's hobbies?" });
+  assert.equal(genuineHobbies.status, 'empty');
+  assert.deepEqual(genuineHobbies.profiles, []);
+
+  const privateLife = await run.searchProfile({ query: 'What is Dylan like in his private life?' });
+  assert.equal(privateLife.status, 'empty');
+  assert.deepEqual(privateLife.profiles, []);
+
+  assert.deepEqual(
+    (await run.searchProfile({ query: 'How does Dylan work?' })).profiles.map((entry) => entry.id),
+    ['working-style'],
+  );
+  assert.deepEqual(
+    (await run.searchProfile({ query: 'Does Dylan require sponsorship?' })).profiles.map((entry) => entry.id),
+    ['recruiter-faq'],
+  );
 });
 
 test('the static profile loader rejects malformed input and excludes draft or private entries', () => {

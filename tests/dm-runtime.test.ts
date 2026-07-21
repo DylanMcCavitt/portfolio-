@@ -868,6 +868,57 @@ test('live eval project-unavailable wiring preserves startup and exercises searc
   assert.equal(projectLoads, 1, 'startup brief and the failed search must share one validated project promise');
 });
 
+test('live eval source wiring exercises the same approved profile corpus as production', async () => {
+  const source = await createEvalProjectSource();
+  const testCase = evalCase('golden-02-overview');
+  const request = requestForEvalCase(testCase);
+  const sourceDeps = createDMEvalRuntimeSourceDeps(testCase, source);
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    ...sourceDeps,
+    model: toolSequenceModel([
+      { toolName: 'searchProfile', input: { query: 'Tell me about Dylan' } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{
+          kind: 'factual',
+          text: 'Dylan is a New York City–based software engineer.',
+          evidenceIds: ['profile:short-bio:summary'],
+        }],
+        artifactIntent: 'none',
+        artifacts: [],
+        limitations: [],
+      } },
+    ]),
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  assert.deepEqual(observation.tools, ['searchProfile']);
+  assert.deepEqual(observation.evidenceIds, ['profile:short-bio:summary']);
+});
+
+test('live eval profile wiring keeps genuine hobbies honestly unsupported', async () => {
+  const source = await createEvalProjectSource();
+  const testCase = evalCase('golden-10-hobbies-source-gap');
+  const request = requestForEvalCase(testCase);
+  const observation = await observeDMResponse(createDMChatResponse(request, config, {
+    ...createDMEvalRuntimeSourceDeps(testCase, source),
+    model: toolSequenceModel([
+      { toolName: 'searchProfile', input: { query: "What are some of Dylan's hobbies?" } },
+      { toolName: 'finalizeAnswer', input: {
+        segments: [{ kind: 'limitation', code: 'personal_unknown' }],
+        artifactIntent: 'none',
+        artifacts: [],
+        limitations: ['personal_unknown'],
+        followUp: 'contact_dylan',
+      } },
+    ]),
+  }), request);
+
+  assert.equal(observation.result?.status, 'accepted');
+  assert.deepEqual(observation.tools, ['searchProfile']);
+  assert.deepEqual(observation.evidenceIds, []);
+  assert.equal(evaluateDMEvalObservation(testCase, observation), null);
+});
+
 test('runtime metrics mark the first visible public-tool state before completion', async () => {
   const source = await createEvalProjectSource();
   const request = chatRequest('Which project shows trading automation?');
