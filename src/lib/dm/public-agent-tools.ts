@@ -115,15 +115,17 @@ export interface PublicSourceRecord {
  * profile source must explicitly mark both publication and public visibility
  * before an entry can cross this boundary.
  */
-export interface PublicProfileSourceEntry {
-  id: string;
-  category: string;
-  title: string;
-  summary: string;
-  href?: string;
-  publicationStatus: 'published' | 'draft';
-  visibility: 'public' | 'private';
-}
+export const PublicProfileSourceEntrySchema = z.strictObject({
+  id: z.string().trim().min(1).max(200).regex(/^[a-z0-9][a-z0-9_-]*$/i),
+  category: z.string().trim().min(1).max(100),
+  title: z.string().trim().min(1).max(160),
+  summary: z.string().trim().min(1).max(1_000),
+  href: z.string().trim().min(1).max(2_000).optional(),
+  publicationStatus: z.enum(['published', 'draft']),
+  visibility: z.enum(['public', 'private']),
+});
+
+export type PublicProfileSourceEntry = z.infer<typeof PublicProfileSourceEntrySchema>;
 
 export interface PublicProfileRecord {
   id: string;
@@ -491,7 +493,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const searchProfile = createTool(
-    'Search published public profile entries. Returns empty until a reviewed profile source is supplied.',
+    'Search reviewed, published public profile entries. Use this for biography, working-style, recruiter, and approved-interest questions.',
     SearchProfileInputSchema,
     async (input, signal) => {
       if (!deps.loadProfileEntries) {
@@ -505,11 +507,15 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
         });
       }
       const entries = (await deps.loadProfileEntries())
+        .flatMap((entry) => {
+          const parsed = PublicProfileSourceEntrySchema.safeParse(entry);
+          return parsed.success ? [parsed.data] : [];
+        })
         .filter((entry) => entry.publicationStatus === 'published' && entry.visibility === 'public')
         .filter((entry) => !input.categories?.length || input.categories.some(
           (category) => category.toLowerCase() === entry.category.toLowerCase(),
         ))
-        .map((entry) => ({ entry, score: searchScore(profileHaystack(entry), input.query) }))
+        .map((entry) => ({ entry, score: profileSearchScore(entry, input.query) }))
         .filter(({ score }) => score > 0)
         .sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
       throwIfAborted(signal);
@@ -858,6 +864,12 @@ function resumeHaystack(track: ResumeTrack): string {
 
 function profileHaystack(entry: PublicProfileSourceEntry): string {
   return [entry.id, entry.category, entry.title, entry.summary].join(' ');
+}
+
+function profileSearchScore(entry: PublicProfileSourceEntry, query: string): number {
+  const biographyIntent = /\b(?:about|bio|biography|background)\b/i.test(query);
+  return searchScore(profileHaystack(entry), query)
+    + (entry.category === 'bio' && biographyIntent ? 3 : 0);
 }
 
 function searchScore(haystack: string, query: string): number {
