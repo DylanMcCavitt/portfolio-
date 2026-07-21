@@ -27,7 +27,9 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
 - Expected evidence: PRD issue plus child issue packets link this ledger and name continuity constraints.
 - Actual evidence: the preview branch contains the live DM runtime, Split-canvas
   landing, Typographic project cards, Editorial details, DB/admin/Slack seams,
-  and the production-readiness program in GitHub issues #184–#196.
+  and the implementation history recorded by GitHub issues #184–#196. Those
+  issues are closed historical locators; their state does not prove that
+  separately authorized preview or production operations were performed.
 
 ## Now
 
@@ -43,35 +45,42 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   missing configuration, read/validation failure, or an unexpected empty set.
   `src/data/catalog.ts` remains only for parity/migration, offline development,
   and the explicit operator `catalog_emergency` rollback. This source-boundary
-  hardening does not itself complete #190's Loom proof or deploy gates.
-- #190 provides the review-gated 0006 cutover function and direct public-slug
-  route reads. The function is invoked only by the explicitly applied,
-  parity-first operator command; it preserves DB-only Loom and queues one
-  durable static-artifact refresh.
+  hardening does not itself prove the Loom cutover or any deployment gate.
+- The reviewed implementation includes the 0006 cutover function and direct
+  public-slug route reads. The function is invoked only by the explicitly
+  applied, parity-first operator command; it preserves DB-only Loom and queues
+  one durable static-artifact refresh.
 - Keep `src/data/resume.ts` as the v1 résumé/contact source.
-- Before #190 proves Loom refresh, explicitly adopt Loom's authenticated,
+- Before an approved Loom refresh, explicitly adopt Loom's authenticated,
   immutable GitHub repository id onto the reviewed published project id using
-  `docs/agents/github-refresh.md`; never infer identity from a slug.
-- Process publication side effects through the durable versioned outbox from
-  GitHub issue #189; publishing never waits for OpenAI or a deploy hook.
+  [`docs/agents/github-refresh.md`](./github-refresh.md); never infer identity
+  from a slug.
+- Process publication side effects through the durable versioned outbox
+  documented in [`docs/agents/publish-outbox.md`](./publish-outbox.md);
+  publishing never waits for OpenAI or a deploy hook.
 
 ## Next
 
-- Obtain each #190 preview approval in order: 0006 migration, environment/cron/
+- Obtain each preview approval in order: 0006 migration, environment/cron/
   deploy-hook configuration, Loom repository-id adoption and real scan, then
-  admin publish. Do not mutate production.
-- Complete the parity-first 0006 cutover and approved Loom publish, then prove
+  admin publish. Repository implementation and closed issues do not supply
+  those approvals. Do not mutate production.
+- Complete the authorized parity-first 0006 cutover and approved Loom publish,
+  then prove
   `/library`, `/projects/loom`, DM, RAG, sitemap, and OG against the reviewed
   deployment SHA while recording the synthetic-draft exclusion evidence.
-- Finish safeguards and release gates in #191–#192 before promoting the redesign
-  to production.
+- Execute the fail-closed safeguards and
+  [`release-gates.md`](./release-gates.md) checklist for the exact candidate
+  before promoting the redesign to production.
 
 ## Later
 
 - Blog/log expansion remains optional.
 - Richer artifact types can be added after the answer-block contract proves stable.
-- Review-gated existing-project refresh is implemented by GitHub issue #188;
-  scheduling refresh scans remains deferred to #193.
+- Review-gated existing-project refresh is implemented. Scheduling refresh
+  scans remains deferred until its configuration and execution have durable,
+  exact-candidate proof; closed historical issue #193 does not provide that
+  operational proof.
 - Resume/contact DB migration follows the project DB cutover.
 
 ## Explicitly deferred
@@ -93,8 +102,8 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   - Where tracked: Future issue candidates below.
   - Constraint imposed on Now: Do not claim generated visuals as proof or public evidence.
 - Capability: Scheduled GitHub refresh scans.
-  - Why deferred: Issue #188 deliberately ships a manual/Slack review-gated refresh before background scheduling.
-  - Where tracked: GitHub issue #193.
+  - Why deferred: The implemented manual/Slack review-gated refresh does not itself configure or authorize background scheduling.
+  - Where tracked: Historical GitHub issues #188 and #193 plus [`docs/agents/github-refresh.md`](./github-refresh.md); a future execution record must provide durable proof of any active schedule.
   - Constraint imposed on Now: Source identity and revision idempotency must remain trigger-neutral.
 - Capability: OpenAI Agents SDK orchestration.
   - Why deferred: V1 public DM route defaults to Vercel AI SDK and typed services.
@@ -109,9 +118,11 @@ The 2026-06-26 Integrated DM content backend PRD supersedes the 2026-06-18 Eve-s
   - Where tracked: Future issue candidates below.
   - Constraint imposed on Now: Every new file under `db/migrations/` requires two manual applies before deployed code depends on it: once with the production connection string, once with the `preview` branch connection string, using the same idempotent Neon-HTTP-safe runner (see `docs/agents/db-foundation.md`). Migrations must stay statement-idempotent (`IF NOT EXISTS` et al.) because the Neon HTTP driver runs them without transactions.
 - Capability: Scheduled outbox execution.
-  - Why deferred: Issue #189 implements the authenticated bounded worker but
+  - Why deferred: The authenticated bounded worker is implemented, but that
     does not authorize Vercel cron, deploy-hook, preview, or production config.
-  - Where tracked: GitHub issue #189 manual gates and the final launch gate #192.
+  - Where tracked: [`docs/agents/publish-outbox.md`](./publish-outbox.md) and
+    [`docs/agents/release-gates.md`](./release-gates.md); historical issues #189
+    and #192 are implementation locators only.
   - Constraint imposed on Now: Jobs remain durable and safely retryable until
     a maintainer applies migration/configuration and schedules the worker.
 
