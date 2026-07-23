@@ -1,5 +1,5 @@
 /**
- * DM landing client island. The AI SDK DefaultChatTransport owns the standard
+ * DM contextual-guide client island. The AI SDK DefaultChatTransport owns the standard
  * UIMessage SSE protocol; this file only renders typed chunks with textContent.
  */
 
@@ -20,6 +20,12 @@ import type {
   DMUIMessage,
   DMValidatedAnswer,
 } from '@/lib/dm/contract';
+import {
+  dmPageContextId,
+  isAllowedGuideActionDestination,
+  parseDMPageContext,
+  type DMGuideAction,
+} from '@/lib/dm/guide';
 import type {
   PublicContactRecord,
   PublicProjectToolRecord,
@@ -29,7 +35,7 @@ import type {
 } from '@/lib/dm/public-agent-tools';
 
 type ElProps = Record<string, string | boolean | undefined>;
-type AskOptions = { displayMessage?: string; transientContext?: DMChatContext };
+type AskOptions = { displayMessage?: string; transientContext?: Partial<DMChatContext> };
 
 const transport = new DefaultChatTransport<DMUIMessage>({ api: DM_ENDPOINT });
 
@@ -127,6 +133,7 @@ class Turn {
       this.proseEl.append(make('p', { class: 'dm-p', text: limitation }));
       this.text += `${this.text ? '\n\n' : ''}${limitation}`;
     }
+    this.renderActions(answer.actions);
     for (const artifact of answer.artifacts) this.renderArtifact(artifact);
     const evidence = uniqueEvidence(answer.segments);
     if (evidence.length > 0) this.renderEvidence(evidence);
@@ -148,6 +155,17 @@ class Turn {
     else if (artifact.kind === 'contact') this.renderContact(artifact.contact);
     else if (artifact.kind === 'evidence') this.renderPublicSource(artifact.source);
     else this.renderLinks(artifact.items);
+  }
+
+  private renderActions(actions: DMGuideAction[]): void {
+    const allowed = actions.filter((action) => isAllowedGuideActionDestination(action.href));
+    if (!allowed.length) return;
+    this.proseEl.append(make('nav', { class: 'dm-next', 'aria-label': 'Suggested next steps' }, [
+      make('p', { class: 'dm-next-label', text: 'Next steps' }),
+      make('div', { class: 'dm-next-chips' }, allowed.map((action) =>
+        make('a', { class: 'dm-chip', href: action.href, text: action.label }),
+      )),
+    ]));
   }
 
   private renderProject(project: PublicProjectToolRecord): void {
@@ -276,6 +294,13 @@ class Turn {
     this.showError(`${AGENT_NAME} didn't return a verified answer. Please try rephrasing the question.`);
   }
 
+  stop(): void {
+    if (this.completed) return;
+    this.typingEl.hidden = true;
+    this.answerEl.hidden = false;
+    this.proseEl.append(make('p', { class: 'dm-p', text: `${AGENT_NAME} stopped this answer.` }));
+  }
+
   historyText(): string | null {
     return completedAssistantHistoryText(this.text, this.completed);
   }
@@ -351,8 +376,16 @@ function initRoot(root: HTMLElement): void {
   const sendBtn = root.querySelector<HTMLButtonElement>('[data-dm-submit]');
   if (!thread || !form || !input) return;
 
-  const projectId = root.dataset.dmProjectId?.trim();
-  const context: DMChatContext | undefined = projectId ? { projectIds: [projectId] } : undefined;
+  const page = parseDMPageContext({
+    kind: root.dataset.dmPageKind,
+    path: root.dataset.dmPagePath,
+    ...(root.dataset.dmPageReference ? { reference: root.dataset.dmPageReference } : {}),
+  });
+  const pageId = dmPageContextId(page);
+  const context: DMChatContext = {
+    page,
+    ...(page.kind === 'journey' && page.reference ? { resumeTrackIds: [page.reference] } : {}),
+  };
   const fitForm = root.querySelector<HTMLFormElement>('[data-dm-fit-form]');
   const fitInput = root.querySelector<HTMLTextAreaElement>('[data-dm-fit-input]');
   const fitSubmit = root.querySelector<HTMLButtonElement>('[data-dm-fit-submit]');
@@ -369,6 +402,7 @@ function initRoot(root: HTMLElement): void {
   const shouldAvoidAutoKeyboard = (): boolean => window.matchMedia('(max-width: 820px)').matches;
   const setBusy = (next: boolean): void => {
     busy = next;
+    root.classList.toggle('dm-busy', next);
     if (sendBtn) sendBtn.disabled = next;
     if (fitSubmit) fitSubmit.disabled = next;
   };
@@ -381,7 +415,8 @@ function initRoot(root: HTMLElement): void {
     const requestGeneration = generation;
     setBusy(true);
     root.classList.add('dm-started');
-    history.push(uiTextMessage('user', message));
+    const historyStart = history.length;
+    history.push(uiTextMessage('user', message, pageId));
 
     const turn = new Turn(displayMessage);
     thread.append(turn.root);
@@ -391,13 +426,17 @@ function initRoot(root: HTMLElement): void {
       await streamInto(turn, history.slice(-13), requestContext, controller.signal);
       turn.finishIfNeeded();
     } catch (error) {
-      if ((error as Error).name === 'AbortError') return;
+      if ((error as Error).name === 'AbortError') {
+        history.length = historyStart;
+        turn.stop();
+        return;
+      }
       console.error('[dm] UIMessage stream failed', { name: error instanceof Error ? error.name : typeof error });
       turn.showError(`${AGENT_NAME} is unavailable right now. Please try again in a moment.`);
     } finally {
       if (requestGeneration === generation) {
         const assistantText = turn.historyText();
-        if (assistantText) history.push(uiTextMessage('assistant', assistantText));
+        if (assistantText) history.push(uiTextMessage('assistant', assistantText, pageId));
         setBusy(false);
         controller = null;
       }
@@ -420,7 +459,7 @@ function initRoot(root: HTMLElement): void {
     };
     const focusable = (): HTMLElement[] => Array.from(panel.querySelectorAll<HTMLElement>(
       'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    )).filter((element) => !element.hasAttribute('disabled') && !element.closest('[hidden]'));
+    )).filter((element) => !element.hasAttribute('disabled') && !element.closest('[hidden]') && element.getClientRects().length > 0);
     trigger.addEventListener('click', open);
     root.querySelectorAll<HTMLElement>('[data-dm-close]').forEach((button) => button.addEventListener('click', close));
     dialog.addEventListener('click', (event) => { if (event.target === dialog) close(); });
@@ -439,7 +478,10 @@ function initRoot(root: HTMLElement): void {
       }
       const first = items[0];
       const last = items.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
+      if (document.activeElement === panel) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last?.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -454,6 +496,9 @@ function initRoot(root: HTMLElement): void {
       event.preventDefault();
       void ask(button.dataset.label ?? button.textContent ?? '');
     });
+  });
+  root.querySelectorAll<HTMLElement>('[data-dm-cancel]').forEach((button) => {
+    button.addEventListener('click', () => controller?.abort());
   });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -504,10 +549,17 @@ function initRoot(root: HTMLElement): void {
     root.classList.remove('dm-started');
     input.focus();
   });
+
+  window.addEventListener('popstate', () => {
+    if (window.location.pathname === page.path) return;
+    generation += 1;
+    controller?.abort();
+    history.length = 0;
+  });
 }
 
-function uiTextMessage(role: 'user' | 'assistant', text: string): DMUIMessage {
-  return { id: crypto.randomUUID(), role, parts: [{ type: 'text', text }] };
+function uiTextMessage(role: 'user' | 'assistant', text: string, pageContextId: string): DMUIMessage {
+  return { id: crypto.randomUUID(), role, metadata: { pageContextId }, parts: [{ type: 'text', text }] };
 }
 
 function toolSummary(name: string): string {
@@ -528,10 +580,9 @@ function uniqueEvidence(segments: DMAnswerSegment[]): PublicToolEvidence[] {
   return [...evidence.values()];
 }
 
-function mergeContext(base: DMChatContext | undefined, transient: DMChatContext | undefined): DMChatContext | undefined {
-  if (!base && !transient) return undefined;
+function mergeContext(base: DMChatContext, transient: Partial<DMChatContext> | undefined): DMChatContext {
   return {
-    ...(base ?? {}),
+    ...base,
     ...(transient ?? {}),
     projectIds: transient?.projectIds ?? base?.projectIds,
     resumeTrackIds: transient?.resumeTrackIds ?? base?.resumeTrackIds,

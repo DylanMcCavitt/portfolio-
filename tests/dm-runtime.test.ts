@@ -11,6 +11,7 @@ import {
   readDMRuntimeConfig,
 } from '@/lib/dm/runtime';
 import type { DMChatRequest } from '@/lib/dm/contract';
+import type { DMPageContext } from '@/lib/dm/guide';
 import type { DMMetricsRecord } from '@/lib/dm/metrics';
 import { buildDMSiteBrief } from '@/lib/dm/site-brief';
 import { createDMPostHandler } from '@/pages/api/dm/chat';
@@ -52,6 +53,58 @@ test('system instructions retain the public-source and same-run evidence boundar
   assert.match(instructions, /finalizeAnswer/);
 });
 
+test('project route context tells the model to resolve the public slug, not an internal id', async () => {
+  const source = await createTestProjectSource();
+  const [fixtureProject] = await source.projectLoader();
+  assert.ok(fixtureProject);
+  const publicSlug = 'public-project-slug';
+  const project = {
+    ...fixtureProject,
+    slug: publicSlug,
+    href: `/projects/${publicSlug}`,
+    dmArtifact: {
+      ...fixtureProject.dmArtifact,
+      href: `/projects/${publicSlug}`,
+    },
+  };
+  const prompts: LanguageModelV4CallOptions[] = [];
+  const request = chatRequest('What matters most here?', {
+    kind: 'project',
+    path: `/projects/${publicSlug}`,
+    reference: publicSlug,
+  });
+  const response = createDMChatResponse(request, config, {
+    db: emptyDb(),
+    projectLoader: async () => [project],
+    model: toolSequenceModel([
+      { toolName: 'getProject', input: { slug: publicSlug } },
+      {
+        toolName: 'finalizeAnswer',
+        input: {
+          segments: [{
+            kind: 'factual',
+            text: `${project.title} is the published project on this page.`,
+            evidenceIds: [`${project.id}:identity`],
+          }],
+          artifactIntent: 'none',
+          artifacts: [],
+          limitations: [],
+        },
+      },
+    ], prompts),
+  });
+  const observation = await observeDMResponse(response, request);
+  const prompt = JSON.stringify(prompts[0]?.prompt);
+
+  assert.notEqual(project.id, project.slug);
+  assert.equal(observation.result?.status, 'accepted');
+  assert.deepEqual(observation.tools, ['getProject']);
+  assert.ok(observation.evidenceIds.includes(`${project.id}:identity`));
+  assert.match(prompt, /Stable published project slug from page context: public-project-slug/);
+  assert.match(prompt, /Call getProject with its slug field/);
+  assert.doesNotMatch(prompt, /Stable public project ids already resolved by page context: public-project-slug/);
+});
+
 test('a conversational answer completes through the single structured contract', async () => {
   const source = await createTestProjectSource();
   const request = chatRequest('Hello');
@@ -74,6 +127,14 @@ test('a conversational answer completes through the single structured contract',
   assert.equal(observation.result?.status, 'accepted');
   assert.equal(observation.answerText, "Hi — I'm DM, Dylan's public portfolio guide.");
   assert.deepEqual(observation.result?.answer.artifacts, []);
+  assert.deepEqual(
+    observation.result?.answer.actions.map(({ label, href, source }) => ({ label, href, source })),
+    [
+      { label: 'Browse projects', href: '/library', source: { kind: 'route', context: 'home' } },
+      { label: 'View the journey', href: '/journey', source: { kind: 'route', context: 'home' } },
+      { label: 'Take the hiring tour', href: '/hiring', source: { kind: 'route', context: 'home' } },
+    ],
+  );
 });
 
 test('model prose outside the structured answer is not visitor-visible', async () => {
@@ -124,6 +185,12 @@ test('a direct published-project read grounds a factual answer and project artif
   assert.deepEqual(observation.tools, ['getProject']);
   assert.deepEqual(observation.projectIds, ['loom']);
   assert.ok(observation.evidenceIds.includes('loom:identity'));
+  assert.deepEqual(observation.result?.answer.actions[0], {
+    id: 'project:loom',
+    label: 'View loom',
+    href: '/projects/loom',
+    source: { kind: 'evidence', evidenceId: 'loom:identity' },
+  });
 });
 
 test('unknown evidence exhausts one repair attempt and fails closed', async () => {
@@ -446,8 +513,9 @@ test('fit-check context removes private contact data and remains non-evidentiary
   const source = await createTestProjectSource();
   const prompts: LanguageModelV4CallOptions[] = [];
   const request: DMChatRequest = {
-    ...chatRequest('Assess this role.'),
+    ...chatRequest('Assess this role.', { kind: 'fit-check', path: '/fit-check' }),
     context: {
+      page: { kind: 'fit-check', path: '/fit-check' },
       fitCheck: {
         kind: 'job-description',
         jobDescription: `${'Contact recruiter@example.com or https://private.example/job. '.repeat(3)}Build reliable backend systems with TypeScript and PostgreSQL.`,
@@ -487,8 +555,15 @@ test('fit-check context removes private contact data and remains non-evidentiary
   assert.doesNotMatch(prompt, /recruiter@example\.com|private\.example/);
 });
 
-function chatRequest(text: string): DMChatRequest {
-  return { messages: [{ id: 'user-1', role: 'user', parts: [{ type: 'text', text }] }] };
+function chatRequest(
+  text: string,
+  page: DMPageContext = { kind: 'home', path: '/' },
+): DMChatRequest {
+  const pageContextId = `${page.kind}:${page.path}:${page.reference ?? ''}`;
+  return {
+    messages: [{ id: 'user-1', role: 'user', metadata: { pageContextId }, parts: [{ type: 'text', text }] }],
+    context: { page },
+  };
 }
 
 function emptyDb() {
