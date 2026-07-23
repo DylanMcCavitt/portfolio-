@@ -64,7 +64,7 @@ preview/production mutations remain maintainer-operated gates.
   database before aliasing a deployment that reads its new columns or enum
   values. Database mode now exposes schema drift as a typed failure instead of
   hiding it behind catalog content.
-- Deploys do NOT run migrations (`build` is bare `astro build`). Every new migration file requires two manual applies before deployed code depends on it: once with the production connection string, once with the `preview` branch connection string, using the same idempotent Neon-HTTP-safe runner (`DATABASE_URL='<connection-string>' npm run db:migrate`). Connection strings are Sensitive in Vercel (`vercel env pull` returns them empty) — read them from the Neon console or Vercel → Storage. Automation is deferred scope; see `docs/agents/scope-ledger.md`.
+- Deploys do NOT run migrations (`build` is bare `astro build`). Every new migration file requires two manual applies before deployed code depends on it: once with the production connection string, once with the `preview` branch connection string, using the same idempotent Neon-HTTP-safe runner (`DATABASE_URL='<connection-string>' npm run db:migrate`). Connection strings are Sensitive in Vercel (`vercel env pull` returns them empty) — read them from the Neon console or Vercel → Storage. Automation is deferred; see `docs/agents/product-direction.md`.
 - Migrations must stay statement-idempotent (`IF NOT EXISTS` et al.): the `neon()` HTTP driver has no session/transaction support, so the runner executes statements without `BEGIN`/`COMMIT` and a partial failure must converge on re-run.
 - Dollar-quoted SQL functions/triggers are supported by the migration splitter;
   migration 0005 uses them to version evidence and revoke stale RAG rows

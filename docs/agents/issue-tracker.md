@@ -38,7 +38,7 @@ otherwise.
 
 ## Continuity
 
-- Use the scope ledger to preserve product north star, Next, Later, Explicitly deferred, Do not preclude, Naming anchors, Open questions, and Future issue candidates.
+- Use `product-direction.md` to preserve the product north star, public-source and privacy boundaries, runtime invariants, deferred work, and naming anchors.
 - Do not collapse deferred capabilities into vague "future work"; name the long-term capability, why it is deferred, where it is tracked, and the constraint it imposes on V1.
 - Open questions must stay explicit until answered by a human or by cited repo evidence.
 - PRs and handoffs must record continuity constraints checked plus evidence.

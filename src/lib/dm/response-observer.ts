@@ -1,5 +1,4 @@
 import { DefaultChatTransport, type UIMessageChunk } from 'ai';
-import { matchesStreamedV2Finalization } from './client';
 import type { DMAnswerArtifact, DMChatRequest, DMFinalizationResult, DMUIData, DMUIMessage } from './contract';
 
 export interface TimedDMChunk {
@@ -50,10 +49,7 @@ export async function observeDMResponse(response: Response, request: DMChatReque
     if (chunk.type === 'text-delta') streamedProse += chunk.delta;
     if (chunk.type === 'data-dm-answer') {
       const candidate = chunk.data as DMFinalizationResult;
-      if (
-        candidate.status !== 'rejected'
-        && (!streamedProse || matchesStreamedV2Finalization(streamedProse, candidate))
-      ) result = candidate;
+      if (candidate.status !== 'rejected') result = candidate;
     }
     if (chunk.type === 'finish') finished = true;
   }
@@ -61,9 +57,7 @@ export async function observeDMResponse(response: Response, request: DMChatReque
   const artifacts = result?.answer.artifacts ?? [];
   return {
     result,
-    answerText: streamedProse
-      ? [streamedProse, ...(result?.answer.followUp ? [result.answer.followUp] : [])].join('\n').trim()
-      : result ? answerText(result) : '',
+    answerText: streamedProse || (result ? answerText(result) : ''),
     tools,
     blockKinds: artifacts.map(describeArtifact),
     projectIds: artifacts.flatMap((artifact) => artifact.kind === 'project' ? [artifact.id] : []),
@@ -79,7 +73,6 @@ function answerText(result: Exclude<DMFinalizationResult, { status: 'rejected' }
   return [
     ...result.answer.segments.map((segment) => segment.text),
     ...result.answer.limitations,
-    ...(result.answer.followUp ? [result.answer.followUp] : []),
   ].join('\n').trim();
 }
 

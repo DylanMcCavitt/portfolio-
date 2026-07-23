@@ -53,7 +53,6 @@ export interface DMValidatedAnswer {
   segments: DMAnswerSegment[];
   artifacts: DMAnswerArtifact[];
   limitations: string[];
-  followUp?: string;
 }
 
 export type DMFinalizationResult =

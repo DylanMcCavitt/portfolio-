@@ -9,7 +9,6 @@ import {
   completedAssistantHistoryText,
   DM_ENDPOINT,
   fitCheckValidationMessage,
-  matchesStreamedV2Finalization,
   sanitizeJobDescriptionForFitCheck,
   validateFinalizationResult,
 } from '@/lib/dm/client';
@@ -17,7 +16,6 @@ import type {
   DMAnswerArtifact,
   DMAnswerSegment,
   DMChatContext,
-  DMFinalizationResult,
   DMUIData,
   DMUIMessage,
   DMValidatedAnswer,
@@ -71,7 +69,6 @@ class Turn {
   private answerRendered = false;
   private completed = false;
   private errorShown = false;
-  private streamed = false;
   text = '';
 
   constructor(question: string) {
@@ -130,12 +127,6 @@ class Turn {
       this.proseEl.append(make('p', { class: 'dm-p', text: limitation }));
       this.text += `${this.text ? '\n\n' : ''}${limitation}`;
     }
-    if (answer.followUp) {
-      this.proseEl.append(make('div', { class: 'dm-next' }, [
-        make('p', { class: 'dm-next-label', text: answer.followUp }),
-      ]));
-      this.text += `${this.text ? '\n\n' : ''}${answer.followUp}`;
-    }
     for (const artifact of answer.artifacts) this.renderArtifact(artifact);
     const evidence = uniqueEvidence(answer.segments);
     if (evidence.length > 0) this.renderEvidence(evidence);
@@ -144,28 +135,11 @@ class Turn {
 
   appendStreamedProse(delta: string): void {
     if (!delta) return;
-    this.streamed = true;
     this.revealAnswer();
     this.streamedProseEl ??= make('p', { class: 'dm-p' });
     if (!this.streamedProseEl.isConnected) this.proseEl.append(this.streamedProseEl);
     this.text += delta;
     this.streamedProseEl.textContent = this.text;
-  }
-
-  attachStreamedAnswer(result: Exclude<DMFinalizationResult, { status: 'rejected' }>): boolean {
-    const { answer } = result;
-    if (!this.streamed || this.answerRendered || !matchesStreamedV2Finalization(this.text, result)) return false;
-    this.answerRendered = true;
-    if (answer.followUp) {
-      this.proseEl.append(make('div', { class: 'dm-next' }, [
-        make('p', { class: 'dm-next-label', text: answer.followUp }),
-      ]));
-    }
-    for (const artifact of answer.artifacts) this.renderArtifact(artifact);
-    const evidence = uniqueEvidence(answer.segments);
-    if (evidence.length > 0) this.renderEvidence(evidence);
-    this.completed = true;
-    return true;
   }
 
   private renderArtifact(artifact: DMAnswerArtifact): void {
@@ -306,9 +280,6 @@ class Turn {
     return completedAssistantHistoryText(this.text, this.completed);
   }
 
-  hasStreamedProse(): boolean {
-    return this.streamed;
-  }
 }
 
 async function streamInto(
@@ -357,13 +328,7 @@ function handleChunk(
   if (chunk.type === 'data-dm-answer') {
     const result = validateFinalizationResult(chunk.data);
     if (result && result.status !== 'rejected') {
-      if (turn.hasStreamedProse()) {
-        if (!turn.attachStreamedAnswer(result)) {
-          turn.showError('DM could not safely finish this answer. Please try again.');
-        }
-      } else {
-        turn.renderAnswer(result.answer);
-      }
+      turn.renderAnswer(result.answer);
     }
     return;
   }
@@ -371,7 +336,7 @@ function handleChunk(
     const name = toolCalls.get(chunk.toolCallId);
     if (name !== 'finalizeAnswer') return;
     const result = validateFinalizationResult(chunk.output);
-    if (result && result.status !== 'rejected' && !turn.hasStreamedProse()) {
+    if (result && result.status !== 'rejected') {
       // The dedicated data part follows and is authoritative; rendering here
       // keeps the client resilient if an intermediary strips custom data parts.
       turn.renderAnswer(result.answer);
