@@ -88,20 +88,52 @@ The executable schema is
 [`scripts/replacement-quality-proof.ts`](../../scripts/replacement-quality-proof.ts).
 It requires all three viewport records, all interaction and fallback IDs, the
 three bound visual comparisons, SHA-256-matching image files, exact viewport
-dimensions, and the live Git head. Capture paths are relative to the artifact
-and may not traverse directories.
+dimensions, and the live Git head plus reviewed base. The runtime schema is
+closed at every object level: undeclared fields fail validation. Capture paths
+are relative to the artifact, every path component must be a regular
+non-symlink entry under the real artifact directory, and every capture must
+decode as a PNG. Viewport captures must be exactly 1440 × 900, 768 × 1024, and
+390 × 844; each visual-comparison capture must be exactly 1440 × 900.
 
 The schema rejects URLs, credential-like values, and fields named for provider
 data, model data, prompts, payloads, credentials, authorization, cookies,
 secrets, or tokens. Store no private URLs, personal visitor input, network
-captures, or service responses.
+captures, or service responses. Free-form browser notes are not part of the
+schema. Visual observations are limited to a P3 priority, one reviewed
+dimension, and the `minor-drift` code; any P0–P2 observation must fail the gate
+outside the artifact rather than be serialized as a passing record.
 
 Validate the completed artifact from the exact candidate head:
 
 ```sh
-npm run proof:quality -- /absolute/path/to/replacement-quality-proof.json
+npm run proof:quality -- \
+  /absolute/path/to/replacement-quality-proof.json \
+  <reviewed-base-sha>
 ```
 
 Success prints only the exact head and artifact SHA-256. Persist that compact
 result with the issue’s implementation proof; do not paste browser or stream
 content into GitHub.
+
+## Reviewer-accessible CI package
+
+The committed files under `proof/replacement-quality-inputs/` are sanitized,
+provider-free browser captures only. They contain no request payloads, private
+visitor content, provider output, credentials, or private URLs. On every pull
+request head, CI runs:
+
+```sh
+npm run package:quality -- \
+  "$GITHUB_SHA" \
+  "<pull-request-base-sha>" \
+  "$RUNNER_TEMP/replacement-quality-proof"
+```
+
+The package builder copies the committed captures, injects the workflow’s exact
+head and base SHAs, computes every capture hash, writes the strict JSON
+artifact, and validates the completed package before upload. CI uploads it as
+`replacement-quality-proof-<full-head-sha>` for 90 days. The managed issue proof
+must link the exact successful Actions run and artifact download, record the
+artifact name and JSON SHA-256 printed by the builder, and be refreshed after
+every head change. A local-only hash without that inspectable package is not
+sufficient review evidence.

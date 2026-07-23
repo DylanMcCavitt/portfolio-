@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import sharp from 'sharp';
@@ -10,6 +10,51 @@ const execFileAsync = promisify(execFile);
 const SHA256 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
 const SAFE_ARTIFACT_PATH = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
+const PROOF_KEYS = [
+  'schemaVersion',
+  'issue',
+  'repository',
+  'baseSha',
+  'headSha',
+  'createdAt',
+  'executionMode',
+  'viewports',
+  'interactionChecks',
+  'fallbackChecks',
+  'visualComparisons',
+  'diagnostics',
+] as const;
+const VIEWPORT_KEYS = ['id', 'width', 'height', 'route', 'state', 'capture', 'result'] as const;
+const CAPTURE_KEYS = ['path', 'sha256'] as const;
+const NAMED_CHECK_KEYS = ['id', 'result'] as const;
+const VISUAL_COMPARISON_KEYS = [
+  'id',
+  'reference',
+  'capture',
+  'reviewedDimensions',
+  'findings',
+  'result',
+] as const;
+const VISUAL_FINDING_KEYS = ['priority', 'dimension', 'observation'] as const;
+const DIAGNOSTIC_KEYS = ['id', 'result', 'observation'] as const;
+const ALLOWED_BROWSER_ROUTES = [
+  '/',
+  '/library',
+  '/projects/bellas-beads',
+  '/journey',
+  '/resume',
+  '/contact',
+] as const;
+const ALLOWED_VIEWPORT_STATES = [
+  'home-ready',
+  'library-ready',
+  'project-ready',
+  'journey-ready',
+  'resume-ready',
+  'contact-ready',
+] as const;
+const VISUAL_CAPTURE_DIMENSIONS = { width: 1440, height: 900 } as const;
+const REFERENCE_DIMENSIONS = { width: 1487, height: 1058 } as const;
 
 export const REQUIRED_INTERACTION_CHECKS = [
   'navigation',
@@ -84,8 +129,9 @@ interface NamedCheck {
 }
 
 interface VisualFinding {
-  priority: 'P0' | 'P1' | 'P2' | 'P3';
-  summary: string;
+  priority: 'P3';
+  dimension: VisualDimension;
+  observation: 'minor-drift';
 }
 
 interface VisualComparison {
@@ -120,6 +166,7 @@ export interface VerifyProofOptions {
   artifactPath: string;
   repositoryRoot: string;
   expectedHeadSha: string;
+  expectedBaseSha: string;
 }
 
 export async function verifyReplacementQualityProof(
@@ -128,6 +175,7 @@ export async function verifyReplacementQualityProof(
 ): Promise<string[]> {
   const errors: string[] = [];
   if (!isRecord(value)) return ['artifact must be a JSON object'];
+  verifyExactKeys(value, '$', PROOF_KEYS, errors);
   scanForSensitiveData(value, '$', errors);
 
   const proof = value as Partial<ReplacementQualityProof>;
@@ -137,12 +185,15 @@ export async function verifyReplacementQualityProof(
     errors.push('repository must be dylanmccavitt/portfolio-');
   }
   if (!GIT_SHA.test(proof.baseSha ?? '')) errors.push('baseSha must be a full Git SHA');
+  if (proof.baseSha !== options.expectedBaseSha) {
+    errors.push(`baseSha must match the exact reviewed base ${options.expectedBaseSha}`);
+  }
   if (!GIT_SHA.test(proof.headSha ?? '')) errors.push('headSha must be a full Git SHA');
   if (proof.headSha !== options.expectedHeadSha) {
     errors.push(`headSha must match the exact current head ${options.expectedHeadSha}`);
   }
-  if (!proof.createdAt || Number.isNaN(Date.parse(proof.createdAt))) {
-    errors.push('createdAt must be an ISO timestamp');
+  if (!isCanonicalIsoTimestamp(proof.createdAt)) {
+    errors.push('createdAt must be a canonical ISO timestamp');
   }
   if (proof.executionMode !== 'local-fixture') {
     errors.push('executionMode must be local-fixture');
@@ -165,19 +216,32 @@ async function verifyViewports(
     errors.push('viewports must be an array');
     return;
   }
-  for (const [id, dimensions] of Object.entries(REQUIRED_VIEWPORTS) as Array<[ViewportId, { width: number; height: number }]>) {
-    const viewport = viewports.find((candidate) => candidate?.id === id);
-    if (!viewport) {
-      errors.push(`viewports is missing ${id}`);
+  if (viewports.length !== Object.keys(REQUIRED_VIEWPORTS).length) {
+    errors.push('viewports must contain only the three required viewport records');
+  }
+  for (const [index, viewport] of viewports.entries()) {
+    if (!isRecord(viewport)) {
+      errors.push(`viewports[${index}] must be an object`);
       continue;
     }
+    verifyExactKeys(viewport, `$.viewports[${index}]`, VIEWPORT_KEYS, errors);
+  }
+  for (const [id, dimensions] of Object.entries(REQUIRED_VIEWPORTS) as Array<[ViewportId, { width: number; height: number }]>) {
+    const matches = viewports.filter((candidate) => candidate?.id === id);
+    if (matches.length !== 1) {
+      errors.push(`viewports must contain ${id} exactly once`);
+      continue;
+    }
+    const viewport = matches[0]!;
     if (viewport.width !== dimensions.width || viewport.height !== dimensions.height) {
       errors.push(`${id} must be ${dimensions.width}x${dimensions.height}`);
     }
-    if (!viewport.route?.startsWith('/') || viewport.route.includes('?') || viewport.route.includes('#')) {
-      errors.push(`${id}.route must be a public pathname`);
+    if (!ALLOWED_BROWSER_ROUTES.includes(viewport.route as (typeof ALLOWED_BROWSER_ROUTES)[number])) {
+      errors.push(`${id}.route must be an approved core route`);
     }
-    if (!viewport.state?.trim()) errors.push(`${id}.state is required`);
+    if (!ALLOWED_VIEWPORT_STATES.includes(viewport.state as (typeof ALLOWED_VIEWPORT_STATES)[number])) {
+      errors.push(`${id}.state must be an approved public state`);
+    }
     if (viewport.result !== 'pass') errors.push(`${id}.result must be pass`);
     await verifyCapture(viewport.capture, options.artifactPath, `${id}.capture`, dimensions, errors);
   }
@@ -192,6 +256,13 @@ function verifyNamedChecks(
   if (!Array.isArray(checks)) {
     errors.push(`${field} must be an array`);
     return;
+  }
+  for (const [index, check] of checks.entries()) {
+    if (!isRecord(check)) {
+      errors.push(`${field}[${index}] must be an object`);
+      continue;
+    }
+    verifyExactKeys(check, `$.${field}[${index}]`, NAMED_CHECK_KEYS, errors);
   }
   for (const id of required) {
     const matches = checks.filter((check) => check?.id === id);
@@ -212,18 +283,47 @@ async function verifyVisualComparisons(
     errors.push('visualComparisons must be an array');
     return;
   }
-  for (const [id, binding] of Object.entries(VISUAL_REFERENCE_BINDINGS) as Array<[VisualId, Capture]>) {
-    const comparison = comparisons.find((candidate) => candidate?.id === id);
-    if (!comparison) {
-      errors.push(`visualComparisons is missing ${id}`);
+  if (comparisons.length !== Object.keys(VISUAL_REFERENCE_BINDINGS).length) {
+    errors.push('visualComparisons must contain only the three required comparisons');
+  }
+  for (const [index, comparison] of comparisons.entries()) {
+    if (!isRecord(comparison)) {
+      errors.push(`visualComparisons[${index}] must be an object`);
       continue;
     }
+    verifyExactKeys(
+      comparison,
+      `$.visualComparisons[${index}]`,
+      VISUAL_COMPARISON_KEYS,
+      errors,
+    );
+  }
+  for (const [id, binding] of Object.entries(VISUAL_REFERENCE_BINDINGS) as Array<[VisualId, Capture]>) {
+    const matches = comparisons.filter((candidate) => candidate?.id === id);
+    if (matches.length !== 1) {
+      errors.push(`visualComparisons must contain ${id} exactly once`);
+      continue;
+    }
+    const comparison = matches[0]!;
+    verifyCaptureShape(comparison.reference, `$.visualComparisons.${id}.reference`, errors);
     if (comparison.reference?.path !== binding.path || comparison.reference?.sha256 !== binding.sha256) {
       errors.push(`${id}.reference must match the binding reference`);
     } else {
       await verifyFileHash(resolve(options.repositoryRoot, binding.path), binding.sha256, `${id}.reference`, errors);
+      await verifyImageFile(
+        resolve(options.repositoryRoot, binding.path),
+        `${id}.reference`,
+        REFERENCE_DIMENSIONS,
+        errors,
+      );
     }
-    await verifyCapture(comparison.capture, options.artifactPath, `${id}.capture`, undefined, errors);
+    await verifyCapture(
+      comparison.capture,
+      options.artifactPath,
+      `${id}.capture`,
+      VISUAL_CAPTURE_DIMENSIONS,
+      errors,
+    );
     if (comparison.result !== 'pass') errors.push(`${id}.result must be pass`);
     const dimensions = new Set(comparison.reviewedDimensions);
     for (const dimension of REQUIRED_VISUAL_DIMENSIONS) {
@@ -235,11 +335,26 @@ async function verifyVisualComparisons(
     if (!Array.isArray(comparison.findings)) {
       errors.push(`${id}.findings must be an array`);
     } else {
-      for (const finding of comparison.findings) {
-        if (finding.priority !== 'P3') {
-          errors.push(`${id} has unresolved material ${finding.priority ?? 'unknown'} drift`);
+      for (const [index, finding] of comparison.findings.entries()) {
+        if (!isRecord(finding)) {
+          errors.push(`${id}.findings[${index}] must be an object`);
+          continue;
         }
-        if (!finding.summary?.trim()) errors.push(`${id} finding summaries must not be empty`);
+        verifyExactKeys(
+          finding,
+          `$.visualComparisons.${id}.findings[${index}]`,
+          VISUAL_FINDING_KEYS,
+          errors,
+        );
+        if (finding.priority !== 'P3') {
+          errors.push(`${id} has unresolved material ${String(finding.priority ?? 'unknown')} drift`);
+        }
+        if (!REQUIRED_VISUAL_DIMENSIONS.includes(finding.dimension as VisualDimension)) {
+          errors.push(`${id} finding dimension is invalid`);
+        }
+        if (finding.observation !== 'minor-drift') {
+          errors.push(`${id} finding observation is invalid`);
+        }
       }
     }
   }
@@ -254,6 +369,12 @@ function verifyDiagnostics(
     return;
   }
   const diagnostic = diagnostics[0];
+  if (isRecord(diagnostic)) {
+    verifyExactKeys(diagnostic, '$.diagnostics[0]', DIAGNOSTIC_KEYS, errors);
+  } else {
+    errors.push('diagnostics[0] must be an object');
+    return;
+  }
   if (diagnostic?.id !== 'optional-action-quality' || diagnostic.result !== 'diagnostic') {
     errors.push('optional action quality must remain diagnostic');
   }
@@ -266,28 +387,21 @@ async function verifyCapture(
   capture: Capture | undefined,
   artifactPath: string,
   field: string,
-  dimensions: { width: number; height: number } | undefined,
+  dimensions: { width: number; height: number },
   errors: string[],
 ): Promise<void> {
   if (!capture || typeof capture.path !== 'string' || typeof capture.sha256 !== 'string') {
     errors.push(`${field} is invalid`);
     return;
   }
-  const path = resolveArtifactFile(artifactPath, capture.path);
+  verifyCaptureShape(capture, `$.${field}`, errors);
+  const path = await resolveArtifactFile(artifactPath, capture.path);
   if (!path || !SHA256.test(capture.sha256)) {
     errors.push(`${field} must use a safe relative path and SHA-256`);
     return;
   }
   await verifyFileHash(path, capture.sha256, field, errors);
-  if (!dimensions) return;
-  try {
-    const metadata = await sharp(path).metadata();
-    if (metadata.width !== dimensions.width || metadata.height !== dimensions.height) {
-      errors.push(`${field} must be ${dimensions.width}x${dimensions.height}`);
-    }
-  } catch {
-    errors.push(`${field} must be a readable image`);
-  }
+  await verifyImageFile(path, field, dimensions, errors);
 }
 
 async function verifyFileHash(
@@ -305,9 +419,32 @@ async function verifyFileHash(
   }
 }
 
-function resolveArtifactFile(artifactPath: string, path: string): string | null {
-  if (isAbsolute(path) || !SAFE_ARTIFACT_PATH.test(path) || path.split('/').includes('..')) return null;
-  return resolve(dirname(artifactPath), path);
+async function resolveArtifactFile(artifactPath: string, path: string): Promise<string | null> {
+  const parts = path.split('/');
+  if (
+    isAbsolute(path)
+    || !SAFE_ARTIFACT_PATH.test(path)
+    || parts.some((part) => part === '' || part === '.' || part === '..')
+  ) {
+    return null;
+  }
+  try {
+    const artifactDirectory = await realpath(dirname(artifactPath));
+    let candidate = artifactDirectory;
+    for (const part of parts) {
+      candidate = resolve(candidate, part);
+      const stats = await lstat(candidate);
+      if (stats.isSymbolicLink()) return null;
+    }
+    const resolvedTarget = await realpath(candidate);
+    const fromRoot = relative(artifactDirectory, resolvedTarget);
+    if (!fromRoot || fromRoot.startsWith(`..${sep}`) || fromRoot === '..' || isAbsolute(fromRoot)) {
+      return null;
+    }
+    return resolvedTarget;
+  } catch {
+    return null;
+  }
 }
 
 function scanForSensitiveData(value: unknown, path: string, errors: string[]): void {
@@ -318,7 +455,9 @@ function scanForSensitiveData(value: unknown, path: string, errors: string[]): v
   if (!isRecord(value)) {
     if (typeof value === 'string') {
       if (/https?:\/\//i.test(value)) errors.push(`${path} contains a URL`);
-      if (/(?:bearer\s+|sk-[a-z0-9_-]{8,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)) {
+      if (
+        /(?:bearer\s+|sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)
+      ) {
         errors.push(`${path} contains credential-like text`);
       }
     }
@@ -337,9 +476,50 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function verifyExactKeys(
+  value: Record<string, unknown>,
+  path: string,
+  allowed: readonly string[],
+  errors: string[],
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) errors.push(`${path}.${key} is not allowed`);
+  }
+}
+
+function verifyCaptureShape(capture: unknown, path: string, errors: string[]): void {
+  if (isRecord(capture)) verifyExactKeys(capture, path, CAPTURE_KEYS, errors);
+}
+
+async function verifyImageFile(
+  path: string,
+  field: string,
+  dimensions: { width: number; height: number },
+  errors: string[],
+): Promise<void> {
+  try {
+    const metadata = await sharp(path).metadata();
+    if (metadata.format !== 'png') errors.push(`${field} must be a PNG image`);
+    if (metadata.width !== dimensions.width || metadata.height !== dimensions.height) {
+      errors.push(`${field} must be ${dimensions.width}x${dimensions.height}`);
+    }
+  } catch {
+    errors.push(`${field} must be a readable PNG image`);
+  }
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
 async function main(): Promise<void> {
   const artifactArgument = process.argv[2];
-  if (!artifactArgument) throw new Error('Usage: replacement-quality-proof <artifact.json>');
+  const expectedBaseSha = process.argv[3];
+  if (!artifactArgument || !expectedBaseSha || !GIT_SHA.test(expectedBaseSha)) {
+    throw new Error('Usage: replacement-quality-proof <artifact.json> <expected-base-sha>');
+  }
   const artifactPath = resolve(artifactArgument);
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const [{ stdout }, source] = await Promise.all([
@@ -351,6 +531,7 @@ async function main(): Promise<void> {
     artifactPath,
     repositoryRoot,
     expectedHeadSha,
+    expectedBaseSha,
   });
   if (errors.length > 0) {
     for (const error of errors) console.error(`replacement-quality-proof: ${error}`);
