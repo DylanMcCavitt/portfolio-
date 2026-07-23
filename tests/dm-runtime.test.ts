@@ -357,6 +357,39 @@ test('request cancellation is propagated without exposing its reason', async () 
   assert.equal(parseMetricsRecord(metricsLines).errorCategory, 'aborted');
 });
 
+test('runtime deadline bounds a stalled pre-model load with timeout-safe output and metrics', async () => {
+  const request = chatRequest('What kind of engineer is Dylan?');
+  const prompts: LanguageModelV4CallOptions[] = [];
+  const model = toolSequenceModel([], prompts) as MockLanguageModelV4;
+  const metricsLines: string[] = [];
+  const stalledProjects = new Promise<never>(() => {});
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+
+  const observation = await Promise.race([
+    observeDMResponse(createDMChatResponse(request, config, {
+      db: { async query() { throw new Error('database work must remain unreachable'); } },
+      projectLoader: () => stalledProjects,
+      model,
+      budgets: { deadlineMs: 5, maxOutputTokens: 1_200, maxSteps: 2 },
+      metricsLogger: (line) => metricsLines.push(line),
+    }), request),
+    new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error('runtime deadline watchdog expired')), 500);
+    }),
+  ]).finally(() => {
+    if (watchdog) clearTimeout(watchdog);
+  });
+
+  assert.equal(observation.outcome, 'error');
+  assert.equal(model.doStreamCalls.length, 0);
+  assert.equal(prompts.length, 0);
+  assert.match(observation.errors.join(' '), /took too long/i);
+  assert.doesNotMatch(JSON.stringify(observation), /request deadline exceeded|TimeoutError|database work/i);
+  const metrics = parseMetricsRecord(metricsLines);
+  assert.equal(metrics.outcome, 'timeout');
+  assert.equal(metrics.errorCategory, 'timeout');
+});
+
 test('provider failures surface only a sanitized visitor error and content-free metrics', async () => {
   const source = await createTestProjectSource();
   const request = chatRequest('Tell me about projects.');
