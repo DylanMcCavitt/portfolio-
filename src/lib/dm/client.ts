@@ -7,7 +7,6 @@ import type {
   DMFinalizationResult,
   DMValidatedAnswer,
 } from './contract';
-import { v2FinalizationMarkdownsMatch } from './finalization';
 export {
   FIT_CHECK_CONTEXT_LIMIT,
   FIT_CHECK_INPUT_LIMIT,
@@ -60,16 +59,6 @@ export function validateFinalizationResult(value: unknown): DMFinalizationResult
   return { status: value.status, answer, repairAttempted: value.repairAttempted };
 }
 
-export function matchesStreamedV2Finalization(
-  prose: string,
-  result: Exclude<DMFinalizationResult, { status: 'rejected' }>,
-): boolean {
-  return prose.length > 0
-    && result.status === 'accepted'
-    && result.answer.segments.length === 1
-    && v2FinalizationMarkdownsMatch(prose, result.answer.segments[0]?.text ?? '');
-}
-
 export function completedAssistantHistoryText(prose: string, completed: boolean): string | null {
   return completed && prose ? prose : null;
 }
@@ -79,12 +68,10 @@ function validateAnswer(value: unknown): DMValidatedAnswer | null {
   const segments = value.segments.map(validateSegment);
   const artifacts = value.artifacts.map(validateArtifact);
   if (segments.some((item) => !item) || artifacts.some((item) => !item) || !isStringArray(value.limitations)) return null;
-  if (value.followUp !== undefined && typeof value.followUp !== 'string') return null;
   return {
     segments: segments as DMAnswerSegment[],
     artifacts: artifacts as DMAnswerArtifact[],
     limitations: value.limitations,
-    ...(typeof value.followUp === 'string' ? { followUp: value.followUp } : {}),
   };
 }
 

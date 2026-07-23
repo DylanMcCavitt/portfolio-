@@ -249,7 +249,7 @@ export interface PublicAgentToolDependencies {
   db: ProjectReadQueryable;
   env?: PublicProjectEnv;
   loadProjects?: () => Promise<ProjectDetailReadModel[]>;
-  /** Narrow provider-free eval seam; cannot replace or mutate published project data. */
+  /** Narrow test seam; cannot replace or mutate published project data. */
   searchProjectsFailure?: () => never | Promise<never>;
   createRagConfig?: () => Promise<PublicRagSearchConfig | null>;
   ragSearch?: (
@@ -316,7 +316,7 @@ export function createPublicAgentTools(deps: PublicAgentToolDependencies): Publi
   );
 
   const getProject = createTool(
-    'Directly read one already-identified published portfolio project when its stable public id or slug is known. A successful same-run getProject is required for every detailed project answer, project artifact, or links artifact; a search result is never a substitute. Use this for resolved subject corrections and follow-up references, including ids supplied by page context. If only a public title is known and its stable id or slug is unresolved, call searchProjects first, once, then call getProject with the resolved id. When the visitor explicitly asks for approved public-source evidence about that project, also call searchPublicSources with the returned project id; project metadata is not a substitute for the requested source evidence.',
+    'Directly read one already-identified published portfolio project when its stable public id or slug is known. A successful same-run getProject is required for every detailed project answer, project artifact, or links artifact; a search result is never a substitute. Use this for resolved subject corrections and later references, including ids supplied by page context. If only a public title is known and its stable id or slug is unresolved, call searchProjects first, once, then call getProject with the resolved id. When the visitor explicitly asks for approved public-source evidence about that project, also call searchPublicSources with the returned project id; project metadata is not a substitute for the requested source evidence.',
     GetProjectInputSchema,
     async (input, signal) => {
       const projects = await loadProjects();

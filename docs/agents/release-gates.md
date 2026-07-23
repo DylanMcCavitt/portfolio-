@@ -13,7 +13,7 @@ databases, deploy hooks, cron, or production traffic.
   below before a maintainer promotes the stack. A blank checklist is not proof.
 - Confirm the reviewed Git base and the live pull-request/deployment heads match
   the recorded candidate before using any artifact.
-- **Any new commit invalidates every smoke, migration, live-eval, Vercel, and
+- **Any new commit invalidates every smoke, migration, Vercel, and
   rollback artifact. Re-run and record the complete affected evidence at the
   new head.**
 
@@ -24,7 +24,6 @@ databases, deploy hooks, cron, or production traffic.
 | Vercel preview | | | | |
 | Preview migration read-back | | | | |
 | Published-media path preflight | | | n/a | |
-| Live judged eval | | | n/a | |
 | Preview smoke, accessibility, and mobile | | | | |
 | Emergency rollback and restore | | | | |
 | Ruleset read-back | | | n/a | |
@@ -137,8 +136,8 @@ PR is reviewed and the stack is merged in order.
    media is rejected to stay aligned with the exact CSP. Include
    keyboard/accessibility and narrow mobile viewport checks.
 5. With approved credentials only, call readiness and record its fully redacted
-   response. Run `npm run dm:eval:release` only when the live-model and judge
-   configuration is approved; attach a sanitized result, never raw secrets.
+   response. Runtime, accessibility, browser, responsive, and visual gates are
+   tracked by issue #308; paid model evaluation is not a release command.
 6. Record the Vercel deployment SHA, public library/detail/DM smoke evidence,
    and the hidden-draft exclusion proof required by
    [`catalog-cutover.md`](./catalog-cutover.md).

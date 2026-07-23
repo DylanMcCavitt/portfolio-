@@ -16,7 +16,7 @@ Default to zero client JS: static `.astro` pages everywhere. Client JS only for 
 
 ## Design Direction
 
-> DM is the public portfolio agent (`src/lib/dm/`, `/api/dm/chat`, `src/scripts/dm.ts`, `src/styles/dm.css`). The authoritative product/design direction and deferred-scope custody live in `docs/agents/scope-ledger.md`. The retired Spotify **player shell** (sidebar + bottom player bar) is not extended — `/player` and other legacy routes 301 via `vercel.json`.
+> DM is the public portfolio agent (`src/lib/dm/`, `/api/dm/chat`, `src/scripts/dm.ts`, `src/styles/dm.css`). The authoritative product/design direction and deferred-scope custody live in `docs/agents/product-direction.md`. The retired Spotify **player shell** (sidebar + bottom player bar) is not extended — `/player` and other legacy routes 301 via `vercel.json`.
 
 Current preview-branch UI:
 
@@ -59,7 +59,7 @@ the full Loom proof and operational cutover in GitHub **#190**.
 - Deliver one independently reviewable leaf with one writer, one dedicated worktree, one branch, and one linked PR. Bind implementation proof and review to the exact live PR head.
 - Agent-first redesign PRs target the approved stack parent rooted at `preview/agent-first-redesign`, never `main`, unless the persisted contract says otherwise.
 - Merge, deploy, publish, migrations, issue/PR closure, review-thread resolution, and destructive cleanup require their explicit authority gates.
-- Preserve continuity and deferred scope in `docs/agents/scope-ledger.md`; keep active operator procedures under `docs/agents/` current.
+- Preserve continuity and deferred scope in `docs/agents/product-direction.md`; keep active operator procedures under `docs/agents/` current.
 
 ## Cursor Cloud specific instructions
 
@@ -76,7 +76,7 @@ those scripts directly; this section records only the non-obvious cloud caveats.
 - **Tests need no external services or secrets.** The `test:*` scripts use an
   in-memory Postgres via `@electric-sql/pglite`; the CI test set is
   `test:db test:discovery test:slack test:admin test:dm test:metrics test:rag
-  test:benchmark test:eval-report test:proof`.
+  test:proof`.
 - **DM chat is disabled without config.** `/api/dm/chat` returns HTTP 503
   `missing_config` unless a database URL and either `AI_GATEWAY_API_KEY` or
   `OPENAI_API_KEY` are set; the site shell, browsing, and all tests work without

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { RESUME } from '@/data/resume';
 import { loadPublicProfileEntries, PUBLIC_PROFILE_SITE_SUMMARY } from '@/data/profile';
 import type { ProjectDetailReadModel, ProjectReadQueryable } from '@/lib/db/project-reads';
-import { createEvalProjectSource } from '@/lib/dm/eval-source';
+import { createTestProjectSource } from './fixtures/dm-project-source';
 import {
   buildDMSiteBrief,
   DM_SITE_BRIEF_MAX_CHARS,
@@ -16,7 +16,7 @@ import {
 import { PublicProjectDataError } from '@/lib/public-projects';
 
 test('site brief covers variable published-project counts deterministically without a fixed 15-row assumption', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
 
@@ -52,7 +52,7 @@ test('the complete local fixture stays in the approximate 1–2k planning range 
 });
 
 test('site brief includes the canonical career overview, resume tracks, routes, and contact pointer', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const brief = buildDMSiteBrief(await source.projectLoader());
   const current = RESUME.tracks.find((track) => track.current) ?? RESUME.tracks.at(-1);
   assert.ok(current);
@@ -84,7 +84,7 @@ test('site brief includes the canonical career overview, resume tracks, routes, 
 });
 
 test('site brief fails closed when normalized project title aliases collide', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
   const rows = variableProjects(template, 2).map((project, index) => ({
@@ -99,7 +99,7 @@ test('site brief fails closed when normalized project title aliases collide', as
 });
 
 test('site brief fails closed when a published title has no matchable Unicode alias', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
 
@@ -118,7 +118,7 @@ test('project-reference normalization treats equivalent Unicode forms consistent
 });
 
 test('site brief UTF-8 budget fails closed immediately above the Unicode-safe byte limit', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
   let rowCount = 0;
@@ -187,7 +187,7 @@ test('site brief UTF-8 budget fails closed immediately above the Unicode-safe by
 });
 
 test('high-entropy ASCII reaches the exact UTF-8 payload cutoff without implying a tokenizer guarantee', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
   let atLimit: ReturnType<typeof buildDMSiteBrief> | null = null;
@@ -222,7 +222,7 @@ test('high-entropy ASCII reaches the exact UTF-8 payload cutoff without implying
 });
 
 test('site brief fails closed rather than dropping published projects when the complete set exceeds its budget', async () => {
-  const source = await createEvalProjectSource();
+  const source = await createTestProjectSource();
   const template = (await source.projectLoader())[0];
   assert.ok(template);
   const rows = variableProjects(template, 60);
